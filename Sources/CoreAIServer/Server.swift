@@ -229,6 +229,8 @@ final class ServerRuntime: Sendable {
             webDir: webDir.path,
             exportsDir: exportsDir.path,
             registryPath: registryPath.path,
+            logsDir: JobTracker.convertLogDir.path,
+            supportLogsDir: JobTracker.supportLogDir.path,
             convertScript: convertScript,
             pythonExecutable: pythonExecutable,
             computeUnit: ProcessInfo.processInfo.environment["COREAI_COMPUTE"] ?? "gpu",
@@ -597,6 +599,8 @@ struct ServerInfo: Codable, Sendable {
     var webDir: String
     var exportsDir: String
     var registryPath: String
+    var logsDir: String
+    var supportLogsDir: String
     var convertScript: String
     var pythonExecutable: String
     var computeUnit: String

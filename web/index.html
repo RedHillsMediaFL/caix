@@ -210,6 +210,8 @@
     <div class="cell"><span>process</span><b id="srv_pid">—</b></div>
     <div class="cell"><span>exports</span><b id="srv_exports">—</b></div>
     <div class="cell"><span>registry</span><b id="srv_registry">—</b></div>
+    <div class="cell"><span>logs</span><b id="srv_logs">—</b></div>
+    <div class="cell"><span>support logs</span><b id="srv_supportlogs">—</b></div>
     <div class="cell"><span>eagle</span><b id="srv_eagle">—</b></div>
   </section>
 
@@ -398,11 +400,14 @@ async function pollServer(){
     $('srv_pid').textContent='pid '+s.pid+' · '+(s.verbose?'verbose':'normal');
     $('srv_exports').textContent=s.exportsDir||'—';$('srv_exports').title=s.exportsDir||'';
     $('srv_registry').textContent=s.registryPath||'—';$('srv_registry').title=s.registryPath||'';
+    $('srv_logs').textContent=s.logsDir||'—';$('srv_logs').title=s.logsDir||'';
+    $('srv_supportlogs').textContent=s.supportLogsDir||'—';$('srv_supportlogs').title=s.supportLogsDir||'';
     $('srv_eagle').textContent=s.eagle?.enabled?(s.eagle.name||'enabled'):'off';
   }catch(e){
     $('servermeta').textContent='server metadata unavailable until next caix restart';
     $('srv_base').textContent=location.origin;$('srv_runtime').textContent='legacy API';
-    $('srv_pid').textContent='—';$('srv_exports').textContent='—';$('srv_registry').textContent='—';$('srv_eagle').textContent='—';
+    $('srv_pid').textContent='—';$('srv_exports').textContent='—';$('srv_registry').textContent='—';
+    $('srv_logs').textContent='—';$('srv_supportlogs').textContent='—';$('srv_eagle').textContent='—';
   }
 }
 async function pollModels(){
@@ -443,8 +448,9 @@ async function pollModels(){
 }
 async function pollJobs(){
   try{const jb=await j('/api/jobs');
-    $('jobs').innerHTML=(jb||[]).map(x=>`<div class="job"><div class="jl"><span>${x.label}</span><b>${Math.round(x.pct)}%</b></div>
-      <div class="track"><i style="width:${x.pct}%"></i></div></div>`).join('');
+    $('jobs').innerHTML=(jb||[]).map(x=>`<div class="job"><div class="jl"><span>${esc(x.label)}</span><b>${Math.round(x.pct)}%</b></div>
+      <div class="track"><i style="width:${x.pct}%"></i></div>
+      ${x.logPath?`<div class="path" title="${attr(x.logPath)}">${esc(x.logPath)}</div>`:''}</div>`).join('');
   }catch(e){}
 }
 async function act(a,name){
@@ -510,13 +516,14 @@ function hfBody(){
   return b;
 }
 function hfShow(html,cls){const el=$('hfresult');el.innerHTML=html;el.className='hint '+(cls||'');el.style.fontFamily='var(--mono)';}
+function hfSupportLog(d){return d.support_log?`<br><span class="path" title="${attr(d.support_log)}">support log: ${esc(d.support_log)}</span>`:'';}
 async function hfCheck(){
   const repo=$('hfrepo').value.trim(); if(!repo){hfShow('paste a HuggingFace repo id first','bad-txt');return;}
   hfShow('checking architecture support…');
   try{const d=await j('/api/check-support',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({hf_repo:repo})});
     if(d.supported){hfShow(`✓ supported · <b>${d.model_type}</b>${d.params_b?` · ~${d.params_b}B`:''} · ready to convert`,'ok-txt');}
     else if(d.gguf_only){hfShow(`GGUF-only repo · caix can dequantize then convert; original safetensors are better when available`,'work-txt');}
-    else{hfShow(`⚑ flagged · ${esc(d.reason||'unsupported architecture')}`,'bad-txt');}
+    else{hfShow(`⚑ flagged · ${esc(d.reason||'unsupported architecture')}${hfSupportLog(d)}`,'bad-txt');}
   }catch(e){hfShow('check failed: '+e,'bad-txt');}
 }
 async function hfConvert(){
@@ -524,7 +531,7 @@ async function hfConvert(){
   hfShow('checking support, then converting…','work-txt');
   try{const d=await j('/api/convert-hf',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(hfBody())});
     if(d.started){hfShow(`▸ ${d.gguf?'dequantizing GGUF, then converting':'converting'} <b>${esc(d.name)}</b> — track progress below`,'work-txt');pollJobs();}
-    else if(d.supported===false){hfShow(`⚑ flagged · ${esc(d.reason||'unsupported architecture — not converted')}`,'bad-txt');}
+    else if(d.supported===false){hfShow(`⚑ flagged · ${esc(d.reason||'unsupported architecture — not converted')}${hfSupportLog(d)}`,'bad-txt');}
     else{hfShow('convert: '+JSON.stringify(d),'');}
   }catch(e){hfShow('convert failed: '+e,'bad-txt');}
 }
