@@ -17,7 +17,7 @@ import argparse, json, os, sys
 
 os.environ.setdefault("HF_HOME", "/Volumes/SSD/hf-cache")
 
-BF16_TYPES = {"gemma4", "gemma4_assistant", "diffusion_gemma", "qwen3_5"}
+BF16_TYPES = {"gemma4", "gemma4_assistant", "diffusion_gemma", "qwen3_5", "glm4"}
 
 
 def emit(d: dict) -> int:

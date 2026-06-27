@@ -66,14 +66,14 @@ def check_support(hf_id: str) -> dict:
 
 # Gemma-family decoders require bfloat16 for parity; qwen3_5 (hybrid SSM) also validated in
 # bfloat16 (the proven Qwythos path) — fp16's narrow range risks overflow in its activations.
-BF16_FAMILIES = ("gemma4", "gemma4_assistant", "diffusion_gemma", "qwen3_5")
+BF16_FAMILIES = ("gemma4", "gemma4_assistant", "diffusion_gemma", "qwen3_5", "glm4")
 
 
 def load_registry() -> dict:
     return json.loads(REGISTRY.read_text()) if REGISTRY.exists() else {"models": {}}
 
 
-def resolve(args) -> dict:
+def resolve(args, support: dict | None = None) -> dict:
     reg = load_registry()["models"]
     if args.model and args.model in reg:
         m = reg[args.model]
@@ -89,10 +89,11 @@ def resolve(args) -> dict:
         hf_id = args.hf_id or args.model
         if not hf_id:
             sys.exit("error: provide a registry key, or --hf-id")
+        model_type = (support or {}).get("model_type", "")
         compression = args.compression or "4bit"
         context = args.context or args.max_context_cap
         name = args.name or hf_id.split("/")[-1].lower() + "-coreai"
-        precision = args.compute_precision or "float16"
+        precision = args.compute_precision or ("bfloat16" if model_type in BF16_FAMILIES else "float16")
     return {"hf_id": hf_id, "compression": compression, "context": context,
             "name": name, "precision": precision}
 
@@ -107,6 +108,19 @@ def build_cmd(r: dict, args) -> list[str]:
     if args.dry_run:
         cmd += ["--dry-run"]
     return cmd
+
+
+def _log_convert_event(target: str, kind: str, reason: str, model_type) -> None:
+    """Persist unsupported/failed conversion diagnostics without affecting conversion flow."""
+    try:
+        import time as _time
+        log_dir = os.path.join(os.path.expanduser("~"), ".caix")
+        os.makedirs(log_dir, exist_ok=True)
+        with open(os.path.join(log_dir, "convert-failures.log"), "a") as f:
+            f.write(f"{_time.strftime('%Y-%m-%dT%H:%M:%S')}\t{kind}\t{target}\t"
+                    f"model_type={model_type}\t{reason}\n")
+    except Exception:
+        pass
 
 
 def main() -> int:
@@ -152,18 +166,21 @@ def main() -> int:
     # Architecture support gate: for raw HF ids (not registry keys), verify the model_type is
     # authored for Core AI before downloading/converting. Unsupported => flag, don't convert.
     hf_for_check = args.hf_id or (args.model if args.model and args.model not in load_registry()["models"] else None)
+    support_info = None
     if args.check or hf_for_check:
         target = args.hf_id or args.model
         sup = check_support(target)
+        support_info = sup
         if args.check:
             print(json.dumps(sup))
             return 0 if sup.get("supported") else 3
         if not sup.get("supported") and not args.force:
             print(json.dumps(sup))
             print(f"  FLAGGED: {sup.get('reason', 'unsupported architecture')}")
+            _log_convert_event(target, "unsupported", sup.get("reason", ""), sup.get("model_type"))
             return 3
 
-    r = resolve(args)
+    r = resolve(args, support=support_info)
     cmd = build_cmd(r, args)
     # Export quantization checkpoints (mmap_dir) default to the system TMPDIR on the small
     # boot disk; 31B+ models overflow it. Redirect temp to the 2 TB SSD.
@@ -192,6 +209,11 @@ def main() -> int:
             print(f"  note: could not bundle generation_config.json: {e}")
     if not args.dry_run:
         print(f"  result: {'OK ' + str(bundle) if ok else 'FAILED (no .aimodel/main.mlirb)'}  exit={rc}")
+        if not ok:
+            _log_convert_event(r["hf_id"], "failed",
+                               f"export exit={rc}; no .aimodel/main.mlirb "
+                               f"(compression={r['compression']} precision={r['precision']} context={r['context']})",
+                               support_info.get("model_type") if support_info else None)
     return rc
 
 
