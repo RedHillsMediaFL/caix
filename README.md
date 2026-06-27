@@ -73,6 +73,11 @@ sudo xcode-select -s /Applications/Xcode-beta.app    # your Core AI–capable Xc
 The first build downloads the Swift dependencies and compiles — a few minutes. Dependencies are
 fetched automatically; nothing to install by hand.
 
+> **Pinned dependency (beta).** `Package.swift` pins `apple/coreai-models` to an exact revision
+> known-good against the current Core AI beta. As Apple's betas move, that revision may need bumping
+> (and the deployment target raised) to match your installed runtime — edit the `revision:` in
+> `Package.swift`, or `swift package update`. We'll track the stable Core AI release when it lands.
+
 ---
 
 ## Get a model
@@ -84,9 +89,20 @@ it in `models/exports/`:
 
 ```bash
 mkdir -p models/exports
-# example (requires the huggingface CLI: pip install -U huggingface_hub):
-huggingface-cli download <org>/<model>-caix --local-dir models/exports/<model>-caix
+pip install -U huggingface_hub
+# a small, capable model that's also a reliable tool-caller:
+huggingface-cli download redhillsmediafl/qwen3-4b-caix --local-dir models/exports/qwen3-4b-coreai
 ```
+
+### Available models — org [redhillsmediafl](https://huggingface.co/redhillsmediafl)
+
+| model | what | size |
+|---|---|---|
+| [`redhillsmediafl/qwen3-4b-caix`](https://huggingface.co/redhillsmediafl/qwen3-4b-caix) | Qwen3-4B — general chat, reliable tool-caller | ~2 GB |
+| [`redhillsmediafl/gemma-4-26b-a4b-mtp-caix`](https://huggingface.co/redhillsmediafl/gemma-4-26b-a4b-mtp-caix) | gemma-4-26B-A4B **MTP** (target + draft) — fast flagship | ~17 GB |
+
+The MTP repo is a **two-model** system (a 26B target + a small draft); see its card for the exact
+`--eagle-*` flags.
 
 **B. Convert one yourself (advanced).** See [Converting your own models](#converting-your-own-models-advanced).
 
