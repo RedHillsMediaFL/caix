@@ -1,0 +1,24 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "caix": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "caix local",
+      "options": {
+        "baseURL": "http://127.0.0.1:1237/v1",
+        "apiKey": "caix-local"
+      },
+      "models": {
+        "gemma-4-26b-a4b-mtp": {
+          "name": "Gemma 4 26B A4B MTP",
+          "limit": {
+            "context": 4096,
+            "output": 2048
+          }
+        }
+      }
+    }
+  },
+  "model": "caix/gemma-4-26b-a4b-mtp",
+  "small_model": "caix/gemma-4-26b-a4b-mtp"
+}

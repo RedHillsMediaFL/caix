@@ -14,6 +14,8 @@
 - Added local discovery/loading and RHM installability for EAGLE target+draft package directories.
 - Added a user-focused usage dashboard with rolling tok/s, last-generation speed, total input/output tokens, rolling-window output, and visible per-model throughput.
 - Added a one-line GitHub installer that clones or updates `~/caix`, builds the Core AI runtime binary, and links the `caix` launcher into `~/.local/bin`.
+- Added `scripts/refresh-export-index.sh` and `CAIX_EXPORT_INDEX` support for launchd/external-volume model discovery.
+- Added an OpenCode provider config that points OpenCode at the local OpenAI-compatible caix server.
 
 ### Fixed
 
@@ -21,3 +23,4 @@
 - Inferred EAGLE target hidden size from Core AI model descriptors at load time, so larger targets can override the 26B default without source changes.
 - Updated diffusion denoiser tests to match the official entropy-bound sampler behavior already implemented in the runtime.
 - Listed all accepted EAGLE serve flags in CLI help.
+- Kept dashboard model listing responsive under launchd by using bounded model-index and registry reads instead of blocking indefinitely on inaccessible export paths.

@@ -98,19 +98,41 @@ it in `models/exports/`:
 
 ```bash
 mkdir -p models/exports
-pip install -U huggingface_hub
 # a small, capable model that's also a reliable tool-caller:
-huggingface-cli download redhillsmediafl/qwen3-4b-caix --local-dir models/exports/qwen3-4b-coreai
+hf download redhillsmediafl/rhm-qwen3-4b-caix --local-dir models/exports/qwen3-4b-coreai
 ```
 
 ### Available models — org [redhillsmediafl](https://huggingface.co/redhillsmediafl)
 
+All bundles are pre-converted Core AI `.aimodel` repos, named `rhm-…-caix`.
+
+**Standalone models**
+
+| model | base | size |
+|---|---|---|
+| [`rhm-qwen3-0.6b-caix`](https://huggingface.co/redhillsmediafl/rhm-qwen3-0.6b-caix) | Qwen3-0.6B — tiny & fast; handy edge/draft model | ~335 MB |
+| [`rhm-qwen3-4b-caix`](https://huggingface.co/redhillsmediafl/rhm-qwen3-4b-caix) | Qwen3-4B — general chat, **reliable tool-caller** | ~2.1 GB |
+| [`rhm-ornith-1.0-9b-caix`](https://huggingface.co/redhillsmediafl/rhm-ornith-1.0-9b-caix) | Ornith-1.0-9B (DeepReinforce) | ~17 GB (f16) |
+| [`rhm-qwen3.6-27b-caix`](https://huggingface.co/redhillsmediafl/rhm-qwen3.6-27b-caix) | Qwen3.6-27B — large general chat | ~14 GB |
+| [`rhm-gemma-4-26b-a4b-caix`](https://huggingface.co/redhillsmediafl/rhm-gemma-4-26b-a4b-caix) | gemma-4-26B-A4B-it — MoE (~4B active) | ~13 GB |
+| [`rhm-gemma-4-31b-it-caix`](https://huggingface.co/redhillsmediafl/rhm-gemma-4-31b-it-caix) | gemma-4-31B-it — dense large chat | ~16 GB |
+
+**MTP / speculative bundles** (draft + target in one repo — faster decode, identical output)
+
 | model | what | size |
 |---|---|---|
-| [`redhillsmediafl/qwen3-4b-caix`](https://huggingface.co/redhillsmediafl/qwen3-4b-caix) | Qwen3-4B — general chat, reliable tool-caller | ~2 GB |
-| [`redhillsmediafl/gemma-4-26b-a4b-mtp-caix`](https://huggingface.co/redhillsmediafl/gemma-4-26b-a4b-mtp-caix) | gemma-4-26B-A4B **MTP** (target + draft) — fast flagship | ~17 GB |
+| [`rhm-gemma-4-26b-a4b-mtp-caix`](https://huggingface.co/redhillsmediafl/rhm-gemma-4-26b-a4b-mtp-caix) | gemma-4-26B-A4B **MTP** — fast flagship | ~17 GB |
+| [`rhm-gemma-4-31b-it-mtp-caix`](https://huggingface.co/redhillsmediafl/rhm-gemma-4-31b-it-mtp-caix) | gemma-4-31B-it **MTP** | 31B target + draft |
+| [`rhm-qwen3-4b-mtp-caix`](https://huggingface.co/redhillsmediafl/rhm-qwen3-4b-mtp-caix) | Qwen3-4B **MTP** | 4B target + 0.6B draft |
 
-The MTP repo is a **two-model** system (a 26B target + a small draft); see its card for the exact
+**Draft models** (EAGLE/MTP components; advanced — pair with the matching target)
+
+| model | for |
+|---|---|
+| [`rhm-gemma-4-26b-a4b-draft-caix`](https://huggingface.co/redhillsmediafl/rhm-gemma-4-26b-a4b-draft-caix) | draft half of the 26B-A4B MTP pair |
+| [`rhm-gemma-4-31b-it-draft-caix`](https://huggingface.co/redhillsmediafl/rhm-gemma-4-31b-it-draft-caix) | draft half of the 31B-it MTP pair |
+
+An MTP repo is a **two-model** system (a target + a small draft); see its card for the exact
 `--eagle-*` flags.
 
 **B. Convert one yourself (advanced).** See [Converting your own models](#converting-your-own-models-advanced).
@@ -138,6 +160,15 @@ curl http://localhost:1237/v1/chat/completions -H 'content-type: application/jso
   "model": "<your-model-name>",
   "messages": [{"role":"user","content":"Hello!"}]
 }'
+```
+
+### OpenCode (optional)
+
+The repo includes `opencode.json` with a local `caix` OpenAI-compatible provider pointed at
+`http://127.0.0.1:1237/v1`. Start caix first, then verify OpenCode can see the server:
+
+```bash
+opencode models caix
 ```
 
 ### Reach it from your phone / other machines (optional)
@@ -176,7 +207,13 @@ gives you a private HTTPS URL on your tailnet (no ports opened to the internet).
 - **Background services & external volumes:** if you run caix from a `launchd` agent (auto-start),
   Apple's loader needs file-access permission and can't read **external/USB volumes** without it.
   Simplest: keep the binary + models on the internal disk, or run `./caix serve` from your normal
-  user session. (Full Disk Access on the binary fixes the launchd case.)
+  user session. (Full Disk Access on the binary fixes the launchd case.) If you intentionally keep
+  exports on an external SSD, generate a local model-list index and pass it via `CAIX_EXPORT_INDEX`:
+
+```bash
+scripts/refresh-export-index.sh /Volumes/SSD/ai-dev/coreai-pipeline/exports \
+  ~/coreai-server/export-index.json
+```
 - **Greedy tool-calling:** the MTP/speculative path is greedy, so small models may not reliably emit
   tool calls. Use a qwen-family model for tool-heavy chats.
 - **Supported architectures** (for conversion): gemma3/gemma4, qwen2/qwen3/qwen3_moe/qwen3_5,
@@ -234,6 +271,7 @@ dequant step (the support check confirms the architecture *after* dequant).
 | | |
 |---|---|
 | Models | `models/exports/<name>/` (override with `CAIX_EXPORTS` or `--exports`) |
+| Export index | optional JSON from `scripts/refresh-export-index.sh` (set `CAIX_EXPORT_INDEX`) |
 | Web UI | `web/` (served at `/` and `/chat`) |
 | Usage stats | `~/.caix/usage.json` (override with `--stats-file`) — survives restarts |
 | Converter | `python/converter/` |
