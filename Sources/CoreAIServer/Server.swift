@@ -246,9 +246,10 @@ final class ServerRuntime: Sendable {
             return JSONResponder.error("expected {\"repo\":\"redhillsmediafl/<name>-caix\"}", status: .badRequest)
         }
         let meta = try? await fetchRHMBundleMetadata(repo: body.repo)
-        guard let meta,
-              (meta.kind ?? "llm") == "llm" else {
-            return JSONResponder.error("repo is not a direct caix bundle with root metadata.json", status: .badRequest)
+        let layout = try? await fetchRHMRepoLayout(repo: body.repo)
+        let directBundle = ((meta?.kind ?? "llm") == "llm") && meta != nil
+        guard directBundle || (layout?.hasEaglePackage == true) else {
+            return JSONResponder.error("repo is not an installable caix bundle", status: .badRequest)
         }
         let name = body.name?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
             ?? Self.defaultRHMDownloadName(for: body.repo)
@@ -394,17 +395,15 @@ final class ServerRuntime: Sendable {
             else { continue }
             let tags = row["tags"] as? [String] ?? []
             let siblings = (row["siblings"] as? [[String: Any]]) ?? []
-            let hasMetadata = siblings.contains { ($0["rfilename"] as? String) == "metadata.json" }
-            let hasDraftBundle = siblings.contains { item in
-                guard let filename = item["rfilename"] as? String else { return false }
-                return filename == "draft/metadata.json"
-            }
+            let layout = Self.rhmRepoLayout(from: siblings)
             let meta: RHMBundleMetadata?
-            if hasMetadata {
+            if layout.hasMetadata {
                 meta = try? await fetchRHMBundleMetadata(repo: repo)
             } else {
                 meta = nil
             }
+            let directBundle = layout.hasMetadata && ((meta?.kind ?? "llm") == "llm")
+            let installable = directBundle || layout.hasEaglePackage
             let name = Self.defaultRHMDownloadName(for: repo)
             out.append(RHMModelEntry(
                 repo: repo,
@@ -414,14 +413,33 @@ final class ServerRuntime: Sendable {
                 downloads: row["downloads"] as? Int,
                 lastModified: row["lastModified"] as? String,
                 tags: Self.displayTags(from: tags),
-                speculative: hasDraftBundle,
-                installable: hasMetadata && ((meta?.kind ?? "llm") == "llm"),
+                speculative: layout.hasDraftBundle || layout.hasEaglePackage,
+                installable: installable,
                 installed: false,
                 loaded: false,
                 installedName: nil,
-                note: hasMetadata ? nil : "package requires manual server flags"))
+                note: installable ? nil : "package requires manual server flags"))
         }
         return out.sorted { $0.repo < $1.repo }
+    }
+
+    private func fetchRHMRepoLayout(repo: String) async throws -> RHMRepoLayout {
+        guard Self.isAllowedRHMRepo(repo) else { return RHMRepoLayout() }
+        let encodedRepo = repo.split(separator: "/").map { String($0).addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? String($0) }.joined(separator: "/")
+        guard let url = URL(string: "https://huggingface.co/api/models/\(encodedRepo)") else {
+            return RHMRepoLayout()
+        }
+        var req = URLRequest(url: url, timeoutInterval: 20)
+        req.setValue("caix/1.0", forHTTPHeaderField: "User-Agent")
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        if let http = resp as? HTTPURLResponse, http.statusCode < 200 || http.statusCode >= 300 {
+            throw NSError(domain: "caix.hf", code: http.statusCode)
+        }
+        guard
+            let row = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let siblings = row["siblings"] as? [[String: Any]]
+        else { return RHMRepoLayout() }
+        return Self.rhmRepoLayout(from: siblings)
     }
 
     private func fetchRHMBundleMetadata(repo: String) async throws -> RHMBundleMetadata? {
@@ -449,6 +467,16 @@ final class ServerRuntime: Sendable {
 
     private static func defaultRHMDownloadName(for repo: String) -> String {
         repo.split(separator: "/").last.map(String.init) ?? "rhm-model-caix"
+    }
+
+    private static func rhmRepoLayout(from siblings: [[String: Any]]) -> RHMRepoLayout {
+        let filenames = siblings.compactMap { $0["rfilename"] as? String }
+        return RHMRepoLayout(
+            hasMetadata: filenames.contains("metadata.json"),
+            hasDraftBundle: filenames.contains("draft/metadata.json"),
+            hasEaglePackage: filenames.contains { $0.hasPrefix("eagle_target.aimodel/") }
+                && filenames.contains { $0.hasPrefix("eagle_draft.aimodel/") }
+                && filenames.contains { $0.hasPrefix("tokenizer/") })
     }
 
     private static func baseModel(from tags: [String]) -> String? {
@@ -727,6 +755,12 @@ struct RHMDownloadRequest: Codable, Sendable {
 struct RHMBundleMetadata: Codable, Sendable {
     var name: String?
     var kind: String?
+}
+
+struct RHMRepoLayout: Sendable {
+    var hasMetadata: Bool = false
+    var hasDraftBundle: Bool = false
+    var hasEaglePackage: Bool = false
 }
 
 struct RHMModelEntry: Codable, Sendable {

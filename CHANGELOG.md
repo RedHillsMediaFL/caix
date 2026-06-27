@@ -11,6 +11,7 @@
 - Added persistent classic speculative serving for target+draft packages with nested `draft/` bundles, enabling the RHM Qwen MTP package to run as MTP instead of target-only.
 - Added EAGLE/MTP serve and CLI flags for vocabulary, hidden size, sliding window, and max context so speculative targets are not hardcoded to one Gemma size.
 - Exposed speculative runtime dimensions in the dashboard's advanced server panel.
+- Added local discovery/loading and RHM installability for EAGLE target+draft package directories.
 
 ### Fixed
 

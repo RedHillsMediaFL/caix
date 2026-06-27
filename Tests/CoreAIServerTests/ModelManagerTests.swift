@@ -28,6 +28,29 @@ final class ModelManagerTests: XCTestCase {
         XCTAssertTrue(row.bundle)
     }
 
+    func testEagleTargetDraftPackageIsListedAsEagle() async throws {
+        let root = try makeTempDir()
+        let exports = root.appendingPathComponent("exports", isDirectory: true)
+        let registry = root.appendingPathComponent("models/registry.json")
+        try FileManager.default.createDirectory(
+            at: registry.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try #"{"models":{}}"#.write(to: registry, atomically: true, encoding: .utf8)
+
+        let bundle = exports.appendingPathComponent("rhm-gemma-4-31b-it-mtp-caix", isDirectory: true)
+        for child in ["eagle_target.aimodel", "eagle_draft.aimodel", "tokenizer"] {
+            try FileManager.default.createDirectory(
+                at: bundle.appendingPathComponent(child, isDirectory: true),
+                withIntermediateDirectories: true)
+        }
+
+        let manager = ModelManager(exportsDir: exports, registryPath: registry)
+        let rows = await manager.listModels()
+
+        let row = try XCTUnwrap(rows.first { $0.name == "rhm-gemma-4-31b-it-mtp-caix" })
+        XCTAssertEqual(row.mode, "eagle")
+        XCTAssertTrue(row.bundle)
+    }
+
     private func writeBundle(at root: URL, name: String) throws {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try """

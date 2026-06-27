@@ -195,8 +195,8 @@ public actor ModelManager {
 
     // MARK: Discovery
 
-    /// Bundle directories under `exportsDir` (a dir is a bundle iff it has a `metadata.json`
-    /// whose `kind` is `llm`). Keyed by directory name — the identifier `/api/load` expects.
+    /// Bundle directories under `exportsDir`. A directory is loadable if it is either a direct
+    /// `metadata.json` LLM bundle or an EAGLE target+draft package.
     private func bundleNames() -> [String] {
         let fm = FileManager.default
         guard
@@ -205,13 +205,9 @@ public actor ModelManager {
         else { return [] }
         var names: [String] = []
         for url in entries {
-            let meta = url.appendingPathComponent("metadata.json")
-            guard fm.fileExists(atPath: meta.path),
-                let data = try? Data(contentsOf: meta),
-                let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                (obj["kind"] as? String) == "llm"
-            else { continue }
-            names.append(url.lastPathComponent)
+            if Self.isDirectLLMBundle(at: url) || Self.isEagleBundle(at: url) {
+                names.append(url.lastPathComponent)
+            }
         }
         return names.sorted()
     }
@@ -255,7 +251,9 @@ public actor ModelManager {
             if seen.contains(Self.normalize(name)) { continue }
             seen.insert(Self.normalize(name))
             let loaded = handles[name] != nil
-            let mode = isClassicSpeculativeBundle(name) ? "speculative" : "standard"
+            let mode = isEagleBundle(name)
+                ? "eagle"
+                : (isClassicSpeculativeBundle(name) ? "speculative" : "standard")
             entries.append(
                 ModelEntry(
                     name: name,
@@ -366,6 +364,21 @@ public actor ModelManager {
                 throw CoreAIPipeline.RuntimeError.runtimeUnavailable
                 #endif
             }
+            if Self.isEagleBundle(at: URL(fileURLWithPath: path, isDirectory: true)) {
+                #if COREAI_RUNTIME
+                let root = URL(fileURLWithPath: path, isDirectory: true)
+                let engine = try await EagleEngine.load(
+                    targetURL: root.appendingPathComponent("eagle_target.aimodel", isDirectory: true),
+                    draftURL: root.appendingPathComponent("eagle_draft.aimodel", isDirectory: true),
+                    tokenizerDir: root.appendingPathComponent("tokenizer", isDirectory: true),
+                    draftTokens: 4, vocabSize: 262144, backbone: 2816,
+                    slidingWindow: 1024, maxContext: 4096, verbose: verbose,
+                    unrolledURL: Self.eagleUnrolledURL(in: root))
+                return ModelHandle(eagle: engine, name: name, bytes: Self.dirSize(root))
+                #else
+                throw CoreAIPipeline.RuntimeError.runtimeUnavailable
+                #endif
+            }
             if Self.isClassicSpeculativeBundle(at: URL(fileURLWithPath: path, isDirectory: true)) {
                 let model = try await PersistentSpeculativeModel.load(
                     bundlePath: path, draftTokens: 4, verbose: verbose)
@@ -451,6 +464,16 @@ public actor ModelManager {
         String(s.lowercased().unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) })
     }
 
+    static func isDirectLLMBundle(at root: URL) -> Bool {
+        let meta = root.appendingPathComponent("metadata.json")
+        guard
+            FileManager.default.fileExists(atPath: meta.path),
+            let data = try? Data(contentsOf: meta),
+            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return false }
+        return (obj["kind"] as? String) == "llm"
+    }
+
     func isClassicSpeculativeBundle(_ name: String) -> Bool {
         Self.isClassicSpeculativeBundle(at: exportsDir.appendingPathComponent(name, isDirectory: true))
     }
@@ -465,5 +488,45 @@ public actor ModelManager {
             let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return false }
         return (obj["kind"] as? String ?? "llm") == "llm"
+    }
+
+    func isEagleBundle(_ name: String) -> Bool {
+        Self.isEagleBundle(at: exportsDir.appendingPathComponent(name, isDirectory: true))
+    }
+
+    static func isEagleBundle(at root: URL) -> Bool {
+        let fm = FileManager.default
+        func dirExists(_ url: URL) -> Bool {
+            var isDir = ObjCBool(false)
+            return fm.fileExists(atPath: url.path, isDirectory: &isDir) && isDir.boolValue
+        }
+        let target = root.appendingPathComponent("eagle_target.aimodel", isDirectory: true)
+        let draft = root.appendingPathComponent("eagle_draft.aimodel", isDirectory: true)
+        let tokenizer = root.appendingPathComponent("tokenizer", isDirectory: true)
+        return dirExists(target) && dirExists(draft) && dirExists(tokenizer)
+    }
+
+    static func eagleUnrolledURL(in root: URL) -> URL? {
+        let fm = FileManager.default
+        for name in ["eagle_draft_unrolled_k4.aimodel", "eagle_draft_unrolled.aimodel"] {
+            let url = root.appendingPathComponent(name, isDirectory: true)
+            var isDir = ObjCBool(false)
+            if fm.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+                return url
+            }
+        }
+        return nil
+    }
+
+    static func dirSize(_ root: URL) -> UInt64 {
+        let fm = FileManager.default
+        guard let en = fm.enumerator(at: root, includingPropertiesForKeys: [.fileSizeKey]) else {
+            return 0
+        }
+        var total: UInt64 = 0
+        for case let url as URL in en {
+            total += UInt64((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+        }
+        return total
     }
 }
