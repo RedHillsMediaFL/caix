@@ -11,6 +11,7 @@ public struct ModelEntry: Codable, Sendable {
     public var status: String  // "loaded" | "available"
     public var bundle: Bool
     public var memoryBytes: UInt64?
+    public var mode: String?
 }
 
 // MARK: - Per-model hot handle
@@ -23,6 +24,7 @@ public struct ModelEntry: Codable, Sendable {
 final class ModelHandle: @unchecked Sendable {
     enum Backend {
         case persistent(PersistentModel)
+        case speculative(PersistentSpeculativeModel)
         #if COREAI_RUNTIME
         case eagle(EagleEngine)  // fastest gemma MTP (EAGLE speculative decoding)
         #endif
@@ -36,6 +38,12 @@ final class ModelHandle: @unchecked Sendable {
         self.backend = .persistent(model)
         self.displayName = model.name
         self.bytes = model.bundleByteSize
+    }
+
+    init(speculative: PersistentSpeculativeModel, name: String) {
+        self.backend = .speculative(speculative)
+        self.displayName = name
+        self.bytes = speculative.bundleByteSize
     }
 
     #if COREAI_RUNTIME
@@ -65,6 +73,20 @@ final class ModelHandle: @unchecked Sendable {
             case .persistent(let model):
                 result = try await model.generate(
                     messages: messages, options: options, tools: tools, onToken: onToken)
+            case .speculative(let model):
+                let r = try await model.generate(
+                    messages: messages, options: options, tools: tools, onToken: onToken)
+                LiveStats.record(SpeculativeStats(
+                    model: displayName, tokensPerSecond: r.decodeTokensPerSecond,
+                    acceptanceRate: r.acceptanceRate, tokensPerPass: r.tokensPerTargetForward,
+                    draftTokens: r.draftTokens, generatedTokens: r.generatedTokenCount,
+                    promptTokens: r.promptTokenCount, decodeSeconds: r.decodeSeconds,
+                    prefillSeconds: r.prefillSeconds, at: Date().timeIntervalSince1970))
+                result = CoreAIPipeline.Result(
+                    text: r.text, promptTokenCount: r.promptTokenCount,
+                    generatedTokenCount: r.generatedTokenCount, stopReason: r.stopReason,
+                    modelLoadSeconds: r.modelLoadSeconds, prefillSeconds: r.prefillSeconds,
+                    decodeSeconds: r.decodeSeconds)
             #if COREAI_RUNTIME
             case .eagle(let engine):
                 let r = try await engine.generate(
@@ -220,20 +242,22 @@ public actor ModelManager {
                 ModelEntry(
                     name: cfg.name, params: Self.inferParams(from: cfg.name),
                     status: loaded ? "loaded" : "available", bundle: true,
-                    memoryBytes: handles[cfg.name]?.memoryBytes))
+                    memoryBytes: handles[cfg.name]?.memoryBytes, mode: "eagle"))
         }
 
         for name in bundleNames() {
             if seen.contains(Self.normalize(name)) { continue }
             seen.insert(Self.normalize(name))
             let loaded = handles[name] != nil
+            let mode = isClassicSpeculativeBundle(name) ? "speculative" : "standard"
             entries.append(
                 ModelEntry(
                     name: name,
                     params: Self.inferParams(from: name),
                     status: loaded ? "loaded" : "available",
                     bundle: true,
-                    memoryBytes: handles[name]?.memoryBytes))
+                    memoryBytes: handles[name]?.memoryBytes,
+                    mode: mode))
         }
 
         for (key, params) in registryModels() {
@@ -244,7 +268,7 @@ public actor ModelManager {
             entries.append(
                 ModelEntry(
                     name: key, params: params, status: "available", bundle: false,
-                    memoryBytes: nil))
+                    memoryBytes: nil, mode: "registry"))
         }
         return entries
     }
@@ -333,8 +357,14 @@ public actor ModelManager {
                 throw CoreAIPipeline.RuntimeError.runtimeUnavailable
                 #endif
             }
-            let model = try await PersistentModel.load(bundlePath: path, verbose: verbose)
-            return ModelHandle(model: model)
+            if Self.isClassicSpeculativeBundle(at: URL(fileURLWithPath: path, isDirectory: true)) {
+                let model = try await PersistentSpeculativeModel.load(
+                    bundlePath: path, draftTokens: 4, verbose: verbose)
+                return ModelHandle(speculative: model, name: name)
+            } else {
+                let model = try await PersistentModel.load(bundlePath: path, verbose: verbose)
+                return ModelHandle(model: model)
+            }
         }
         loadTasks[name] = task
         defer { loadTasks[name] = nil }
@@ -410,5 +440,21 @@ public actor ModelManager {
 
     static func normalize(_ s: String) -> String {
         String(s.lowercased().unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) })
+    }
+
+    func isClassicSpeculativeBundle(_ name: String) -> Bool {
+        Self.isClassicSpeculativeBundle(at: exportsDir.appendingPathComponent(name, isDirectory: true))
+    }
+
+    static func isClassicSpeculativeBundle(at root: URL) -> Bool {
+        let fm = FileManager.default
+        let draftMeta = root.appendingPathComponent("draft", isDirectory: true)
+            .appendingPathComponent("metadata.json")
+        guard fm.fileExists(atPath: draftMeta.path) else { return false }
+        guard
+            let data = try? Data(contentsOf: draftMeta),
+            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return false }
+        return (obj["kind"] as? String ?? "llm") == "llm"
     }
 }

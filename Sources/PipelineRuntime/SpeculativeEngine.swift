@@ -59,6 +59,10 @@ final class SpeculativeEngine {
     ) async throws -> SpeculativeEngine {
         let targetBundle = try ResolvedBundle.load(at: targetPath)
         let draftBundle = try ResolvedBundle.load(at: draftPath)
+        guard targetBundle.minKVCapacity == 0, draftBundle.minKVCapacity == 0 else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "classic speculative decoding is only supported for standard-attention pairs")
+        }
         // Load concurrently — two independent graph links + tokenizer reads.
         async let targetTask = LLMEngine.load(bundle: targetBundle, verbose: verbose)
         async let draftTask = LLMEngine.load(bundle: draftBundle, verbose: verbose)
@@ -82,9 +86,10 @@ final class SpeculativeEngine {
     /// Encode a prompt with the target tokenizer (the target defines the output contract).
     func encodePrompt(
         messages: [[String: String]],
+        tools: [[String: any Sendable]]? = nil,
         applyChatTemplate: Bool
     ) throws -> [Int] {
-        try target.encodePrompt(messages: messages, applyChatTemplate: applyChatTemplate)
+        try target.encodePrompt(messages: messages, tools: tools, applyChatTemplate: applyChatTemplate)
     }
 
     // MARK: - Generation

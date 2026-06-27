@@ -225,7 +225,9 @@ final class ServerRuntime: Sendable {
             let byName = Dictionary(uniqueKeysWithValues: local.map { ($0.name, $0) })
             let enriched = entries.map { entry in
                 var next = entry
-                let localEntry = byName[entry.name] ?? entry.bundleName.flatMap { byName[$0] }
+                let localEntry = entry.speculative
+                    ? byName[entry.name]
+                    : (byName[entry.name] ?? entry.bundleName.flatMap { byName[$0] })
                 next.installed = localEntry?.bundle == true
                 next.loaded = localEntry?.status == "loaded"
                 next.installedName = localEntry?.name
@@ -393,6 +395,10 @@ final class ServerRuntime: Sendable {
             let tags = row["tags"] as? [String] ?? []
             let siblings = (row["siblings"] as? [[String: Any]]) ?? []
             let hasMetadata = siblings.contains { ($0["rfilename"] as? String) == "metadata.json" }
+            let hasDraftBundle = siblings.contains { item in
+                guard let filename = item["rfilename"] as? String else { return false }
+                return filename == "draft/metadata.json"
+            }
             let meta: RHMBundleMetadata?
             if hasMetadata {
                 meta = try? await fetchRHMBundleMetadata(repo: repo)
@@ -408,6 +414,7 @@ final class ServerRuntime: Sendable {
                 downloads: row["downloads"] as? Int,
                 lastModified: row["lastModified"] as? String,
                 tags: Self.displayTags(from: tags),
+                speculative: hasDraftBundle,
                 installable: hasMetadata && ((meta?.kind ?? "llm") == "llm"),
                 installed: false,
                 loaded: false,
@@ -730,6 +737,7 @@ struct RHMModelEntry: Codable, Sendable {
     var downloads: Int?
     var lastModified: String?
     var tags: [String]
+    var speculative: Bool
     var installable: Bool
     var installed: Bool
     var loaded: Bool

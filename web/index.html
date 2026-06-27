@@ -373,7 +373,8 @@ function renderModels(){
   $('models').innerHTML=rows.map(m=>{
     const loaded=m.status==='loaded';
     const bundle=!!m.bundle;
-    const sub=(m.params||'bundle')+(m.memoryBytes?' / '+gb(m.memoryBytes):'')+(bundle?'':' / registry entry');
+    const mode=m.mode==='speculative'?'classic spec':m.mode==='eagle'?'eagle':m.mode==='registry'?'registry':'standard';
+    const sub=(m.params||'bundle')+' / '+mode+(m.memoryBytes?' / '+gb(m.memoryBytes):'')+(bundle?'':' / registry entry');
     const actions=bundle
       ? '<button class="btn '+(loaded?'':'primary')+'" data-act="'+(loaded?'offload':'load')+'" data-model="'+attr(m.name)+'">'+(loaded?'Offload':'Load')+'</button><button class="btn danger" data-act="delete" data-model="'+attr(m.name)+'">Delete</button>'
       : '<span class="pill work">registry</span>';
@@ -414,7 +415,7 @@ function renderRHM(){
   $('rhmModels').innerHTML=state.rhm.map(r=>{
     const status=r.loaded?'loaded':r.installed?'installed':r.installable?'remote':'manual';
     const cls=r.loaded||r.installed?'ok':r.installable?'':'work';
-    const tags=(r.tags||[]).slice(0,4).map(t=>'<span class="pill">'+esc(t)+'</span>').join('');
+    const tags=(r.speculative?['target+draft']:([])).concat(r.tags||[]).slice(0,4).map(t=>'<span class="pill">'+esc(t)+'</span>').join('');
     const action=r.installed
       ? '<button class="btn" data-load-installed="'+attr(r.installedName||r.name)+'">'+(r.loaded?'Loaded':'Load')+'</button>'
       : r.installable
