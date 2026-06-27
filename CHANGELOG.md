@@ -24,3 +24,4 @@
 - Updated diffusion denoiser tests to match the official entropy-bound sampler behavior already implemented in the runtime.
 - Listed all accepted EAGLE serve flags in CLI help.
 - Kept dashboard model listing responsive under launchd by using bounded model-index and registry reads instead of blocking indefinitely on inaccessible export paths.
+- Bounded dashboard Hugging Face support checks so a launchd/external-volume converter hang returns JSON and writes a support log instead of wedging the API.

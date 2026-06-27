@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 /// Tracks background `convert.py` runs launched by `POST /api/convert` and surfaces their
 /// progress to `GET /api/jobs`.
@@ -64,9 +69,15 @@ actor JobTracker {
     }
 
     /// Run the architecture support check (`convert.py --check --hf-id <repo>`) synchronously and
-    /// return the raw JSON line it prints. Blocks ~5-180s (fetches the HF config). Used by
+    /// return the raw JSON line it prints. Blocks briefly (fetches the HF config). Used by
     /// `POST /api/check-support`.
-    func runCheckSupport(hfRepo: String, script: String, workingDir: URL, pythonExecutable: String)
+    func runCheckSupport(
+        hfRepo: String,
+        script: String,
+        workingDir: URL,
+        pythonExecutable: String,
+        timeoutSeconds: TimeInterval = 30
+    )
         async -> String
     {
         guard FileManager.default.fileExists(atPath: script) else {
@@ -93,8 +104,21 @@ actor JobTracker {
                     "reason": "failed to launch check: \(error.localizedDescription)",
                 ]))
         }
+        let exited = Self.waitForExit(process, timeoutSeconds: timeoutSeconds)
+        if !exited {
+            Self.terminate(process)
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let text = String(data: data, encoding: .utf8) ?? ""
+            return Self.annotateSupportCheck(
+                hfRepo: hfRepo,
+                rawJSON: Self.jsonString([
+                    "ok": false,
+                    "supported": false,
+                    "reason": "support check timed out after \(Self.formatSeconds(timeoutSeconds))",
+                    "output": String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(12000)),
+                ]))
+        }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
         let text = String(data: data, encoding: .utf8) ?? ""
         // last JSON line
         if let line = text.split(separator: "\n").last(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("{") }) {
@@ -364,6 +388,34 @@ actor JobTracker {
         guard !s.isEmpty, s.count <= 160 else { return false }
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
         return s.unicodeScalars.allSatisfy { allowed.contains($0) }
+    }
+
+    private static func waitForExit(_ process: Process, timeoutSeconds: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while process.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        return !process.isRunning
+    }
+
+    private static func terminate(_ process: Process) {
+        guard process.isRunning else { return }
+        process.terminate()
+        let deadline = Date().addingTimeInterval(2)
+        while process.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        if process.isRunning {
+            kill(process.processIdentifier, SIGKILL)
+            process.waitUntilExit()
+        }
+    }
+
+    private static func formatSeconds(_ seconds: TimeInterval) -> String {
+        if seconds >= 1 {
+            return "\(Int(seconds.rounded()))s"
+        }
+        return String(format: "%.1fs", seconds)
     }
 }
 
