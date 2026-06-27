@@ -3,627 +3,490 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>caix · native Core AI runtime · Apple silicon</title>
+<title>caix server console</title>
 <style>
   :root{
-    --bg:#131519; --surface:#181b21; --raised:#1f242e; --line:#2a2f3a; --line-soft:#21262f;
-    --text:#eaecef; --muted:#929aa6; --faint:#5b6470;
-    --signal:#7c6cf0; --signal-dim:rgba(124,108,240,.16); --signal-line:rgba(124,108,240,.4);
-    --ok:#46d39a; --work:#e0a64e; --bad:#f0625d;
-    --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;
-    --mono:ui-monospace,"SF Mono",Menlo,monospace;
+    --bg:#0f1115;
+    --band:#141820;
+    --panel:#191f27;
+    --panel2:#202731;
+    --line:#2d3541;
+    --soft:#242b35;
+    --text:#eef1f4;
+    --muted:#9aa5b1;
+    --faint:#687482;
+    --accent:#4db6ac;
+    --accent2:#d6a84f;
+    --ok:#54c58f;
+    --bad:#e56a61;
+    --focus:#8bd7cf;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text",Inter,system-ui,sans-serif;
   }
-  *{box-sizing:border-box} html{-webkit-font-smoothing:antialiased}
-  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;line-height:1.5}
-  .wrap{max-width:980px;margin:0 auto;padding:0 22px}
-  a{color:var(--signal);text-decoration:none}
-
-  /* ---- masthead ---- */
-  header{padding:30px 0 18px}
-  .brand{display:flex;align-items:baseline;gap:12px}
-  .brand h1{margin:0;font-size:20px;font-weight:600;letter-spacing:-.01em}
-  .brand h1 b{color:var(--signal);font-weight:600}
-  .brand .tag{color:var(--muted);font-size:12.5px}
-  .brand .conn{margin-left:auto;font-family:var(--mono);font-size:11.5px;color:var(--faint);display:flex;align-items:center;gap:6px}
-  .dot{width:7px;height:7px;border-radius:50%;background:var(--faint);box-shadow:0 0 0 0 var(--ok)}
-  .live .dot{background:var(--ok);animation:pulse 2.4s ease-out infinite}
-  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(70,211,154,.5)}70%{box-shadow:0 0 0 6px rgba(70,211,154,0)}100%{box-shadow:0 0 0 0 rgba(70,211,154,0)}}
-
-  /* ---- signature: live machine strip ---- */
-  .machine{border:1px solid var(--line);border-radius:12px;background:
-     linear-gradient(180deg,rgba(124,108,240,.05),transparent 60%),var(--surface);
-     padding:16px 18px;display:grid;grid-template-columns:1.3fr 1fr 1fr 1fr;gap:22px;align-items:end}
-  .machine .chip{font-family:var(--mono);font-size:13px;color:var(--text)}
-  .machine .chip small{display:block;color:var(--faint);font-size:11px;margin-top:3px;letter-spacing:.02em}
-  .meter .mlabel{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;color:var(--muted);margin-bottom:6px}
-  .meter .mlabel b{color:var(--text);font-weight:500}
-  .track{height:6px;border-radius:3px;background:#0e1014;overflow:hidden;border:1px solid var(--line-soft)}
-  .track i{display:block;height:100%;width:0;background:var(--signal);transition:width .5s ease}
-  .track.mem i{background:linear-gradient(90deg,var(--signal),#9a8cff)}
-  .track.gpu i{background:linear-gradient(90deg,#46d39a,#7c6cf0)}
-  @media(max-width:720px){.machine{grid-template-columns:1fr 1fr;gap:16px}}
-
-  /* ---- section heads ---- */
-  .head{display:flex;align-items:baseline;gap:10px;margin:30px 0 12px}
-  .head h2{margin:0;font-size:12px;text-transform:uppercase;letter-spacing:.14em;color:var(--muted);font-weight:600}
-  .head .rule{flex:1;height:1px;background:var(--line-soft)}
-  .head .meta{font-family:var(--mono);font-size:11px;color:var(--faint)}
-
-  /* ---- models ---- */
-  .models{border:1px solid var(--line);border-radius:12px;overflow:hidden}
-  .m{display:grid;grid-template-columns:1fr auto auto;gap:16px;align-items:center;padding:13px 16px;border-top:1px solid var(--line-soft)}
-  .m:first-child{border-top:0}
-  .m:hover{background:var(--surface)}
-  .m .id{font-family:var(--mono);font-size:13px;color:var(--text)}
-  .m .sub{font-family:var(--mono);font-size:11px;color:var(--faint);margin-top:3px}
-  .m .stat{font-family:var(--mono);font-size:11.5px;color:var(--muted);text-align:right;min-width:96px}
-  .m .stat b{color:var(--text);font-weight:500}
-  .status{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11px;color:var(--muted)}
-  .status i{width:6px;height:6px;border-radius:50%;background:var(--faint)}
-  .status.loaded i{background:var(--ok);box-shadow:0 0 7px var(--ok)}
+  *{box-sizing:border-box}
+  html{-webkit-font-smoothing:antialiased}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 var(--sans)}
+  button,input,select{font:inherit}
+  button{cursor:pointer}
+  button:disabled{cursor:default;opacity:.48}
+  a{color:var(--accent);text-decoration:none}
+  .shell{max-width:1440px;margin:0 auto;padding:18px}
+  header{display:flex;align-items:center;gap:14px;padding:4px 0 16px;border-bottom:1px solid var(--line)}
+  h1{margin:0;font-size:20px;font-weight:650}
+  .sub{color:var(--muted);font-size:12px}
+  .connection{margin-left:auto;display:flex;align-items:center;gap:8px;font:12px var(--mono);color:var(--muted)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--bad)}
+  .live .dot{background:var(--ok);box-shadow:0 0 0 4px rgba(84,197,143,.12)}
+  .mode{display:inline-grid;grid-auto-flow:column;border:1px solid var(--line);background:var(--panel);border-radius:8px;overflow:hidden}
+  .mode button{min-width:82px;border:0;border-left:1px solid var(--line);background:transparent;color:var(--muted);padding:7px 11px}
+  .mode button:first-child{border-left:0}
+  .mode button.active{background:rgba(77,182,172,.16);color:var(--text)}
+  .btn{display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:7px;min-height:32px;padding:6px 11px;font:12px var(--mono)}
+  .btn:hover{border-color:var(--accent);color:#fff}
+  .btn.primary{background:rgba(77,182,172,.18);border-color:rgba(77,182,172,.5);color:#dff8f4}
+  .btn.warn{border-color:rgba(214,168,79,.5);color:#f4d89e}
+  .btn.danger{border-color:rgba(229,106,97,.48);color:#f0b4af}
+  .iconbtn{width:34px;min-width:34px;padding:0}
+  input,select{background:var(--panel);border:1px solid var(--line);border-radius:7px;color:var(--text);min-height:34px;padding:7px 9px}
+  input::placeholder{color:var(--faint)}
+  input:focus-visible,select:focus-visible,button:focus-visible,a:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
+  label.field{display:flex;flex-direction:column;gap:5px;color:var(--faint);font-size:11px;text-transform:uppercase;letter-spacing:.08em;min-width:0}
+  label.field input,label.field select{font-size:13px;text-transform:none;letter-spacing:0}
+  .topline{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:1px;margin:16px 0;background:var(--line);border:1px solid var(--line)}
+  .metric{background:var(--band);padding:11px 12px;min-width:0}
+  .metric b{display:block;font:13px var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .metric span{display:block;margin-top:4px;color:var(--faint);font-size:11px;text-transform:uppercase;letter-spacing:.08em}
+  .layout{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(360px,430px);gap:18px;align-items:start}
+  .stack{display:flex;flex-direction:column;gap:18px}
+  section{border:1px solid var(--line);background:var(--band)}
+  .section-head{display:flex;align-items:center;gap:10px;padding:11px 13px;border-bottom:1px solid var(--line);min-height:46px}
+  .section-head h2{margin:0;font-size:13px;font-weight:650}
+  .section-head .meta{margin-left:auto;color:var(--faint);font:11px var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .body{padding:13px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  .row{display:flex;align-items:center;gap:8px;min-width:0}
+  .row.wrap{flex-wrap:wrap}
+  .row.grow>*:first-child{flex:1}
+  .status{display:inline-flex;align-items:center;gap:7px;color:var(--muted);font:12px var(--mono)}
+  .status i{width:7px;height:7px;border-radius:50%;background:var(--faint)}
   .status.loaded{color:var(--ok)}
-  .btn{font-family:var(--mono);font-size:11.5px;color:var(--text);background:transparent;border:1px solid var(--line);
-       border-radius:7px;padding:5px 12px;cursor:pointer;transition:.15s}
-  .btn:hover{border-color:var(--signal-line);color:#fff}
-  .btn:focus-visible{outline:2px solid var(--signal);outline-offset:2px}
-  .btn.go{border-color:var(--signal-line);background:var(--signal-dim);color:#cfc8ff}
-  .btn.go:hover{background:var(--signal);color:#0b0a1a;border-color:var(--signal)}
-  .btn.danger{border-color:rgba(240,98,93,.36);color:#f5aaa7}
-  .btn.danger:hover{background:rgba(240,98,93,.14);border-color:rgba(240,98,93,.7);color:#fff}
-  .empty{padding:22px 16px;color:var(--faint);font-family:var(--mono);font-size:12px}
-
-  /* ---- convert + jobs ---- */
-  .panel{border:1px solid var(--line);border-radius:12px;padding:16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-  select,input.tin{font-family:var(--mono);font-size:12.5px;color:var(--text);background:var(--raised);border:1px solid var(--line);
-         border-radius:7px;padding:7px 10px;min-width:230px}
-  input.tin{min-width:0}
-  input.tin::placeholder{color:var(--faint)}
-  select:focus-visible,input.tin:focus-visible{outline:2px solid var(--signal);outline-offset:1px}
-  .spec{grid-template-columns:repeat(4,1fr)!important;margin-top:14px}
-  .spec .chip span,#usage .chip span{color:var(--signal);font-weight:600;font-size:16px}
-  #usage{grid-template-columns:repeat(5,1fr)!important;margin-top:0}
-  @media(max-width:720px){#usage,.spec{grid-template-columns:repeat(2,1fr)!important}}
-  .ok-txt{color:var(--ok)} .bad-txt{color:var(--bad)} .work-txt{color:var(--work)}
-  .pm{display:grid;grid-template-columns:1fr auto auto auto;gap:14px;font-family:var(--mono);font-size:11.5px;
-      color:var(--muted);padding:8px 14px;border-top:1px solid var(--line-soft)}
-  .pm:first-child{border-top:0}.pm b{color:var(--text);font-weight:500}.pm .nm{color:var(--text)}
-  .panel .hint{color:var(--faint);font-size:12px}
-  .path{font-family:var(--mono);font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .servergrid{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line-soft)}
-  .servergrid .cell{background:var(--bg);padding:10px 12px;min-width:0}
-  .servergrid .cell b{display:block;color:var(--text);font-weight:500;font-family:var(--mono);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .servergrid .cell span{display:block;color:var(--faint);font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px}
-  @media(max-width:720px){.servergrid{grid-template-columns:1fr}}
-  .jobs{margin-top:12px;display:flex;flex-direction:column;gap:10px}
-  .job .jl{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-bottom:5px}
-  .job .jl b{color:var(--text);font-weight:500}
-  .job .track i{background:linear-gradient(90deg,var(--work),#f0c177)}
-
-  /* ---- chat ---- */
-  .chat{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--surface)}
-  .chatbar{display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap}
-  .chatbar select{min-width:200px;padding:5px 9px}
-  .chatopts{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line-soft);flex-wrap:wrap}
-  .seg{display:inline-grid;grid-auto-flow:column;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--raised)}
-  .seg button{font-family:var(--mono);font-size:11.5px;color:var(--muted);background:transparent;border:0;border-left:1px solid var(--line);padding:6px 10px;cursor:pointer;min-width:76px}
-  .seg button:first-child{border-left:0}
-  .seg button.active{background:var(--signal-dim);color:#d9d4ff}
-  .promptgrid{display:grid;grid-template-columns:1fr;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line-soft)}
-  .advgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:12px 14px;border-bottom:1px solid var(--line-soft);background:#151820}
-  .field{display:flex;flex-direction:column;gap:5px;min-width:0;color:var(--faint);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
-  .field input,.field textarea{font-family:var(--mono);font-size:12px;color:var(--text);background:var(--raised);border:1px solid var(--line);border-radius:7px;padding:7px 9px;min-width:0;width:100%}
-  .field textarea{font-family:var(--sans);font-size:13px;line-height:1.35;resize:vertical;min-height:44px;text-transform:none;letter-spacing:0}
-  .field input[type=range]{padding:0;accent-color:var(--signal)}
-  .field .row{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center}
-  .field output{font-family:var(--mono);font-size:11.5px;color:var(--text);min-width:42px;text-align:right}
+  .status.loaded i{background:var(--ok)}
+  .pill{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);background:var(--panel);border-radius:999px;color:var(--muted);padding:3px 8px;font:11px var(--mono);max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pill.ok{border-color:rgba(84,197,143,.45);color:#b9efd4}
+  .pill.work{border-color:rgba(214,168,79,.45);color:#f2d492}
+  .pill.bad{border-color:rgba(229,106,97,.45);color:#efb0aa}
+  .muted{color:var(--muted)}
+  .faint{color:var(--faint)}
+  .mono{font-family:var(--mono)}
+  .ok{color:var(--ok)}
+  .bad{color:var(--bad)}
+  .work{color:var(--accent2)}
   [hidden]{display:none!important}
-  @media(max-width:720px){.advgrid{grid-template-columns:1fr 1fr}.seg{width:100%;grid-auto-columns:1fr}}
-  .badge{font-family:var(--mono);font-size:10.5px;color:#cfc8ff;background:var(--signal-dim);border:1px solid var(--signal-line);
-         border-radius:20px;padding:3px 10px;letter-spacing:.02em}
-  .badge.std{color:var(--muted);background:transparent;border-color:var(--line)}
-  .tog{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);cursor:pointer;user-select:none}
-  .tog input{accent-color:var(--signal)}
-  .livestat{font-family:var(--mono);font-size:11px;color:var(--faint)}
-  .livestat b{color:var(--ok)}
-  .transcript{max-height:380px;overflow-y:auto;padding:6px 0}
-  details.think{border-left:2px solid var(--line);padding:2px 0 2px 10px;margin:0 0 9px;color:var(--faint);font-size:12px}
-  details.think summary{cursor:pointer;color:var(--muted);font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:5px}
-  details.think[open]{white-space:pre-wrap}
-  .cursor{color:var(--signal);animation:blink 1s steps(2) infinite}
-  @keyframes blink{50%{opacity:0}}
-  .spin{display:inline-block;width:11px;height:11px;border:2px solid var(--signal-line);border-top-color:var(--signal);
-        border-radius:50%;animation:spin .8s linear infinite;vertical-align:-1px;margin-right:6px}
-  @keyframes spin{to{transform:rotate(360deg)}}
-  .working{color:var(--muted);font-size:13px;display:inline-flex;align-items:center}
-  .transcript .empty{padding:22px 16px}
-  .msg{padding:11px 16px;border-top:1px solid var(--line-soft);display:grid;grid-template-columns:64px 1fr;gap:14px;align-items:start}
-  .msg:first-child{border-top:0}
-  .msg .who{font-family:var(--mono);font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.08em;padding-top:2px}
-  .msg.user .who{color:var(--signal)}
-  .msg .body{white-space:pre-wrap;line-height:1.55;color:var(--text);font-size:13.5px}
-  .msg .think{display:block;border-left:2px solid var(--line);padding-left:10px;margin:0 0 8px;color:var(--faint);font-size:12px;white-space:pre-wrap}
-  .msg .tps{font-family:var(--mono);font-size:10.5px;color:var(--faint);margin-top:6px}
-  .composer{display:flex;gap:10px;padding:12px 14px;border-top:1px solid var(--line);align-items:flex-end}
-  .composer textarea{flex:1;resize:vertical;font-family:var(--sans);font-size:13.5px;color:var(--text);background:var(--raised);
-       border:1px solid var(--line);border-radius:8px;padding:9px 11px;min-height:40px;line-height:1.4}
-  .composer textarea:focus-visible{outline:2px solid var(--signal);outline-offset:1px}
-  .composer .btn.go{padding:9px 16px}
-  .composer .btn[disabled]{opacity:.5;cursor:default}
-
-  footer{margin:34px 0 26px;display:flex;gap:14px;align-items:center;color:var(--faint);font-size:12px}
-  footer .api{font-family:var(--mono);font-size:11px}
+  .toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .toolbar select{min-width:260px;flex:1}
+  .summary{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--soft);border:1px solid var(--soft)}
+  .summary .metric{background:#151a21}
+  .models-list{display:flex;flex-direction:column}
+  .model-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;padding:12px 13px;border-top:1px solid var(--soft)}
+  .model-row:first-child{border-top:0}
+  .model-row:hover{background:rgba(255,255,255,.018)}
+  .model-id{font:13px var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .model-sub{margin-top:3px;color:var(--faint);font:11px var(--mono)}
+  .actions{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end}
+  .search{width:100%}
+  .rhm-list{display:grid;grid-template-columns:1fr;gap:10px}
+  .repo-card{border:1px solid var(--soft);background:var(--panel);border-radius:8px;padding:11px;display:grid;gap:8px}
+  .repo-title{display:flex;gap:8px;align-items:flex-start;min-width:0}
+  .repo-title b{font:13px var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .repo-title .repo-state{margin-left:auto;flex:0 0 auto}
+  .tags{display:flex;gap:6px;flex-wrap:wrap}
+  .repo-actions{display:flex;gap:8px;align-items:center;justify-content:space-between}
+  .jobs{display:flex;flex-direction:column;gap:10px}
+  .job{display:grid;gap:6px}
+  .jobline{display:flex;justify-content:space-between;gap:10px;color:var(--muted);font:12px var(--mono)}
+  .bar{height:7px;border-radius:4px;background:#0c0f13;border:1px solid var(--soft);overflow:hidden}
+  .bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent2))}
+  .logpath{font:11px var(--mono);color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .notice{border:1px solid var(--soft);background:var(--panel);border-radius:8px;padding:10px;font:12px var(--mono);color:var(--muted);overflow-wrap:anywhere}
+  .empty{padding:18px;color:var(--faint);font:12px var(--mono)}
+  @media(max-width:1100px){
+    .layout{grid-template-columns:1fr}
+    .topline{grid-template-columns:repeat(3,minmax(0,1fr))}
+  }
+  @media(max-width:760px){
+    .shell{padding:12px}
+    header{align-items:flex-start;flex-wrap:wrap}
+    .connection{margin-left:0;width:100%;justify-content:space-between}
+    .topline{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .summary,.grid2,.grid3{grid-template-columns:1fr}
+    .toolbar select{min-width:0}
+  }
   @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
 </head>
 <body>
-<div class="wrap">
+<div class="shell">
   <header>
-    <div class="brand">
-      <h1><b>caix</b></h1>
-      <span class="tag">native Core AI runtime · speculative / MTP decoding · Apple silicon</span>
-      <span class="conn" id="conn"><span class="dot"></span><span id="connlbl">connecting</span></span>
+    <div>
+      <h1>caix server</h1>
+      <div class="sub">Core AI runtime console</div>
     </div>
+    <div class="mode" id="modeSwitch" aria-label="Mode">
+      <button type="button" data-mode="simple" class="active">Simple</button>
+      <button type="button" data-mode="advanced">Advanced</button>
+    </div>
+    <a class="btn primary" href="/chat">Open chat</a>
+    <div class="connection" id="conn"><span class="dot"></span><span id="connText">connecting</span></div>
   </header>
 
-  <!-- signature: the machine, live -->
-  <section class="machine" id="machine">
-    <div class="chip"><span id="chip">—</span><small id="cores">— cores</small></div>
-    <div class="meter">
-      <div class="mlabel"><span>unified memory</span><b id="memv">—</b></div>
-      <div class="track mem"><i id="membar"></i></div>
-    </div>
-    <div class="meter">
-      <div class="mlabel"><span>GPU</span><b id="gpuv">—</b></div>
-      <div class="track gpu"><i id="gpubar"></i></div>
-    </div>
-    <div class="meter">
-      <div class="mlabel"><span>GPU memory</span><b id="gpumem">—</b></div>
-      <div class="track"><i id="gpumembar"></i></div>
-    </div>
-  </section>
+  <div class="topline">
+    <div class="metric"><b id="m_cpu">-</b><span>machine</span></div>
+    <div class="metric"><b id="m_mem">-</b><span>memory</span></div>
+    <div class="metric"><b id="m_gpu">-</b><span>gpu</span></div>
+    <div class="metric"><b id="m_req">-</b><span>requests</span></div>
+    <div class="metric"><b id="m_tok">-</b><span>tokens</span></div>
+    <div class="metric"><b id="m_tps">-</b><span>last tok/s</span></div>
+  </div>
 
-  <!-- usage analytics (cumulative, omlx-style) -->
-  <div class="head"><h2>Usage</h2><span class="rule"></span><span class="meta" id="uptime">—</span></div>
-  <section class="machine" id="usage">
-    <div class="chip"><span id="u_req">—</span><small>requests</small></div>
-    <div class="chip"><span id="u_in">—</span><small>tokens in</small></div>
-    <div class="chip"><span id="u_out">—</span><small>tokens out</small></div>
-    <div class="chip"><span id="u_avg">—</span><small>avg tok/s · 10 min</small></div>
-    <div class="chip"><span id="u_life">—</span><small>avg tok/s · all</small></div>
-  </section>
-  <section class="models" id="permodel" style="margin-top:12px;display:none"></section>
+  <main class="layout">
+    <div class="stack">
+      <section>
+        <div class="section-head">
+          <h2>Active Model</h2>
+          <span class="meta" id="activeMeta">-</span>
+        </div>
+        <div class="body toolbar">
+          <select id="activeModel" aria-label="Model"></select>
+          <span class="pill" id="activeState">no model</span>
+          <button class="btn primary" id="loadActive">Load</button>
+          <button class="btn" id="offloadActive">Offload</button>
+          <a class="btn" href="/chat">Chat</a>
+        </div>
+      </section>
 
-  <!-- live speculative metrics (last generation) -->
-  <div class="head"><h2>Live · last generation</h2><span class="rule"></span><span class="meta">EAGLE speculative decoding</span></div>
-  <section class="machine spec" id="spec">
-    <div class="chip"><span id="sp_tps">—</span><small>tok/s · last gen</small></div>
-    <div class="chip"><span id="sp_acc">—</span><small>draft acceptance</small></div>
-    <div class="chip"><span id="sp_tpp">—</span><small>tokens / target pass</small></div>
-    <div class="chip"><span id="sp_k">—</span><small>EAGLE draft (K)</small></div>
-  </section>
+      <section>
+        <div class="section-head">
+          <h2>Local Models</h2>
+          <span class="meta" id="modelMeta">-</span>
+          <button class="btn" id="offloadAll">Offload all</button>
+        </div>
+        <div class="body">
+          <input class="search" id="modelFilter" placeholder="Filter local models"/>
+        </div>
+        <div class="models-list" id="models"><div class="empty">loading models...</div></div>
+      </section>
 
-  <div class="head"><h2>Server</h2><span class="rule"></span><span class="meta" id="servermeta">—</span>
-    <button class="btn" id="offloadall" title="Unload every resident model">Offload all</button></div>
-  <section class="models servergrid" id="servergrid">
-    <div class="cell"><span>endpoint</span><b id="srv_base">—</b></div>
-    <div class="cell"><span>runtime</span><b id="srv_runtime">—</b></div>
-    <div class="cell"><span>process</span><b id="srv_pid">—</b></div>
-    <div class="cell"><span>exports</span><b id="srv_exports">—</b></div>
-    <div class="cell"><span>registry</span><b id="srv_registry">—</b></div>
-    <div class="cell"><span>logs</span><b id="srv_logs">—</b></div>
-    <div class="cell"><span>support logs</span><b id="srv_supportlogs">—</b></div>
-    <div class="cell"><span>eagle</span><b id="srv_eagle">—</b></div>
-  </section>
+      <section>
+        <div class="section-head">
+          <h2>Usage</h2>
+          <span class="meta" id="usageMeta">-</span>
+        </div>
+        <div class="summary">
+          <div class="metric"><b id="u_req">-</b><span>requests</span></div>
+          <div class="metric"><b id="u_in">-</b><span>tokens in</span></div>
+          <div class="metric"><b id="u_out">-</b><span>tokens out</span></div>
+          <div class="metric"><b id="u_avg">-</b><span>avg tok/s</span></div>
+        </div>
+        <div class="models-list advanced-only" id="perModel" hidden></div>
+      </section>
+    </div>
 
-  <div class="head"><h2>Models</h2><span class="rule"></span><span class="meta" id="modelmeta"></span></div>
-  <section class="models" id="models"><div class="empty">loading models…</div></section>
+    <aside class="stack">
+      <section>
+        <div class="section-head">
+          <h2>RHM Models</h2>
+          <span class="meta" id="rhmMeta">-</span>
+          <button class="btn iconbtn" id="refreshRHM" title="Refresh">r</button>
+        </div>
+        <div class="body rhm-list" id="rhmModels"><div class="empty">loading RHM models...</div></div>
+      </section>
 
-  <div class="head"><h2>Chat</h2><span class="rule"></span><span class="meta" id="chatmeta">—</span></div>
-  <section class="chat" id="chatpanel">
-    <div class="chatbar">
-      <select id="chatmodel" aria-label="Model" title="Choose a model — MTP/speculative models draft ahead and verify"></select>
-      <span class="badge" id="mtpbadge"></span>
-      <label class="tog"><input type="checkbox" id="showthink" checked/> show thinking</label>
-      <span class="livestat" id="livestat"></span>
-      <button class="btn" id="clearbtn" style="margin-left:auto">Clear</button>
-    </div>
-    <div class="chatopts">
-      <div class="seg" id="presetseg" aria-label="Response style">
-        <button type="button" data-preset="balanced" class="active">Balanced</button>
-        <button type="button" data-preset="precise">Precise</button>
-        <button type="button" data-preset="creative">Creative</button>
-      </div>
-      <label class="tog" style="margin-left:auto"><input type="checkbox" id="advanced"/> advanced</label>
-    </div>
-    <div class="promptgrid">
-      <label class="field">Instructions
-        <textarea id="systemprompt" rows="2" placeholder="Optional system prompt"></textarea>
-      </label>
-    </div>
-    <div class="advgrid" id="advancedgrid" hidden>
-      <label class="field">Max tokens
-        <input id="maxtokens" type="number" min="1" max="8192" step="1" value="1024"/>
-      </label>
-      <label class="field">Temperature
-        <span class="row"><input id="temperature" type="range" min="0" max="2" step="0.05" value="0.7"/><output id="tempout">0.70</output></span>
-      </label>
-      <label class="field">Top P
-        <span class="row"><input id="topp" type="range" min="0.05" max="1" step="0.01" value="0.95"/><output id="toppout">0.95</output></span>
-      </label>
-      <label class="field">Top K
-        <input id="topk" type="number" min="0" max="1000" step="1" placeholder="off"/>
-      </label>
-      <label class="field">Seed
-        <input id="seed" type="number" min="0" step="1" placeholder="random"/>
-      </label>
-      <label class="field">Stop
-        <input id="stopseq" placeholder="comma-separated"/>
-      </label>
-      <label class="field">KV capacity
-        <input id="kvcap" type="number" min="0" step="1" placeholder="auto"/>
-      </label>
-      <label class="tog" style="align-self:end;margin-bottom:8px"><input type="checkbox" id="rawmode"/> raw prompt</label>
-    </div>
-    <div class="transcript" id="transcript"><div class="empty">pick a model and say something — streams as it generates</div></div>
-    <div class="composer">
-      <textarea id="prompt" rows="2" placeholder="Message the model…  (⌘/Ctrl+Enter to send)" aria-label="Prompt"></textarea>
-      <button class="btn go" id="sendbtn">Send</button>
-      <button class="btn" id="stopbtn" style="display:none">Stop</button>
-    </div>
-  </section>
+      <section>
+        <div class="section-head">
+          <h2>HF Repo</h2>
+          <span class="meta" id="hfMeta">support check</span>
+        </div>
+        <div class="body" style="display:grid;gap:10px">
+          <input id="hfRepo" placeholder="org/model"/>
+          <div class="grid2 advanced-only" hidden>
+            <label class="field">Compression
+              <select id="hfComp"><option>4bit</option><option>8bit</option><option>none</option></select>
+            </label>
+            <label class="field">Precision
+              <select id="hfPrec"><option>float16</option><option>bfloat16</option><option>float32</option></select>
+            </label>
+            <label class="field">Context
+              <input id="hfCtx" type="number" min="1" step="1" placeholder="auto"/>
+            </label>
+            <label class="field">Local name
+              <input id="hfName" placeholder="auto"/>
+            </label>
+            <label class="field" style="grid-column:1/-1">GGUF file
+              <input id="hfGGUF" placeholder="auto"/>
+            </label>
+          </div>
+          <div class="row wrap">
+            <button class="btn" id="hfCheck">Check</button>
+            <button class="btn primary" id="hfConvert">Download + convert</button>
+          </div>
+          <div class="notice" id="hfResult">-</div>
+        </div>
+      </section>
 
-  <div class="head"><h2>Add model · HuggingFace → Core AI</h2><span class="rule"></span>
-    <span class="meta">paste a repo · unsupported types are flagged</span></div>
-  <section class="panel" style="flex-direction:column;align-items:stretch;gap:12px">
-    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-      <input class="tin" id="hfrepo" placeholder="HF repo, e.g. Qwen/Qwen2-0.5B" style="flex:1;min-width:240px"/>
-      <button class="btn" id="hfcheck">Check support</button>
-      <button class="btn go" id="hfconvert">Convert + load</button>
-    </div>
-    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-      <label class="hint">compression
-        <select id="hfcomp" style="min-width:110px"><option>4bit</option><option>8bit</option><option>none</option></select></label>
-      <label class="hint">precision
-        <select id="hfprec" style="min-width:130px"><option>float16</option><option>bfloat16</option><option>float32</option></select></label>
-      <label class="hint">context
-        <input class="tin" id="hfctx" placeholder="auto" style="width:90px"/></label>
-      <label class="hint">name
-        <input class="tin" id="hfname" placeholder="auto" style="width:160px"/></label>
-      <label class="hint">GGUF file
-        <input class="tin" id="hfgguf" placeholder="auto" style="width:190px"/></label>
-    </div>
-    <div id="hfresult" class="hint" style="font-family:var(--mono);font-size:12px"></div>
-  </section>
+      <section>
+        <div class="section-head">
+          <h2>Jobs</h2>
+          <span class="meta" id="jobMeta">-</span>
+        </div>
+        <div class="body jobs" id="jobs"><div class="empty">no active jobs</div></div>
+      </section>
 
-  <div class="head"><h2>Convert from registry</h2><span class="rule"></span></div>
-  <section class="panel">
-    <select id="modelsel" aria-label="Model to convert"></select>
-    <button class="btn go" id="convertbtn">Convert</button>
-    <span class="hint">exports an <span style="font-family:var(--mono)">.aimodel</span> bundle, then it appears above</span>
-  </section>
-  <div class="jobs" id="jobs"></div>
-
-  <footer>
-    <span class="dot" style="background:var(--signal)"></span>
-    <span>caix · runs entirely on this Mac · no data leaves the device</span>
-    <span class="api" style="margin-left:auto">OpenAI &amp; Anthropic API · /v1</span>
-  </footer>
+      <section>
+        <div class="section-head">
+          <h2>Server</h2>
+          <span class="meta" id="serverMeta">-</span>
+        </div>
+        <div class="body" style="display:grid;gap:8px">
+          <div class="notice"><span class="faint">Endpoint</span><br><span id="srvEndpoint">-</span></div>
+          <div class="notice"><span class="faint">Runtime</span><br><span id="srvRuntime">-</span></div>
+          <div class="notice"><span class="faint">Exports</span><br><span id="srvExports">-</span></div>
+          <div class="notice advanced-only" hidden><span class="faint">Registry</span><br><span id="srvRegistry">-</span></div>
+          <div class="notice advanced-only" hidden><span class="faint">Logs</span><br><span id="srvLogs">-</span></div>
+        </div>
+      </section>
+    </aside>
+  </main>
 </div>
 
 <script>
 const $=id=>document.getElementById(id);
-const gb=b=>(b/1073741824).toFixed(1)+' GB';
-async function j(u,o){const r=await fetch(u,o);if(!r.ok)throw new Error(r.status);return r.json();}
-function conn(ok){const c=$('conn');c.classList.toggle('live',ok);$('connlbl').textContent=ok?'live':'server offline';
-  $('connlbl').style.color=ok?'var(--ok)':'var(--bad)';}
-const esc=s=>(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const state={models:[],rhm:[],mode:'simple'};
+const gb=n=>n?((n/1073741824).toFixed(1)+' GB'):'-';
+const k=n=>{n=n||0;return n>=1e6?(n/1e6).toFixed(2)+'M':n>=1e3?(n/1e3).toFixed(1)+'k':String(n)};
+const esc=s=>String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const attr=s=>esc(s).replace(/"/g,'&quot;');
-
-// ---- generation controls ----
-const presets={
-  balanced:{temperature:0.7,top_p:0.95,top_k:'',max_tokens:1024},
-  precise:{temperature:0,top_p:1,top_k:'1',max_tokens:768},
-  creative:{temperature:1.05,top_p:0.9,top_k:'50',max_tokens:1200}
-};
-function savePrefs(){
-  const prefs={
-    preset:document.querySelector('#presetseg button.active')?.dataset.preset||'balanced',
-    advanced:$('advanced').checked, system:$('systemprompt').value,
-    max_tokens:$('maxtokens').value, temperature:$('temperature').value, top_p:$('topp').value,
-    top_k:$('topk').value, seed:$('seed').value, stop:$('stopseq').value,
-    kv_capacity:$('kvcap').value, raw:$('rawmode').checked
-  };
-  localStorage.setItem('caix.dashboard.prefs',JSON.stringify(prefs));
+async function api(url,opt){
+  const res=await fetch(url,opt);
+  const text=await res.text();
+  let json={}; try{json=text?JSON.parse(text):{};}catch(e){json={raw:text};}
+  if(!res.ok)throw new Error(json.error?.message||json.reason||res.statusText||res.status);
+  return json;
 }
-function setPreset(name,applyValues=true){
-  document.querySelectorAll('#presetseg button').forEach(b=>b.classList.toggle('active',b.dataset.preset===name));
-  const p=presets[name]||presets.balanced;
-  if(applyValues){
-    $('temperature').value=p.temperature;$('topp').value=p.top_p;$('topk').value=p.top_k;$('maxtokens').value=p.max_tokens;
-  }
-  syncGenOutputs();savePrefs();
+function setConn(ok,msg){
+  $('conn').classList.toggle('live',ok);
+  $('connText').textContent=msg||(ok?'live':'offline');
 }
-function syncGenOutputs(){
-  $('tempout').textContent=(parseFloat($('temperature').value)||0).toFixed(2);
-  $('toppout').textContent=(parseFloat($('topp').value)||0).toFixed(2);
-  $('advancedgrid').hidden=!$('advanced').checked;
+function setMode(mode){
+  state.mode=mode;
+  document.querySelectorAll('#modeSwitch button').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));
+  const adv=mode==='advanced';
+  document.querySelectorAll('.advanced-only').forEach(el=>el.hidden=!adv);
+  localStorage.setItem('caix.mode',mode);
 }
 function loadPrefs(){
-  let prefs={};try{prefs=JSON.parse(localStorage.getItem('caix.dashboard.prefs')||'{}');}catch(e){}
-  setPreset(prefs.preset||'balanced',false);
-  $('advanced').checked=!!prefs.advanced;
-  $('systemprompt').value=prefs.system||'';
-  if(prefs.max_tokens)$('maxtokens').value=prefs.max_tokens;
-  if(prefs.temperature)$('temperature').value=prefs.temperature;
-  if(prefs.top_p)$('topp').value=prefs.top_p;
-  if(prefs.top_k!==undefined)$('topk').value=prefs.top_k;
-  if(prefs.seed!==undefined)$('seed').value=prefs.seed;
-  if(prefs.stop!==undefined)$('stopseq').value=prefs.stop;
-  if(prefs.kv_capacity!==undefined)$('kvcap').value=prefs.kv_capacity;
-  $('rawmode').checked=!!prefs.raw;
-  syncGenOutputs();
+  setMode(localStorage.getItem('caix.mode')||'simple');
+  let p={}; try{p=JSON.parse(localStorage.getItem('caix.dashboard.prefs')||'{}');}catch(e){}
+  ['hfComp','hfPrec'].forEach(id=>{if(p[id]!==undefined)$(id).value=p[id];});
 }
-function chatPayload(model,msgs){
-  const maxTokens=Math.max(1,parseInt($('maxtokens').value||'1024',10)||1024);
-  const body={model,messages:msgs,max_tokens:maxTokens,temperature:parseFloat($('temperature').value)||0,
-    top_p:Math.max(0.01,Math.min(1,parseFloat($('topp').value)||1)),stream:true};
-  const topK=parseInt($('topk').value||'',10); if(Number.isFinite(topK)&&topK>0)body.top_k=topK;
-  const seed=parseInt($('seed').value||'',10); if(Number.isFinite(seed)&&seed>=0)body.seed=seed;
-  const kv=parseInt($('kvcap').value||'',10); if(Number.isFinite(kv)&&kv>0)body.kv_capacity=kv;
-  if($('rawmode').checked)body.apply_chat_template=false;
-  const stops=$('stopseq').value.split(',').map(s=>s.trim()).filter(Boolean); if(stops.length)body.stop=stops;
-  return body;
+function savePrefs(){
+  localStorage.setItem('caix.dashboard.prefs',JSON.stringify({hfComp:$('hfComp').value,hfPrec:$('hfPrec').value}));
 }
-loadPrefs();
-document.querySelectorAll('#presetseg button').forEach(b=>b.addEventListener('click',()=>setPreset(b.dataset.preset,true)));
-['advanced','systemprompt','maxtokens','temperature','topp','topk','seed','stopseq','kvcap','rawmode'].forEach(id=>{
-  $(id).addEventListener('input',()=>{syncGenOutputs();savePrefs();});
-  $(id).addEventListener('change',()=>{syncGenOutputs();savePrefs();});
-});
+document.querySelectorAll('#modeSwitch button').forEach(b=>b.addEventListener('click',()=>setMode(b.dataset.mode)));
+['hfComp','hfPrec'].forEach(id=>{$(id).addEventListener('input',savePrefs);$(id).addEventListener('change',savePrefs);});
 
 async function pollStats(){
-  try{const s=await j('/api/stats');conn(true);
-    $('chip').textContent=s.chip;$('cores').textContent=s.logicalCores+' cores · '+gb(s.totalRAMBytes);
-    const mf=Math.round((s.memoryUsedFraction||0)*100);
-    $('memv').textContent=gb(s.usedRAMBytes)+' · '+mf+'%';$('membar').style.width=mf+'%';
-    const gu=s.gpuUtilizationPercent??0;$('gpuv').textContent=gu+'%';$('gpubar').style.width=gu+'%';
-    if(s.gpuInUseMemoryBytes){$('gpumem').textContent=gb(s.gpuInUseMemoryBytes);
-      $('gpumembar').style.width=Math.min(100,Math.round(s.gpuInUseMemoryBytes/s.totalRAMBytes*100))+'%';}
-    else $('gpumem').textContent='—';
-  }catch(e){conn(false);}
+  try{
+    const s=await api('/api/stats'); setConn(true);
+    $('m_cpu').textContent=(s.chip||'Apple silicon')+' / '+(s.logicalCores||'-')+'c';
+    const used=Math.round((s.memoryUsedFraction||0)*100);
+    $('m_mem').textContent=gb(s.usedRAMBytes)+' / '+gb(s.totalRAMBytes)+' ('+used+'%)';
+    $('m_gpu').textContent=(s.gpuUtilizationPercent??0)+'% / '+gb(s.gpuInUseMemoryBytes);
+  }catch(e){setConn(false,'server offline');}
 }
 async function pollServer(){
-  try{const s=await j('/api/server');
-    $('servermeta').textContent=s.name+' · '+(s.runtimeLinked?'runtime linked':'runtime unavailable');
-    $('srv_base').textContent=s.baseURL||location.origin;
-    $('srv_runtime').textContent=(s.runtimeLinked?'Core AI linked':'not linked')+' · '+(s.computeUnit||'gpu');
-    $('srv_pid').textContent='pid '+s.pid+' · '+(s.verbose?'verbose':'normal');
-    $('srv_exports').textContent=s.exportsDir||'—';$('srv_exports').title=s.exportsDir||'';
-    $('srv_registry').textContent=s.registryPath||'—';$('srv_registry').title=s.registryPath||'';
-    $('srv_logs').textContent=s.logsDir||'—';$('srv_logs').title=s.logsDir||'';
-    $('srv_supportlogs').textContent=s.supportLogsDir||'—';$('srv_supportlogs').title=s.supportLogsDir||'';
-    $('srv_eagle').textContent=s.eagle?.enabled?(s.eagle.name||'enabled'):'off';
+  try{
+    const s=await api('/api/server');
+    $('serverMeta').textContent=s.name||'caix';
+    $('srvEndpoint').textContent=s.baseURL||location.origin;
+    $('srvRuntime').textContent=(s.runtimeLinked?'Core AI linked':'runtime unavailable')+' / '+(s.computeUnit||'gpu')+' / pid '+(s.pid||'-');
+    $('srvExports').textContent=s.exportsDir||'-';
+    $('srvRegistry').textContent=s.registryPath||'-';
+    $('srvLogs').textContent=(s.logsDir||'-')+' / '+(s.supportLogsDir||'-');
   }catch(e){
-    $('servermeta').textContent='server metadata unavailable until next caix restart';
-    $('srv_base').textContent=location.origin;$('srv_runtime').textContent='legacy API';
-    $('srv_pid').textContent='—';$('srv_exports').textContent='—';$('srv_registry').textContent='—';
-    $('srv_logs').textContent='—';$('srv_supportlogs').textContent='—';$('srv_eagle').textContent='—';
+    $('serverMeta').textContent='metadata unavailable';
+    $('srvEndpoint').textContent=location.origin;
   }
 }
-async function pollModels(){
-  try{const m=await j('/api/models');
-    const loadedList=m.filter(x=>x.status==='loaded');
-    window.loaded=loadedList.map(x=>x.name);
-    $('modelmeta').textContent=loadedList.length+' loaded · '+m.length+' available';
-    // chat model picker: all bundles, MTP/speculative first (it's the headline path)
-    const bundles=m.filter(x=>x.bundle).map(x=>x.name).sort((a,b)=>(isMTP(b)?1:0)-(isMTP(a)?1:0));
-    const sel=$('chatmodel');
-    if(bundles.join('|')!==sel.dataset.opts){
-      const cur=sel.value;
-      sel.innerHTML=bundles.map(n=>`<option value="${n}">${n}${isMTP(n)?'  · MTP':''}</option>`).join('');
-      sel.dataset.opts=bundles.join('|');
-      sel.value=(cur&&bundles.includes(cur))?cur:(bundles[0]||'');
-      updateBadge();
-    }
-    const cm=$('chatmodel').value;
-    $('chatmeta').textContent=cm?(window.loaded.includes(cm)?('● '+cm+' loaded'):('○ '+cm+' — loads on first message')):'no models';
-    $('sendbtn').disabled=!cm||streaming;
-    $('models').innerHTML=m.map(x=>{
-      const loaded=x.status==='loaded';
-      const tps=x.tokensPerSecond?`<b>${x.tokensPerSecond.toFixed(0)}</b> tok/s`:(loaded?'idle':'');
-      const reqs=x.requests?` · ${x.requests} req`:'';
-      const mem=x.memoryBytes?` · ${gb(x.memoryBytes)}`:'';
-      const actions=x.bundle
-        ? `<button class="btn ${loaded?'':'go'}" data-action="${loaded?'offload':'load'}" data-model="${attr(x.name)}">${loaded?'Offload':'Load'}</button>
-           <button class="btn danger" data-action="delete" data-model="${attr(x.name)}">Delete</button>`
-        : `<span class="sub">not converted</span>`;
-      return `<div class="m">
-        <div><div class="id">${esc(x.name)}</div><div class="sub">${esc(x.params||'core ai bundle')}</div></div>
-        <div class="stat"><span class="status ${loaded?'loaded':''}"><i></i>${loaded?'loaded':'available'}</span>
-          <div style="margin-top:4px">${tps}${reqs}${mem}</div></div>
-        <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">${actions}</div>
-      </div>`;}).join('')||'<div class="empty">no models yet — convert one below</div>';
-    const rsel=$('modelsel');if(!rsel.dataset.filled&&m.length){rsel.innerHTML=m.map(x=>`<option>${esc(x.name)}</option>`).join('');rsel.dataset.filled='1';}
-  }catch(e){$('models').innerHTML='<div class="empty">server offline — start it with <span style="font-family:var(--mono)">coreai-pipeline serve</span></div>';}
-}
-async function pollJobs(){
-  try{const jb=await j('/api/jobs');
-    $('jobs').innerHTML=(jb||[]).map(x=>`<div class="job"><div class="jl"><span>${esc(x.label)}</span><b>${Math.round(x.pct)}%</b></div>
-      <div class="track"><i style="width:${x.pct}%"></i></div>
-      ${x.logPath?`<div class="path" title="${attr(x.logPath)}">${esc(x.logPath)}</div>`:''}</div>`).join('');
-  }catch(e){}
-}
-async function act(a,name){
-  if(a==='delete'&&!confirm(`Delete ${name} from disk?`))return;
-  try{await j('/api/'+a,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:name})});}
-  catch(e){alert(`${a} failed: ${e.message||e}`);}
-  pollModels();
-}
-async function offloadAll(){
-  if(!confirm('Unload every resident model?'))return;
-  try{
-    const d=await j('/api/offload-all',{method:'POST'});
-    $('servermeta').textContent=`offloaded ${d.offloaded?.length||0} models`;
-    pollModels();
-  }catch(e){alert('offload all failed: '+(e.message||e));}
-}
-async function startConvert(){await act('convert',$('modelsel').value);pollJobs();}
-$('offloadall').addEventListener('click',offloadAll);
-$('models').addEventListener('click',e=>{
-  const b=e.target.closest('button[data-action]');if(!b)return;
-  act(b.dataset.action,b.dataset.model);
-});
-
-// ---- usage analytics (cumulative) ----
-const kfmt=n=>{n=n||0;return n>=1e6?(n/1e6).toFixed(2)+'M':n>=1e3?(n/1e3).toFixed(1)+'k':''+n;};
-const dur=s=>{s=Math.max(0,Math.round(s||0));const h=Math.floor(s/3600),m=Math.floor(s%3600/60);return h?`${h}h ${m}m`:m?`${m}m`:`${s}s`;};
 async function pollUsage(){
-  try{const u=await j('/api/usage');
-    $('u_req').textContent=kfmt(u.totalRequests);
-    $('u_in').textContent=kfmt(u.totalInputTokens);
-    $('u_out').textContent=kfmt(u.totalOutputTokens);
-    $('u_avg').textContent=(u.rollingTokensPerSecond||0).toFixed(1);
-    $('u_life').textContent=(u.avgTokensPerSecond||0).toFixed(1);
-    $('uptime').textContent='up '+dur(u.uptimeSeconds)+' · '+u.rollingWindowMinutes+'-min window';
-    const pm=$('permodel');
-    if(u.byModel&&u.byModel.length){pm.style.display='';
-      pm.innerHTML=u.byModel.map(x=>`<div class="pm"><span class="nm">${x.model}</span>
-        <span><b>${kfmt(x.requests)}</b> req</span><span><b>${kfmt(x.inputTokens)}</b> in · <b>${kfmt(x.outputTokens)}</b> out</span>
-        <span><b>${(x.avgTokensPerSecond||0).toFixed(1)}</b> tok/s</span></div>`).join('');
-    } else pm.style.display='none';
+  try{
+    const u=await api('/api/usage');
+    $('m_req').textContent=k(u.totalRequests);
+    $('m_tok').textContent=k(u.totalInputTokens)+' in / '+k(u.totalOutputTokens)+' out';
+    $('u_req').textContent=k(u.totalRequests);
+    $('u_in').textContent=k(u.totalInputTokens);
+    $('u_out').textContent=k(u.totalOutputTokens);
+    $('u_avg').textContent=(u.avgTokensPerSecond||0).toFixed(1);
+    $('usageMeta').textContent='up '+Math.round((u.uptimeSeconds||0)/60)+'m';
+    const pm=$('perModel');
+    pm.innerHTML=(u.byModel||[]).map(x=>'<div class="model-row"><div><div class="model-id">'+esc(x.model)+'</div><div class="model-sub">'+k(x.inputTokens)+' in / '+k(x.outputTokens)+' out</div></div><span class="pill">'+(x.avgTokensPerSecond||0).toFixed(1)+' tok/s</span></div>').join('');
   }catch(e){}
 }
-
-// ---- live speculative-decoding metrics ----
 async function pollGen(){
-  try{const s=await j('/api/genstats');
-    if(s.available===false){return;}
-    $('sp_tps').textContent=(s.tokensPerSecond||0).toFixed(1);
-    const acc=Math.round((s.acceptanceRate||0)*100);
-    const accEl=$('sp_acc');accEl.textContent=acc+'%';
-    accEl.className=acc>=60?'ok-txt':acc>=35?'work-txt':'';
-    $('sp_tpp').textContent=(s.tokensPerPass||0).toFixed(2);
-    $('sp_k').textContent='K='+(s.draftTokens||0);
+  try{
+    const s=await api('/api/genstats');
+    if(s.available===false)return;
+    $('m_tps').textContent=(s.tokensPerSecond||0).toFixed(1)+' tok/s';
   }catch(e){}
 }
-
-// ---- HuggingFace → Core AI: support check + convert ----
-function hfBody(){
-  const b={hf_repo:$('hfrepo').value.trim()};
-  const c=$('hfcomp').value,p=$('hfprec').value,ctx=$('hfctx').value.trim(),nm=$('hfname').value.trim(),gf=$('hfgguf').value.trim();
-  if(c)b.compression=c; if(p)b.compute_precision=p; if(ctx)b.context=parseInt(ctx,10); if(nm)b.name=nm;
-  if(gf)b.gguf_file=gf;
-  return b;
+async function pollModels(){
+  try{
+    state.models=await api('/api/models');
+    renderModels();
+    renderActivePicker();
+  }catch(e){
+    $('models').innerHTML='<div class="empty">server offline</div>';
+  }
 }
-function hfShow(html,cls){const el=$('hfresult');el.innerHTML=html;el.className='hint '+(cls||'');el.style.fontFamily='var(--mono)';}
-function hfSupportLog(d){return d.support_log?`<br><span class="path" title="${attr(d.support_log)}">support log: ${esc(d.support_log)}</span>`:'';}
+function bundleModels(){return state.models.filter(m=>m.bundle)}
+function renderActivePicker(){
+  const sel=$('activeModel');
+  const opts=bundleModels().map(m=>m.name);
+  if(opts.join('|')!==sel.dataset.opts){
+    const cur=sel.value;
+    sel.innerHTML=opts.map(n=>'<option value="'+attr(n)+'">'+esc(n)+'</option>').join('');
+    sel.dataset.opts=opts.join('|');
+    sel.value=opts.includes(cur)?cur:(opts[0]||'');
+  }
+  const current=state.models.find(m=>m.name===sel.value);
+  $('activeState').textContent=current?(current.status==='loaded'?'loaded':'available'):'no model';
+  $('activeState').className='pill '+(current?.status==='loaded'?'ok':'');
+  $('activeMeta').textContent=sel.value||'no local models';
+  $('loadActive').disabled=!sel.value||current?.status==='loaded';
+  $('offloadActive').disabled=!sel.value||current?.status!=='loaded';
+}
+function renderModels(){
+  const filter=$('modelFilter').value.trim().toLowerCase();
+  const rows=state.models.filter(m=>!filter||m.name.toLowerCase().includes(filter));
+  const loaded=state.models.filter(m=>m.status==='loaded').length;
+  $('modelMeta').textContent=loaded+' loaded / '+state.models.length+' listed';
+  $('models').innerHTML=rows.map(m=>{
+    const loaded=m.status==='loaded';
+    const bundle=!!m.bundle;
+    const sub=(m.params||'bundle')+(m.memoryBytes?' / '+gb(m.memoryBytes):'')+(bundle?'':' / registry entry');
+    const actions=bundle
+      ? '<button class="btn '+(loaded?'':'primary')+'" data-act="'+(loaded?'offload':'load')+'" data-model="'+attr(m.name)+'">'+(loaded?'Offload':'Load')+'</button><button class="btn danger" data-act="delete" data-model="'+attr(m.name)+'">Delete</button>'
+      : '<span class="pill work">registry</span>';
+    return '<div class="model-row"><div><div class="model-id">'+esc(m.name)+'</div><div class="model-sub">'+esc(sub)+'</div></div><div class="actions"><span class="status '+(loaded?'loaded':'')+'"><i></i>'+(loaded?'loaded':'available')+'</span>'+actions+'</div></div>';
+  }).join('')||'<div class="empty">no matching models</div>';
+}
+async function modelAction(action,name){
+  if(action==='delete'&&!confirm('Delete '+name+' from disk?'))return;
+  try{await api('/api/'+action,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:name})});}
+  catch(e){alert(action+' failed: '+e.message);}
+  await pollModels();
+}
+$('models').addEventListener('click',e=>{
+  const b=e.target.closest('button[data-act]'); if(!b)return;
+  modelAction(b.dataset.act,b.dataset.model);
+});
+$('loadActive').addEventListener('click',()=>{if($('activeModel').value)modelAction('load',$('activeModel').value);});
+$('offloadActive').addEventListener('click',()=>{if($('activeModel').value)modelAction('offload',$('activeModel').value);});
+$('offloadAll').addEventListener('click',async()=>{
+  if(!confirm('Offload every loaded model?'))return;
+  try{await api('/api/offload-all',{method:'POST'});}catch(e){alert(e.message);}
+  pollModels();
+});
+$('modelFilter').addEventListener('input',renderModels);
+$('activeModel').addEventListener('change',renderActivePicker);
+
+async function pollRHM(){
+  try{
+    state.rhm=await api('/api/rhm-models');
+    $('rhmMeta').textContent=state.rhm.length+' repos';
+    renderRHM();
+  }catch(e){
+    $('rhmModels').innerHTML='<div class="empty">RHM discovery unavailable</div>';
+    $('rhmMeta').textContent='offline';
+  }
+}
+function renderRHM(){
+  $('rhmModels').innerHTML=state.rhm.map(r=>{
+    const status=r.loaded?'loaded':r.installed?'installed':r.installable?'remote':'manual';
+    const cls=r.loaded||r.installed?'ok':r.installable?'':'work';
+    const tags=(r.tags||[]).slice(0,4).map(t=>'<span class="pill">'+esc(t)+'</span>').join('');
+    const action=r.installed
+      ? '<button class="btn" data-load-installed="'+attr(r.installedName||r.name)+'">'+(r.loaded?'Loaded':'Load')+'</button>'
+      : r.installable
+        ? '<button class="btn primary" data-rhm-download="'+attr(r.repo)+'" data-name="'+attr(r.name)+'">Download</button>'
+        : '<span class="pill work">manual package</span>';
+    return '<div class="repo-card"><div class="repo-title"><b title="'+attr(r.repo)+'">'+esc(r.repo.replace("redhillsmediafl/",""))+'</b><span class="pill '+cls+' repo-state">'+status+'</span></div><div class="model-sub">'+esc(r.baseModel||r.bundleName||r.note||'caix bundle')+'</div><div class="tags">'+tags+'</div><div class="repo-actions"><span class="faint mono">'+esc(r.installedName||r.bundleName||r.name)+'</span>'+action+'</div></div>';
+  }).join('')||'<div class="empty">no RHM repos found</div>';
+}
+$('rhmModels').addEventListener('click',async e=>{
+  const dl=e.target.closest('button[data-rhm-download]');
+  if(dl){
+    const repo=dl.dataset.rhmDownload,name=dl.dataset.name;
+    dl.disabled=true; dl.textContent='Starting';
+    try{await api('/api/rhm-download',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({repo,name})});}
+    catch(err){alert('download failed: '+err.message);}
+    pollJobs(); pollRHM(); return;
+  }
+  const load=e.target.closest('button[data-load-installed]');
+  if(load)modelAction('load',load.dataset.loadInstalled);
+});
+$('refreshRHM').addEventListener('click',pollRHM);
+
+function hfBody(){
+  const body={hf_repo:$('hfRepo').value.trim()};
+  const vals=[['compression','hfComp'],['compute_precision','hfPrec'],['name','hfName'],['gguf_file','hfGGUF']];
+  vals.forEach(([key,id])=>{const value=$(id).value.trim(); if(value)body[key]=value;});
+  const ctx=parseInt($('hfCtx').value||'',10); if(Number.isFinite(ctx)&&ctx>0)body.context=ctx;
+  return body;
+}
+function hfShow(text,cls=''){const el=$('hfResult');el.className='notice '+cls;el.innerHTML=text;}
 async function hfCheck(){
-  const repo=$('hfrepo').value.trim(); if(!repo){hfShow('paste a HuggingFace repo id first','bad-txt');return;}
-  hfShow('checking architecture support…');
-  try{const d=await j('/api/check-support',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({hf_repo:repo})});
-    if(d.supported){hfShow(`✓ supported · <b>${d.model_type}</b>${d.params_b?` · ~${d.params_b}B`:''} · ready to convert`,'ok-txt');}
-    else if(d.gguf_only){hfShow(`GGUF-only repo · caix can dequantize then convert; original safetensors are better when available`,'work-txt');}
-    else{hfShow(`⚑ flagged · ${esc(d.reason||'unsupported architecture')}${hfSupportLog(d)}`,'bad-txt');}
-  }catch(e){hfShow('check failed: '+e,'bad-txt');}
+  const repo=$('hfRepo').value.trim(); if(!repo){hfShow('enter a repo id','bad');return;}
+  hfShow('checking...','work');
+  try{
+    const d=await api('/api/check-support',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({hf_repo:repo})});
+    if(d.supported)hfShow('supported / '+esc(d.model_type||'model')+(d.params_b?' / ~'+d.params_b+'B':''),'ok');
+    else if(d.gguf_only)hfShow('GGUF-only repo / conversion can start from GGUF','work');
+    else hfShow('unsupported / '+esc(d.reason||'architecture not supported')+(d.support_log?'<br><span class="faint">'+esc(d.support_log)+'</span>':''),'bad');
+  }catch(e){hfShow('check failed / '+esc(e.message),'bad');}
 }
 async function hfConvert(){
-  const repo=$('hfrepo').value.trim(); if(!repo){hfShow('paste a HuggingFace repo id first','bad-txt');return;}
-  hfShow('checking support, then converting…','work-txt');
-  try{const d=await j('/api/convert-hf',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(hfBody())});
-    if(d.started){hfShow(`▸ ${d.gguf?'dequantizing GGUF, then converting':'converting'} <b>${esc(d.name)}</b> — track progress below`,'work-txt');pollJobs();}
-    else if(d.supported===false){hfShow(`⚑ flagged · ${esc(d.reason||'unsupported architecture — not converted')}${hfSupportLog(d)}`,'bad-txt');}
-    else{hfShow('convert: '+JSON.stringify(d),'');}
-  }catch(e){hfShow('convert failed: '+e,'bad-txt');}
+  const body=hfBody(); if(!body.hf_repo){hfShow('enter a repo id','bad');return;}
+  hfShow('starting conversion...','work');
+  try{
+    const d=await api('/api/convert-hf',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+    if(d.started)hfShow('conversion started / '+esc(d.name),'work');
+    else if(d.supported===false)hfShow('unsupported / '+esc(d.reason||'not converted'),'bad');
+    else hfShow(esc(JSON.stringify(d)));
+    pollJobs();
+  }catch(e){hfShow('convert failed / '+esc(e.message),'bad');}
+}
+$('hfCheck').addEventListener('click',hfCheck);
+$('hfConvert').addEventListener('click',hfConvert);
+$('hfRepo').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();hfCheck();}});
+
+async function pollJobs(){
+  try{
+    const jobs=await api('/api/jobs');
+    $('jobMeta').textContent=(jobs||[]).length?((jobs||[]).length+' active/recent'):'idle';
+    $('jobs').innerHTML=(jobs||[]).map(j=>'<div class="job"><div class="jobline"><span>'+esc(j.label)+'</span><b>'+Math.round(j.pct||0)+'%</b></div><div class="bar"><i style="width:'+Math.max(0,Math.min(100,j.pct||0))+'%"></i></div>'+(j.logPath?'<div class="logpath" title="'+attr(j.logPath)+'">'+esc(j.logPath)+'</div>':'')+'</div>').join('')||'<div class="empty">no active jobs</div>';
+  }catch(e){}
 }
 
-// ---- chat (streaming, OpenAI-style) ----
-let history=[], streaming=false, abortCtrl=null;
-const isMTP=n=>/eagle|mtp|spec/i.test(n||'');
-function renderChat(){
-  const t=$('transcript');
-  if(!history.length){t.innerHTML='<div class="empty">pick a model and say something — streams as it generates</div>';return;}
-  const showThink=$('showthink').checked;
-  t.innerHTML=history.map((msg,i)=>{
-    const last=i===history.length-1;
-    const think=(msg.reasoning&&showThink)?`<details class="think" open><summary>thinking</summary>${esc(msg.reasoning)}</details>`:'';
-    let body=esc(msg.content);
-    if(msg.role==='assistant'&&streaming&&last&&!body&&!msg.reasoning){
-      // pre-first-token: clear "working / loading model" indicator so it never looks stuck
-      body=`<span class="working"><span class="spin"></span>${msg.wait||'working…'}</span>`;
-    } else if(!body&&msg.role==='assistant'){
-      body=(streaming&&last)?'<span class="cursor">▍</span>':'<span style="color:var(--faint)">…</span>';
-    } else if(streaming&&last&&msg.role==='assistant'){ body+='<span class="cursor">▍</span>'; }
-    const tps=msg.tps?`<div class="tps">${msg.tps}</div>`:'';
-    return `<div class="msg ${msg.role}"><div class="who">${msg.role==='user'?'you':'model'}</div>
-      <div class="body">${think}${body}${tps}</div></div>`;
-  }).join('');
-  t.scrollTop=t.scrollHeight;
-}
-function setStreaming(on){streaming=on;$('sendbtn').style.display=on?'none':'';$('stopbtn').style.display=on?'':'none';$('prompt').disabled=on;}
-function updateBadge(){
-  const m=$('chatmodel').value, b=$('mtpbadge');
-  if(isMTP(m)){b.textContent='MTP · speculative draft (K=4)';b.className='badge';b.title='Draft model proposes tokens; the 26B target verifies them in one pass — same output, faster.';}
-  else{b.textContent='standard decode';b.className='badge std';b.title='Single-model autoregressive decoding.';}
-}
-async function sendChat(){
-  const text=$('prompt').value.trim(); const model=$('chatmodel').value;
-  if(!text||!model||streaming)return;
-  $('prompt').value='';
-  history.push({role:'user',content:text});
-  const a={role:'assistant',content:'',reasoning:''}; history.push(a); renderChat();
-  setStreaming(true); abortCtrl=new AbortController();
-  const t0=performance.now(); let nTok=0, firstAt=0, firstByte=false;
-  // live "working / loading model" counter so the UI never looks stuck during a cold load
-  const waitTick=setInterval(()=>{
-    if(firstByte)return;
-    const s=Math.round((performance.now()-t0)/1000);
-    a.wait=s<4?`connecting…  ${s}s`:`loading model — first run compiles the bundle (~1 min)  ${s}s`;
-    $('livestat').innerHTML=`<span class="spin"></span> ${a.wait}`;
-    renderChat();
-  },400);
-  const msgs=[];
-  const sys=$('systemprompt').value.trim(); if(sys)msgs.push({role:'system',content:sys});
-  msgs.push(...history.filter(m=>m.role==='user'||m.content||m.reasoning).map(m=>({role:m.role,content:m.content||''})));
-  try{
-    const res=await fetch('/v1/chat/completions',{method:'POST',headers:{'content-type':'application/json'},signal:abortCtrl.signal,
-      body:JSON.stringify(chatPayload(model,msgs))});
-    if(!res.ok||!res.body)throw new Error('HTTP '+res.status);
-    const reader=res.body.getReader(), dec=new TextDecoder(); let buf='';
-    for(;;){const {done,value}=await reader.read(); if(done)break;
-      buf+=dec.decode(value,{stream:true}); let nl;
-      while((nl=buf.indexOf('\n\n'))>=0){
-        const block=buf.slice(0,nl); buf=buf.slice(nl+2);
-        const dl=block.split('\n').find(l=>l.startsWith('data:')); if(!dl)continue;
-        const p=dl.slice(5).trim(); if(p==='[DONE]')continue;
-        try{const d=JSON.parse(p); const del=(d.choices&&d.choices[0]&&d.choices[0].delta)||{};
-          if(del.reasoning_content){firstByte=true; a.wait=''; a.reasoning+=del.reasoning_content;}
-          if(del.content){firstByte=true; a.wait=''; if(!firstAt)firstAt=performance.now(); a.content+=del.content; nTok++;}
-          const el=(performance.now()-(firstAt||t0))/1000; if(nTok)$('livestat').innerHTML=`<b>${(nTok/Math.max(el,.001)).toFixed(1)}</b> tok/s · ${nTok} tok`;
-          renderChat();
-        }catch(e){}
-      }
-    }
-    const dt=(performance.now()-(firstAt||t0))/1000;
-    if(nTok)a.tps=`${nTok} tok · ${(nTok/Math.max(dt,.001)).toFixed(1)} tok/s${isMTP(model)?' · MTP':''}`;
-  }catch(e){if(e.name!=='AbortError')a.content+=(a.content?'\n':'')+'[error: '+e.message+']';}
-  clearInterval(waitTick); a.wait='';
-  setStreaming(false); abortCtrl=null; renderChat(); pollGen(); pollUsage();
-}
-function stopChat(){if(abortCtrl)abortCtrl.abort();}
-function clearChat(){if(streaming)return;history=[];$('livestat').textContent='';renderChat();}
-$('sendbtn').addEventListener('click',sendChat);
-$('stopbtn').addEventListener('click',stopChat);
-$('clearbtn').addEventListener('click',clearChat);
-$('showthink').addEventListener('change',renderChat);
-$('chatmodel').addEventListener('change',updateBadge);
-$('prompt').addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){e.preventDefault();sendChat();}});
-$('convertbtn').addEventListener('click',startConvert);
-$('hfcheck').addEventListener('click',hfCheck);
-$('hfconvert').addEventListener('click',hfConvert);
-$('hfrepo').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();hfConvert();}});
-function loop(){pollStats();pollServer();pollModels();pollJobs();pollGen();pollUsage();}
-loop();setInterval(pollStats,1500);setInterval(pollModels,3000);setInterval(pollJobs,1200);
-setInterval(pollServer,5000);setInterval(pollGen,2000);setInterval(pollUsage,2500);
+loadPrefs();
+pollStats();pollServer();pollUsage();pollGen();pollModels();pollJobs();pollRHM();
+setInterval(pollStats,1500);
+setInterval(pollUsage,2500);
+setInterval(pollGen,2500);
+setInterval(pollModels,3000);
+setInterval(pollJobs,1200);
+setInterval(pollServer,6000);
+setInterval(pollRHM,60000);
 </script>
 </body>
 </html>

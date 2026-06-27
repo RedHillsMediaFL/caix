@@ -7,6 +7,7 @@
 - Added server-side discovery for installable `redhillsmediafl/*-caix` Hugging Face model repos.
 - Added `POST /api/rhm-download` to install already-converted RHM Core AI bundles into the local exports directory.
 - Added persistent converter and support-check logs under `~/.caix/logs` and `~/.caix/support-logs`.
+- Rebuilt the dashboard as a model-agnostic server console with simple and advanced modes, local model controls, RHM installs, arbitrary HF support checks, conversion jobs, server health, and a link to the dedicated `/chat` page.
 
 ### Fixed
 
