@@ -202,7 +202,8 @@
     <div class="chip"><span id="sp_k">—</span><small>EAGLE draft (K)</small></div>
   </section>
 
-  <div class="head"><h2>Server</h2><span class="rule"></span><span class="meta" id="servermeta">—</span></div>
+  <div class="head"><h2>Server</h2><span class="rule"></span><span class="meta" id="servermeta">—</span>
+    <button class="btn" id="offloadall" title="Unload every resident model">Offload all</button></div>
   <section class="models servergrid" id="servergrid">
     <div class="cell"><span>endpoint</span><b id="srv_base">—</b></div>
     <div class="cell"><span>runtime</span><b id="srv_runtime">—</b></div>
@@ -256,6 +257,10 @@
       <label class="field">Stop
         <input id="stopseq" placeholder="comma-separated"/>
       </label>
+      <label class="field">KV capacity
+        <input id="kvcap" type="number" min="0" step="1" placeholder="auto"/>
+      </label>
+      <label class="tog" style="align-self:end;margin-bottom:8px"><input type="checkbox" id="rawmode"/> raw prompt</label>
     </div>
     <div class="transcript" id="transcript"><div class="empty">pick a model and say something — streams as it generates</div></div>
     <div class="composer">
@@ -323,7 +328,8 @@ function savePrefs(){
     preset:document.querySelector('#presetseg button.active')?.dataset.preset||'balanced',
     advanced:$('advanced').checked, system:$('systemprompt').value,
     max_tokens:$('maxtokens').value, temperature:$('temperature').value, top_p:$('topp').value,
-    top_k:$('topk').value, seed:$('seed').value, stop:$('stopseq').value
+    top_k:$('topk').value, seed:$('seed').value, stop:$('stopseq').value,
+    kv_capacity:$('kvcap').value, raw:$('rawmode').checked
   };
   localStorage.setItem('caix.dashboard.prefs',JSON.stringify(prefs));
 }
@@ -351,6 +357,8 @@ function loadPrefs(){
   if(prefs.top_k!==undefined)$('topk').value=prefs.top_k;
   if(prefs.seed!==undefined)$('seed').value=prefs.seed;
   if(prefs.stop!==undefined)$('stopseq').value=prefs.stop;
+  if(prefs.kv_capacity!==undefined)$('kvcap').value=prefs.kv_capacity;
+  $('rawmode').checked=!!prefs.raw;
   syncGenOutputs();
 }
 function chatPayload(model,msgs){
@@ -359,12 +367,14 @@ function chatPayload(model,msgs){
     top_p:Math.max(0.01,Math.min(1,parseFloat($('topp').value)||1)),stream:true};
   const topK=parseInt($('topk').value||'',10); if(Number.isFinite(topK)&&topK>0)body.top_k=topK;
   const seed=parseInt($('seed').value||'',10); if(Number.isFinite(seed)&&seed>=0)body.seed=seed;
+  const kv=parseInt($('kvcap').value||'',10); if(Number.isFinite(kv)&&kv>0)body.kv_capacity=kv;
+  if($('rawmode').checked)body.apply_chat_template=false;
   const stops=$('stopseq').value.split(',').map(s=>s.trim()).filter(Boolean); if(stops.length)body.stop=stops;
   return body;
 }
 loadPrefs();
 document.querySelectorAll('#presetseg button').forEach(b=>b.addEventListener('click',()=>setPreset(b.dataset.preset,true)));
-['advanced','systemprompt','maxtokens','temperature','topp','topk','seed','stopseq'].forEach(id=>{
+['advanced','systemprompt','maxtokens','temperature','topp','topk','seed','stopseq','kvcap','rawmode'].forEach(id=>{
   $(id).addEventListener('input',()=>{syncGenOutputs();savePrefs();});
   $(id).addEventListener('change',()=>{syncGenOutputs();savePrefs();});
 });
@@ -417,6 +427,7 @@ async function pollModels(){
       const loaded=x.status==='loaded';
       const tps=x.tokensPerSecond?`<b>${x.tokensPerSecond.toFixed(0)}</b> tok/s`:(loaded?'idle':'');
       const reqs=x.requests?` · ${x.requests} req`:'';
+      const mem=x.memoryBytes?` · ${gb(x.memoryBytes)}`:'';
       const actions=x.bundle
         ? `<button class="btn ${loaded?'':'go'}" data-action="${loaded?'offload':'load'}" data-model="${attr(x.name)}">${loaded?'Offload':'Load'}</button>
            <button class="btn danger" data-action="delete" data-model="${attr(x.name)}">Delete</button>`
@@ -424,7 +435,7 @@ async function pollModels(){
       return `<div class="m">
         <div><div class="id">${esc(x.name)}</div><div class="sub">${esc(x.params||'core ai bundle')}</div></div>
         <div class="stat"><span class="status ${loaded?'loaded':''}"><i></i>${loaded?'loaded':'available'}</span>
-          <div style="margin-top:4px">${tps}${reqs}</div></div>
+          <div style="margin-top:4px">${tps}${reqs}${mem}</div></div>
         <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">${actions}</div>
       </div>`;}).join('')||'<div class="empty">no models yet — convert one below</div>';
     const rsel=$('modelsel');if(!rsel.dataset.filled&&m.length){rsel.innerHTML=m.map(x=>`<option>${esc(x.name)}</option>`).join('');rsel.dataset.filled='1';}
@@ -442,7 +453,16 @@ async function act(a,name){
   catch(e){alert(`${a} failed: ${e.message||e}`);}
   pollModels();
 }
+async function offloadAll(){
+  if(!confirm('Unload every resident model?'))return;
+  try{
+    const d=await j('/api/offload-all',{method:'POST'});
+    $('servermeta').textContent=`offloaded ${d.offloaded?.length||0} models`;
+    pollModels();
+  }catch(e){alert('offload all failed: '+(e.message||e));}
+}
 async function startConvert(){await act('convert',$('modelsel').value);pollJobs();}
+$('offloadall').addEventListener('click',offloadAll);
 $('models').addEventListener('click',e=>{
   const b=e.target.closest('button[data-action]');if(!b)return;
   act(b.dataset.action,b.dataset.model);

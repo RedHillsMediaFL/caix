@@ -309,6 +309,14 @@ public actor ModelManager {
         let path = bundlePath(for: name)
         let verbose = self.verbose
         let eagle = eagleConfig
+        if eagle?.name != name {
+            var isDir = ObjCBool(false)
+            guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir),
+                  isDir.boolValue
+            else {
+                throw CoreAIPipeline.RuntimeError.bundleNotFound(path)
+            }
+        }
         let task = Task<ModelHandle, Error> {
             // EAGLE MTP model: build the speculative engine from its target+draft[+unrolled] bundles.
             if let cfg = eagle, cfg.name == name {
@@ -343,6 +351,13 @@ public actor ModelManager {
     @discardableResult
     public func offload(_ name: String) -> Bool {
         handles.removeValue(forKey: name) != nil
+    }
+
+    /// Offload every resident model. Returns the model names that were unloaded.
+    public func offloadAll() -> [String] {
+        let names = handles.keys.sorted()
+        handles.removeAll(keepingCapacity: true)
+        return names
     }
 
     /// Permanently delete a converted bundle from disk (offloading it first). Refuses to delete the

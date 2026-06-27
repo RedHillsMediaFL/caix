@@ -124,6 +124,7 @@ final class ServerRuntime: Sendable {
         router.get("/api/server") { _, _ in self.serverInfoHandler() }
         router.post("/api/load") { req, ctx in try await self.loadHandler(req, ctx) }
         router.post("/api/offload") { req, ctx in try await self.offloadHandler(req, ctx) }
+        router.post("/api/offload-all") { _, _ in await self.offloadAllHandler() }
         router.post("/api/delete") { req, ctx in try await self.deleteHandler(req, ctx) }
         router.post("/api/convert") { req, ctx in try await self.convertHandler(req, ctx) }
         // Model management: supported types/settings, HF support check, HF convert, live gen stats.
@@ -166,6 +167,11 @@ final class ServerRuntime: Sendable {
         return JSONResponder.encode(["ok": .bool(true), "offloaded": .bool(was)] as [String: JSONValue])
     }
 
+    private func offloadAllHandler() async -> Response {
+        let names = await manager.offloadAll()
+        return JSONResponder.encode(OffloadAllResponse(ok: true, offloaded: names))
+    }
+
     private func deleteHandler(_ request: Request, _ context: BasicRequestContext) async throws -> Response {
         guard let body = try? await Self.decode(ModelActionRequest.self, request) else {
             return JSONResponder.error("invalid request body (expected {\"model\": ...})", status: .badRequest)
@@ -202,7 +208,7 @@ final class ServerRuntime: Sendable {
         let payload: [String: JSONValue] = [
             "compression": .string("none,4bit,8bit"),
             "compute_precision": .string("float16,bfloat16,float32"),
-            "generation": .string("max_tokens,temperature,top_p,top_k,seed,stop,system_prompt"),
+            "generation": .string("max_tokens,temperature,top_p,top_k,seed,stop,system_prompt,kv_capacity,apply_chat_template"),
             "context_default": .int(4096),
             "note": .string("Paste a HuggingFace repo; unsupported architectures are flagged, supported ones convert + load."),
         ]
@@ -479,7 +485,8 @@ final class ServerRuntime: Sendable {
             temperature: gen.temperature,
             topK: gen.topK,
             topP: gen.topP,
-            applyChatTemplate: true,
+            applyChatTemplate: gen.applyChatTemplate,
+            kvCapacity: gen.kvCapacity,
             stopSequences: gen.stop,
             seed: gen.seed)
     }
@@ -595,6 +602,11 @@ struct ServerInfo: Codable, Sendable {
     var computeUnit: String
     var verbose: Bool
     var eagle: Eagle
+}
+
+struct OffloadAllResponse: Codable, Sendable {
+    var ok: Bool
+    var offloaded: [String]
 }
 
 // MARK: - OpenAI model list DTO

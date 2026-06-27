@@ -21,6 +21,8 @@ public struct GenerationRequest: Sendable {
     public var topK: Int?
     public var stop: [String]
     public var stream: Bool
+    public var applyChatTemplate: Bool
+    public var kvCapacity: Int?
     /// Optional RNG seed for reproducible temperature sampling.
     public var seed: UInt64?
     /// Tool/function specs (already normalized to OpenAI `{type:"function", function:{…}}` form)
@@ -28,10 +30,12 @@ public struct GenerationRequest: Sendable {
     public var tools: [JSONAny]?
     public init(model: String, messages: [ChatMessage], maxTokens: Int = 512, temperature: Double = 0.7,
                 topP: Double? = nil, topK: Int? = nil, stop: [String] = [], stream: Bool = false,
-                seed: UInt64? = nil, tools: [JSONAny]? = nil) {
+                applyChatTemplate: Bool = true, kvCapacity: Int? = nil, seed: UInt64? = nil,
+                tools: [JSONAny]? = nil) {
         self.model = model; self.messages = messages; self.maxTokens = maxTokens
         self.temperature = temperature; self.topP = topP; self.topK = topK; self.stop = stop
-        self.stream = stream; self.seed = seed; self.tools = tools
+        self.stream = stream; self.applyChatTemplate = applyChatTemplate; self.kvCapacity = kvCapacity
+        self.seed = seed; self.tools = tools
     }
 
     /// Tool specs projected to swift-transformers `ToolSpec` (`[String: any Sendable]`).
@@ -52,6 +56,8 @@ public struct OpenAIChatRequest: Codable, Sendable {
     public var temperature: Double?
     public var top_k: Int?
     public var top_p: Double?
+    public var kv_capacity: Int?
+    public var apply_chat_template: Bool?
     public var stop: StringOrArray?
     public var stream: Bool?
     public var seed: Int?
@@ -61,6 +67,7 @@ public struct OpenAIChatRequest: Codable, Sendable {
         GenerationRequest(model: model, messages: messages, maxTokens: max_tokens ?? max_completion_tokens ?? 512,
                           temperature: temperature ?? 0.7, topP: top_p, topK: top_k,
                           stop: stop?.values ?? [], stream: stream ?? false,
+                          applyChatTemplate: apply_chat_template ?? true, kvCapacity: kv_capacity,
                           seed: seed.map { UInt64(bitPattern: Int64($0)) }, tools: tools)
     }
 }
@@ -150,6 +157,8 @@ public struct AnthropicMessagesRequest: Codable, Sendable {
     public var top_k: Int?
     public var stop_sequences: [String]?
     public var stream: Bool?
+    public var kv_capacity: Int?
+    public var apply_chat_template: Bool?
     /// Non-standard reproducibility seed accepted for local testing.
     public var seed: Int?
     /// Anthropic tool defs (`[{name, description, input_schema}]`).
@@ -160,6 +169,7 @@ public struct AnthropicMessagesRequest: Codable, Sendable {
         for m in messages { msgs.append(ChatMessage(role: m.role, content: m.content.text)) }
         return GenerationRequest(model: model, messages: msgs, maxTokens: max_tokens, temperature: temperature ?? 1.0,
                                  topP: top_p, topK: top_k, stop: stop_sequences ?? [], stream: stream ?? false,
+                                 applyChatTemplate: apply_chat_template ?? true, kvCapacity: kv_capacity,
                                  seed: seed.map { UInt64(bitPattern: Int64($0)) }, tools: Self.normalizeTools(tools))
     }
 
