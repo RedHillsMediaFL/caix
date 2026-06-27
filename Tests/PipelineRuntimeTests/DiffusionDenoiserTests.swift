@@ -81,7 +81,7 @@ final class DiffusionDenoiserTests: XCTestCase {
         }
     }
 
-    // MARK: - No convergence (uniform logits ⇒ run full schedule, accept nothing)
+    // MARK: - No convergence (uniform logits ⇒ run full schedule, accept minimum progress)
 
     func testStepsExhaustedOnUniformLogits() async throws {
         let s = schedule()
@@ -92,9 +92,10 @@ final class DiffusionDenoiserTests: XCTestCase {
 
         XCTAssertEqual(result.stopReason, .stepsExhausted)
         XCTAssertEqual(result.steps.count, s.maxDenoisingSteps)
-        // Uniform entropy (ln 32 ≈ 3.47) far exceeds the 0.1 budget ⇒ nothing accepted.
+        // The official entropy-bound sampler accepts the lowest-entropy position even when every
+        // position is flat, because the prior cumulative entropy before that token is zero.
         for info in result.steps {
-            XCTAssertEqual(info.acceptedCount, 0)
+            XCTAssertEqual(info.acceptedCount, 1)
             XCTAssertEqual(info.meanEntropy, log(32.0), accuracy: 1e-3)
         }
         XCTAssertEqual(result.canvas.count, s.canvasLength)
@@ -113,12 +114,12 @@ final class DiffusionDenoiserTests: XCTestCase {
         // Step 0: self-conditioning gated off.
         XCTAssertFalse(fwd.calls[0].scUse)
         XCTAssertFalse(fwd.calls[0].hadSelfCond)
-        // Subsequent steps: self-conditioning active, fed prev logits, scTempInv = 1/t_prev.
+        // Subsequent steps: self-conditioning active, fed prev logits. The official sampler uses
+        // raw logits for self-conditioning, so the inverse temperature stays at 1.0.
         XCTAssertTrue(fwd.calls[1].scUse)
         XCTAssertTrue(fwd.calls[1].hadSelfCond)
-        XCTAssertEqual(fwd.calls[1].scTempInv, 1.0 / s.t(at: s.maxDenoisingSteps), accuracy: 1e-9)
-        XCTAssertEqual(
-            fwd.calls[2].scTempInv, 1.0 / s.t(at: s.maxDenoisingSteps - 1), accuracy: 1e-9)
+        XCTAssertEqual(fwd.calls[1].scTempInv, 1.0, accuracy: 1e-9)
+        XCTAssertEqual(fwd.calls[2].scTempInv, 1.0, accuracy: 1e-9)
     }
 
     // MARK: - Accept count grows as entropy falls (annealing)

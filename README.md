@@ -39,6 +39,15 @@ Everything else (the HTTP server, tokenizer, etc.) is fetched automatically by S
 
 ## Install
 
+One-line source install (requires the Core AI-capable macOS/Xcode beta from Requirements):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/RedHillsMediaFL/caix/main/scripts/install.sh | bash
+```
+
+This clones/updates `~/caix`, builds the Core AI runtime binary, and links the `caix` launcher into
+`~/.local/bin` when possible.
+
 ### Option A — download a prebuilt binary (easiest, no build) ⭐
 
 1. Go to the [**Releases**](https://github.com/redhillsmediafl/caix/releases) page and download

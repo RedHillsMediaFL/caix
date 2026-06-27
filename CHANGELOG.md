@@ -13,8 +13,11 @@
 - Exposed speculative runtime dimensions in the dashboard's advanced server panel.
 - Added local discovery/loading and RHM installability for EAGLE target+draft package directories.
 - Added a user-focused usage dashboard with rolling tok/s, last-generation speed, total input/output tokens, rolling-window output, and visible per-model throughput.
+- Added a one-line GitHub installer that clones or updates `~/caix`, builds the Core AI runtime binary, and links the `caix` launcher into `~/.local/bin`.
 
 ### Fixed
 
 - Inferred a conservative qwen3_5 hybrid KV-cache floor for converted bundles that do not yet carry `language.min_kv_capacity`, preventing under-sized cache allocation for Ornith-style bundles.
 - Inferred EAGLE target hidden size from Core AI model descriptors at load time, so larger targets can override the 26B default without source changes.
+- Updated diffusion denoiser tests to match the official entropy-bound sampler behavior already implemented in the runtime.
+- Listed all accepted EAGLE serve flags in CLI help.

@@ -154,4 +154,10 @@ public enum Usage {
             lastTokensPerSecond: lastDecode > 0 ? Double(lastOutput) / lastDecode : 0,
             lastDecodeSeconds: lastDecode, lastAt: last?.at ?? 0, byModel: models)
     }
+
+    static func resetForTesting() {
+        lock.lock(); defer { lock.unlock() }
+        startEpoch = 0; totalRequests = 0; totalInput = 0; totalOutput = 0
+        totalDecode = 0; lastModel = ""; perModel = [:]; ring = []; persistPath = nil
+    }
 }

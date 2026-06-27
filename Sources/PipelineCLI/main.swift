@@ -59,6 +59,13 @@ func printUsage() {
           --web <dir>            Dashboard web dir (default: ./web)
           --convert-script <p>   convert.py path (default: ./python/converter/convert.py)
           --python <exe>         Python executable for conversion (default: python3)
+          --stats-file <path>     Persistent usage stats JSON (default: ~/.caix/usage.json)
+          --no-eagle              Disable the built-in EAGLE/MTP serve model
+          --eagle-name <name>     Served name for the EAGLE/MTP model
+          --eagle-target <dir>    EAGLE target .aimodel bundle
+          --eagle-draft <dir>     EAGLE draft .aimodel bundle
+          --eagle-unrolled <dir>  Optional unrolled EAGLE draft .aimodel bundle
+          --eagle-tokenizer <dir> Tokenizer directory for the EAGLE/MTP model
           --eagle-vocab <N>      EAGLE/MTP vocabulary size (default: 262144)
           --eagle-backbone <N>   EAGLE/MTP hidden size (default: 2816)
           --eagle-hidden-size <N>
