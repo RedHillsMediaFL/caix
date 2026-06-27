@@ -1,0 +1,446 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>caix · native Core AI runtime · Apple silicon</title>
+<style>
+  :root{
+    --bg:#131519; --surface:#181b21; --raised:#1f242e; --line:#2a2f3a; --line-soft:#21262f;
+    --text:#eaecef; --muted:#929aa6; --faint:#5b6470;
+    --signal:#7c6cf0; --signal-dim:rgba(124,108,240,.16); --signal-line:rgba(124,108,240,.4);
+    --ok:#46d39a; --work:#e0a64e; --bad:#f0625d;
+    --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;
+    --mono:ui-monospace,"SF Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box} html{-webkit-font-smoothing:antialiased}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;line-height:1.5}
+  .wrap{max-width:980px;margin:0 auto;padding:0 22px}
+  a{color:var(--signal);text-decoration:none}
+
+  /* ---- masthead ---- */
+  header{padding:30px 0 18px}
+  .brand{display:flex;align-items:baseline;gap:12px}
+  .brand h1{margin:0;font-size:20px;font-weight:600;letter-spacing:-.01em}
+  .brand h1 b{color:var(--signal);font-weight:600}
+  .brand .tag{color:var(--muted);font-size:12.5px}
+  .brand .conn{margin-left:auto;font-family:var(--mono);font-size:11.5px;color:var(--faint);display:flex;align-items:center;gap:6px}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--faint);box-shadow:0 0 0 0 var(--ok)}
+  .live .dot{background:var(--ok);animation:pulse 2.4s ease-out infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(70,211,154,.5)}70%{box-shadow:0 0 0 6px rgba(70,211,154,0)}100%{box-shadow:0 0 0 0 rgba(70,211,154,0)}}
+
+  /* ---- signature: live machine strip ---- */
+  .machine{border:1px solid var(--line);border-radius:12px;background:
+     linear-gradient(180deg,rgba(124,108,240,.05),transparent 60%),var(--surface);
+     padding:16px 18px;display:grid;grid-template-columns:1.3fr 1fr 1fr 1fr;gap:22px;align-items:end}
+  .machine .chip{font-family:var(--mono);font-size:13px;color:var(--text)}
+  .machine .chip small{display:block;color:var(--faint);font-size:11px;margin-top:3px;letter-spacing:.02em}
+  .meter .mlabel{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;color:var(--muted);margin-bottom:6px}
+  .meter .mlabel b{color:var(--text);font-weight:500}
+  .track{height:6px;border-radius:3px;background:#0e1014;overflow:hidden;border:1px solid var(--line-soft)}
+  .track i{display:block;height:100%;width:0;background:var(--signal);transition:width .5s ease}
+  .track.mem i{background:linear-gradient(90deg,var(--signal),#9a8cff)}
+  .track.gpu i{background:linear-gradient(90deg,#46d39a,#7c6cf0)}
+  @media(max-width:720px){.machine{grid-template-columns:1fr 1fr;gap:16px}}
+
+  /* ---- section heads ---- */
+  .head{display:flex;align-items:baseline;gap:10px;margin:30px 0 12px}
+  .head h2{margin:0;font-size:12px;text-transform:uppercase;letter-spacing:.14em;color:var(--muted);font-weight:600}
+  .head .rule{flex:1;height:1px;background:var(--line-soft)}
+  .head .meta{font-family:var(--mono);font-size:11px;color:var(--faint)}
+
+  /* ---- models ---- */
+  .models{border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .m{display:grid;grid-template-columns:1fr auto auto;gap:16px;align-items:center;padding:13px 16px;border-top:1px solid var(--line-soft)}
+  .m:first-child{border-top:0}
+  .m:hover{background:var(--surface)}
+  .m .id{font-family:var(--mono);font-size:13px;color:var(--text)}
+  .m .sub{font-family:var(--mono);font-size:11px;color:var(--faint);margin-top:3px}
+  .m .stat{font-family:var(--mono);font-size:11.5px;color:var(--muted);text-align:right;min-width:96px}
+  .m .stat b{color:var(--text);font-weight:500}
+  .status{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11px;color:var(--muted)}
+  .status i{width:6px;height:6px;border-radius:50%;background:var(--faint)}
+  .status.loaded i{background:var(--ok);box-shadow:0 0 7px var(--ok)}
+  .status.loaded{color:var(--ok)}
+  .btn{font-family:var(--mono);font-size:11.5px;color:var(--text);background:transparent;border:1px solid var(--line);
+       border-radius:7px;padding:5px 12px;cursor:pointer;transition:.15s}
+  .btn:hover{border-color:var(--signal-line);color:#fff}
+  .btn:focus-visible{outline:2px solid var(--signal);outline-offset:2px}
+  .btn.go{border-color:var(--signal-line);background:var(--signal-dim);color:#cfc8ff}
+  .btn.go:hover{background:var(--signal);color:#0b0a1a;border-color:var(--signal)}
+  .empty{padding:22px 16px;color:var(--faint);font-family:var(--mono);font-size:12px}
+
+  /* ---- convert + jobs ---- */
+  .panel{border:1px solid var(--line);border-radius:12px;padding:16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  select,input.tin{font-family:var(--mono);font-size:12.5px;color:var(--text);background:var(--raised);border:1px solid var(--line);
+         border-radius:7px;padding:7px 10px;min-width:230px}
+  input.tin{min-width:0}
+  input.tin::placeholder{color:var(--faint)}
+  select:focus-visible,input.tin:focus-visible{outline:2px solid var(--signal);outline-offset:1px}
+  .spec{grid-template-columns:repeat(4,1fr)!important;margin-top:14px}
+  .spec .chip span,#usage .chip span{color:var(--signal);font-weight:600;font-size:16px}
+  #usage{grid-template-columns:repeat(5,1fr)!important;margin-top:0}
+  @media(max-width:720px){#usage,.spec{grid-template-columns:repeat(2,1fr)!important}}
+  .ok-txt{color:var(--ok)} .bad-txt{color:var(--bad)} .work-txt{color:var(--work)}
+  .pm{display:grid;grid-template-columns:1fr auto auto auto;gap:14px;font-family:var(--mono);font-size:11.5px;
+      color:var(--muted);padding:8px 14px;border-top:1px solid var(--line-soft)}
+  .pm:first-child{border-top:0}.pm b{color:var(--text);font-weight:500}.pm .nm{color:var(--text)}
+  .panel .hint{color:var(--faint);font-size:12px}
+  .jobs{margin-top:12px;display:flex;flex-direction:column;gap:10px}
+  .job .jl{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-bottom:5px}
+  .job .jl b{color:var(--text);font-weight:500}
+  .job .track i{background:linear-gradient(90deg,var(--work),#f0c177)}
+
+  /* ---- chat ---- */
+  .chat{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--surface)}
+  .chatbar{display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .chatbar select{min-width:200px;padding:5px 9px}
+  .badge{font-family:var(--mono);font-size:10.5px;color:#cfc8ff;background:var(--signal-dim);border:1px solid var(--signal-line);
+         border-radius:20px;padding:3px 10px;letter-spacing:.02em}
+  .badge.std{color:var(--muted);background:transparent;border-color:var(--line)}
+  .tog{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);cursor:pointer;user-select:none}
+  .tog input{accent-color:var(--signal)}
+  .livestat{font-family:var(--mono);font-size:11px;color:var(--faint)}
+  .livestat b{color:var(--ok)}
+  .transcript{max-height:380px;overflow-y:auto;padding:6px 0}
+  details.think{border-left:2px solid var(--line);padding:2px 0 2px 10px;margin:0 0 9px;color:var(--faint);font-size:12px}
+  details.think summary{cursor:pointer;color:var(--muted);font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:5px}
+  details.think[open]{white-space:pre-wrap}
+  .cursor{color:var(--signal);animation:blink 1s steps(2) infinite}
+  @keyframes blink{50%{opacity:0}}
+  .spin{display:inline-block;width:11px;height:11px;border:2px solid var(--signal-line);border-top-color:var(--signal);
+        border-radius:50%;animation:spin .8s linear infinite;vertical-align:-1px;margin-right:6px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .working{color:var(--muted);font-size:13px;display:inline-flex;align-items:center}
+  .transcript .empty{padding:22px 16px}
+  .msg{padding:11px 16px;border-top:1px solid var(--line-soft);display:grid;grid-template-columns:64px 1fr;gap:14px;align-items:start}
+  .msg:first-child{border-top:0}
+  .msg .who{font-family:var(--mono);font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.08em;padding-top:2px}
+  .msg.user .who{color:var(--signal)}
+  .msg .body{white-space:pre-wrap;line-height:1.55;color:var(--text);font-size:13.5px}
+  .msg .think{display:block;border-left:2px solid var(--line);padding-left:10px;margin:0 0 8px;color:var(--faint);font-size:12px;white-space:pre-wrap}
+  .msg .tps{font-family:var(--mono);font-size:10.5px;color:var(--faint);margin-top:6px}
+  .composer{display:flex;gap:10px;padding:12px 14px;border-top:1px solid var(--line);align-items:flex-end}
+  .composer textarea{flex:1;resize:vertical;font-family:var(--sans);font-size:13.5px;color:var(--text);background:var(--raised);
+       border:1px solid var(--line);border-radius:8px;padding:9px 11px;min-height:40px;line-height:1.4}
+  .composer textarea:focus-visible{outline:2px solid var(--signal);outline-offset:1px}
+  .composer .btn.go{padding:9px 16px}
+  .composer .btn[disabled]{opacity:.5;cursor:default}
+
+  footer{margin:34px 0 26px;display:flex;gap:14px;align-items:center;color:var(--faint);font-size:12px}
+  footer .api{font-family:var(--mono);font-size:11px}
+  @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <h1><b>caix</b></h1>
+      <span class="tag">native Core AI runtime · speculative / MTP decoding · Apple silicon</span>
+      <span class="conn" id="conn"><span class="dot"></span><span id="connlbl">connecting</span></span>
+    </div>
+  </header>
+
+  <!-- signature: the machine, live -->
+  <section class="machine" id="machine">
+    <div class="chip"><span id="chip">—</span><small id="cores">— cores</small></div>
+    <div class="meter">
+      <div class="mlabel"><span>unified memory</span><b id="memv">—</b></div>
+      <div class="track mem"><i id="membar"></i></div>
+    </div>
+    <div class="meter">
+      <div class="mlabel"><span>GPU</span><b id="gpuv">—</b></div>
+      <div class="track gpu"><i id="gpubar"></i></div>
+    </div>
+    <div class="meter">
+      <div class="mlabel"><span>GPU memory</span><b id="gpumem">—</b></div>
+      <div class="track"><i id="gpumembar"></i></div>
+    </div>
+  </section>
+
+  <!-- usage analytics (cumulative, omlx-style) -->
+  <div class="head"><h2>Usage</h2><span class="rule"></span><span class="meta" id="uptime">—</span></div>
+  <section class="machine" id="usage">
+    <div class="chip"><span id="u_req">—</span><small>requests</small></div>
+    <div class="chip"><span id="u_in">—</span><small>tokens in</small></div>
+    <div class="chip"><span id="u_out">—</span><small>tokens out</small></div>
+    <div class="chip"><span id="u_avg">—</span><small>avg tok/s · 10 min</small></div>
+    <div class="chip"><span id="u_life">—</span><small>avg tok/s · all</small></div>
+  </section>
+  <section class="models" id="permodel" style="margin-top:12px;display:none"></section>
+
+  <!-- live speculative metrics (last generation) -->
+  <div class="head"><h2>Live · last generation</h2><span class="rule"></span><span class="meta">EAGLE speculative decoding</span></div>
+  <section class="machine spec" id="spec">
+    <div class="chip"><span id="sp_tps">—</span><small>tok/s · last gen</small></div>
+    <div class="chip"><span id="sp_acc">—</span><small>draft acceptance</small></div>
+    <div class="chip"><span id="sp_tpp">—</span><small>tokens / target pass</small></div>
+    <div class="chip"><span id="sp_k">—</span><small>EAGLE draft (K)</small></div>
+  </section>
+
+  <div class="head"><h2>Models</h2><span class="rule"></span><span class="meta" id="modelmeta"></span></div>
+  <section class="models" id="models"><div class="empty">loading models…</div></section>
+
+  <div class="head"><h2>Chat</h2><span class="rule"></span><span class="meta" id="chatmeta">—</span></div>
+  <section class="chat" id="chatpanel">
+    <div class="chatbar">
+      <select id="chatmodel" aria-label="Model" title="Choose a model — MTP/speculative models draft ahead and verify"></select>
+      <span class="badge" id="mtpbadge"></span>
+      <label class="tog"><input type="checkbox" id="showthink" checked/> show thinking</label>
+      <span class="livestat" id="livestat"></span>
+      <button class="btn" id="clearbtn" style="margin-left:auto">Clear</button>
+    </div>
+    <div class="transcript" id="transcript"><div class="empty">pick a model and say something — streams as it generates</div></div>
+    <div class="composer">
+      <textarea id="prompt" rows="2" placeholder="Message the model…  (⌘/Ctrl+Enter to send)" aria-label="Prompt"></textarea>
+      <button class="btn go" id="sendbtn">Send</button>
+      <button class="btn" id="stopbtn" style="display:none">Stop</button>
+    </div>
+  </section>
+
+  <div class="head"><h2>Add model · HuggingFace → Core AI</h2><span class="rule"></span>
+    <span class="meta">paste a repo · unsupported types are flagged</span></div>
+  <section class="panel" style="flex-direction:column;align-items:stretch;gap:12px">
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <input class="tin" id="hfrepo" placeholder="HF repo, e.g. Qwen/Qwen2-0.5B" style="flex:1;min-width:240px"/>
+      <button class="btn" id="hfcheck">Check support</button>
+      <button class="btn go" id="hfconvert">Convert + load</button>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <label class="hint">compression
+        <select id="hfcomp" style="min-width:110px"><option>4bit</option><option>8bit</option><option>none</option></select></label>
+      <label class="hint">precision
+        <select id="hfprec" style="min-width:130px"><option>float16</option><option>bfloat16</option><option>float32</option></select></label>
+      <label class="hint">context
+        <input class="tin" id="hfctx" placeholder="auto" style="width:90px"/></label>
+      <label class="hint">name
+        <input class="tin" id="hfname" placeholder="auto" style="width:160px"/></label>
+    </div>
+    <div id="hfresult" class="hint" style="font-family:var(--mono);font-size:12px"></div>
+  </section>
+
+  <div class="head"><h2>Convert from registry</h2><span class="rule"></span></div>
+  <section class="panel">
+    <select id="modelsel" aria-label="Model to convert"></select>
+    <button class="btn go" id="convertbtn">Convert</button>
+    <span class="hint">exports an <span style="font-family:var(--mono)">.aimodel</span> bundle, then it appears above</span>
+  </section>
+  <div class="jobs" id="jobs"></div>
+
+  <footer>
+    <span class="dot" style="background:var(--signal)"></span>
+    <span>caix · runs entirely on this Mac · no data leaves the device</span>
+    <span class="api" style="margin-left:auto">OpenAI &amp; Anthropic API · /v1</span>
+  </footer>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const gb=b=>(b/1073741824).toFixed(1)+' GB';
+async function j(u,o){const r=await fetch(u,o);if(!r.ok)throw new Error(r.status);return r.json();}
+function conn(ok){const c=$('conn');c.classList.toggle('live',ok);$('connlbl').textContent=ok?'live':'server offline';
+  $('connlbl').style.color=ok?'var(--ok)':'var(--bad)';}
+
+async function pollStats(){
+  try{const s=await j('/api/stats');conn(true);
+    $('chip').textContent=s.chip;$('cores').textContent=s.logicalCores+' cores · '+gb(s.totalRAMBytes);
+    const mf=Math.round((s.memoryUsedFraction||0)*100);
+    $('memv').textContent=gb(s.usedRAMBytes)+' · '+mf+'%';$('membar').style.width=mf+'%';
+    const gu=s.gpuUtilizationPercent??0;$('gpuv').textContent=gu+'%';$('gpubar').style.width=gu+'%';
+    if(s.gpuInUseMemoryBytes){$('gpumem').textContent=gb(s.gpuInUseMemoryBytes);
+      $('gpumembar').style.width=Math.min(100,Math.round(s.gpuInUseMemoryBytes/s.totalRAMBytes*100))+'%';}
+    else $('gpumem').textContent='—';
+  }catch(e){conn(false);}
+}
+async function pollModels(){
+  try{const m=await j('/api/models');
+    const loadedList=m.filter(x=>x.status==='loaded');
+    window.loaded=loadedList.map(x=>x.name);
+    $('modelmeta').textContent=loadedList.length+' loaded · '+m.length+' available';
+    // chat model picker: all bundles, MTP/speculative first (it's the headline path)
+    const bundles=m.filter(x=>x.bundle).map(x=>x.name).sort((a,b)=>(isMTP(b)?1:0)-(isMTP(a)?1:0));
+    const sel=$('chatmodel');
+    if(bundles.join('|')!==sel.dataset.opts){
+      const cur=sel.value;
+      sel.innerHTML=bundles.map(n=>`<option value="${n}">${n}${isMTP(n)?'  · MTP':''}</option>`).join('');
+      sel.dataset.opts=bundles.join('|');
+      sel.value=(cur&&bundles.includes(cur))?cur:(bundles[0]||'');
+      updateBadge();
+    }
+    const cm=$('chatmodel').value;
+    $('chatmeta').textContent=cm?(window.loaded.includes(cm)?('● '+cm+' loaded'):('○ '+cm+' — loads on first message')):'no models';
+    $('sendbtn').disabled=!cm||streaming;
+    $('models').innerHTML=m.map(x=>{
+      const loaded=x.status==='loaded';
+      const tps=x.tokensPerSecond?`<b>${x.tokensPerSecond.toFixed(0)}</b> tok/s`:(loaded?'idle':'');
+      const reqs=x.requests?` · ${x.requests} req`:'';
+      return `<div class="m">
+        <div><div class="id">${x.name}</div><div class="sub">${x.params||x.bundle||'core ai bundle'}</div></div>
+        <div class="stat"><span class="status ${loaded?'loaded':''}"><i></i>${loaded?'loaded':'available'}</span>
+          <div style="margin-top:4px">${tps}${reqs}</div></div>
+        <div>${loaded?`<button class="btn" onclick="act('offload','${x.name}')">Offload</button>`
+              :x.bundle?`<button class="btn go" onclick="act('load','${x.name}')">Load</button>`
+              :`<span class="sub">not converted</span>`}</div>
+      </div>`;}).join('')||'<div class="empty">no models yet — convert one below</div>';
+    const rsel=$('modelsel');if(!rsel.dataset.filled&&m.length){rsel.innerHTML=m.map(x=>`<option>${x.name}</option>`).join('');rsel.dataset.filled='1';}
+  }catch(e){$('models').innerHTML='<div class="empty">server offline — start it with <span style="font-family:var(--mono)">coreai-pipeline serve</span></div>';}
+}
+async function pollJobs(){
+  try{const jb=await j('/api/jobs');
+    $('jobs').innerHTML=(jb||[]).map(x=>`<div class="job"><div class="jl"><span>${x.label}</span><b>${Math.round(x.pct)}%</b></div>
+      <div class="track"><i style="width:${x.pct}%"></i></div></div>`).join('');
+  }catch(e){}
+}
+async function act(a,name){try{await j('/api/'+a,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:name})});}catch(e){}pollModels();}
+async function startConvert(){await act('convert',$('modelsel').value);pollJobs();}
+
+// ---- usage analytics (cumulative) ----
+const kfmt=n=>{n=n||0;return n>=1e6?(n/1e6).toFixed(2)+'M':n>=1e3?(n/1e3).toFixed(1)+'k':''+n;};
+const dur=s=>{s=Math.max(0,Math.round(s||0));const h=Math.floor(s/3600),m=Math.floor(s%3600/60);return h?`${h}h ${m}m`:m?`${m}m`:`${s}s`;};
+async function pollUsage(){
+  try{const u=await j('/api/usage');
+    $('u_req').textContent=kfmt(u.totalRequests);
+    $('u_in').textContent=kfmt(u.totalInputTokens);
+    $('u_out').textContent=kfmt(u.totalOutputTokens);
+    $('u_avg').textContent=(u.rollingTokensPerSecond||0).toFixed(1);
+    $('u_life').textContent=(u.avgTokensPerSecond||0).toFixed(1);
+    $('uptime').textContent='up '+dur(u.uptimeSeconds)+' · '+u.rollingWindowMinutes+'-min window';
+    const pm=$('permodel');
+    if(u.byModel&&u.byModel.length){pm.style.display='';
+      pm.innerHTML=u.byModel.map(x=>`<div class="pm"><span class="nm">${x.model}</span>
+        <span><b>${kfmt(x.requests)}</b> req</span><span><b>${kfmt(x.inputTokens)}</b> in · <b>${kfmt(x.outputTokens)}</b> out</span>
+        <span><b>${(x.avgTokensPerSecond||0).toFixed(1)}</b> tok/s</span></div>`).join('');
+    } else pm.style.display='none';
+  }catch(e){}
+}
+
+// ---- live speculative-decoding metrics ----
+async function pollGen(){
+  try{const s=await j('/api/genstats');
+    if(s.available===false){return;}
+    $('sp_tps').textContent=(s.tokensPerSecond||0).toFixed(1);
+    const acc=Math.round((s.acceptanceRate||0)*100);
+    const accEl=$('sp_acc');accEl.textContent=acc+'%';
+    accEl.className=acc>=60?'ok-txt':acc>=35?'work-txt':'';
+    $('sp_tpp').textContent=(s.tokensPerPass||0).toFixed(2);
+    $('sp_k').textContent='K='+(s.draftTokens||0);
+  }catch(e){}
+}
+
+// ---- HuggingFace → Core AI: support check + convert ----
+function hfBody(){
+  const b={hf_repo:$('hfrepo').value.trim()};
+  const c=$('hfcomp').value,p=$('hfprec').value,ctx=$('hfctx').value.trim(),nm=$('hfname').value.trim();
+  if(c)b.compression=c; if(p)b.compute_precision=p; if(ctx)b.context=parseInt(ctx,10); if(nm)b.name=nm;
+  return b;
+}
+function hfShow(html,cls){const el=$('hfresult');el.innerHTML=html;el.className='hint '+(cls||'');el.style.fontFamily='var(--mono)';}
+async function hfCheck(){
+  const repo=$('hfrepo').value.trim(); if(!repo){hfShow('paste a HuggingFace repo id first','bad-txt');return;}
+  hfShow('checking architecture support…');
+  try{const d=await j('/api/check-support',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({hf_repo:repo})});
+    if(d.supported){hfShow(`✓ supported · <b>${d.model_type}</b>${d.params_b?` · ~${d.params_b}B`:''} · ready to convert`,'ok-txt');}
+    else{hfShow(`⚑ flagged · ${esc(d.reason||'unsupported architecture')}`,'bad-txt');}
+  }catch(e){hfShow('check failed: '+e,'bad-txt');}
+}
+async function hfConvert(){
+  const repo=$('hfrepo').value.trim(); if(!repo){hfShow('paste a HuggingFace repo id first','bad-txt');return;}
+  hfShow('checking support, then converting…','work-txt');
+  try{const d=await j('/api/convert-hf',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(hfBody())});
+    if(d.started){hfShow(`▸ converting <b>${d.name}</b> — track progress below; it loads when done`,'work-txt');pollJobs();}
+    else if(d.supported===false){hfShow(`⚑ flagged · ${esc(d.reason||'unsupported architecture — not converted')}`,'bad-txt');}
+    else{hfShow('convert: '+JSON.stringify(d),'');}
+  }catch(e){hfShow('convert failed: '+e,'bad-txt');}
+}
+
+// ---- chat (streaming, OpenAI-style) ----
+const esc=s=>(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+let history=[], streaming=false, abortCtrl=null;
+const isMTP=n=>/eagle|mtp|spec/i.test(n||'');
+function renderChat(){
+  const t=$('transcript');
+  if(!history.length){t.innerHTML='<div class="empty">pick a model and say something — streams as it generates</div>';return;}
+  const showThink=$('showthink').checked;
+  t.innerHTML=history.map((msg,i)=>{
+    const last=i===history.length-1;
+    const think=(msg.reasoning&&showThink)?`<details class="think" open><summary>thinking</summary>${esc(msg.reasoning)}</details>`:'';
+    let body=esc(msg.content);
+    if(msg.role==='assistant'&&streaming&&last&&!body&&!msg.reasoning){
+      // pre-first-token: clear "working / loading model" indicator so it never looks stuck
+      body=`<span class="working"><span class="spin"></span>${msg.wait||'working…'}</span>`;
+    } else if(!body&&msg.role==='assistant'){
+      body=(streaming&&last)?'<span class="cursor">▍</span>':'<span style="color:var(--faint)">…</span>';
+    } else if(streaming&&last&&msg.role==='assistant'){ body+='<span class="cursor">▍</span>'; }
+    const tps=msg.tps?`<div class="tps">${msg.tps}</div>`:'';
+    return `<div class="msg ${msg.role}"><div class="who">${msg.role==='user'?'you':'model'}</div>
+      <div class="body">${think}${body}${tps}</div></div>`;
+  }).join('');
+  t.scrollTop=t.scrollHeight;
+}
+function setStreaming(on){streaming=on;$('sendbtn').style.display=on?'none':'';$('stopbtn').style.display=on?'':'none';$('prompt').disabled=on;}
+function updateBadge(){
+  const m=$('chatmodel').value, b=$('mtpbadge');
+  if(isMTP(m)){b.textContent='MTP · speculative draft (K=4)';b.className='badge';b.title='Draft model proposes tokens; the 26B target verifies them in one pass — same output, faster.';}
+  else{b.textContent='standard decode';b.className='badge std';b.title='Single-model autoregressive decoding.';}
+}
+async function sendChat(){
+  const text=$('prompt').value.trim(); const model=$('chatmodel').value;
+  if(!text||!model||streaming)return;
+  $('prompt').value='';
+  history.push({role:'user',content:text});
+  const a={role:'assistant',content:'',reasoning:''}; history.push(a); renderChat();
+  setStreaming(true); abortCtrl=new AbortController();
+  const t0=performance.now(); let nTok=0, firstAt=0, firstByte=false;
+  // live "working / loading model" counter so the UI never looks stuck during a cold load
+  const waitTick=setInterval(()=>{
+    if(firstByte)return;
+    const s=Math.round((performance.now()-t0)/1000);
+    a.wait=s<4?`connecting…  ${s}s`:`loading model — first run compiles the bundle (~1 min)  ${s}s`;
+    $('livestat').innerHTML=`<span class="spin"></span> ${a.wait}`;
+    renderChat();
+  },400);
+  const msgs=history.filter(m=>m.role==='user'||m.content||m.reasoning).map(m=>({role:m.role,content:m.content||''}));
+  try{
+    const res=await fetch('/v1/chat/completions',{method:'POST',headers:{'content-type':'application/json'},signal:abortCtrl.signal,
+      body:JSON.stringify({model,messages:msgs,max_tokens:1024,temperature:0.7,top_p:0.95,stream:true})});
+    if(!res.ok||!res.body)throw new Error('HTTP '+res.status);
+    const reader=res.body.getReader(), dec=new TextDecoder(); let buf='';
+    for(;;){const {done,value}=await reader.read(); if(done)break;
+      buf+=dec.decode(value,{stream:true}); let nl;
+      while((nl=buf.indexOf('\n\n'))>=0){
+        const block=buf.slice(0,nl); buf=buf.slice(nl+2);
+        const dl=block.split('\n').find(l=>l.startsWith('data:')); if(!dl)continue;
+        const p=dl.slice(5).trim(); if(p==='[DONE]')continue;
+        try{const d=JSON.parse(p); const del=(d.choices&&d.choices[0]&&d.choices[0].delta)||{};
+          if(del.reasoning_content){firstByte=true; a.wait=''; a.reasoning+=del.reasoning_content;}
+          if(del.content){firstByte=true; a.wait=''; if(!firstAt)firstAt=performance.now(); a.content+=del.content; nTok++;}
+          const el=(performance.now()-(firstAt||t0))/1000; if(nTok)$('livestat').innerHTML=`<b>${(nTok/Math.max(el,.001)).toFixed(1)}</b> tok/s · ${nTok} tok`;
+          renderChat();
+        }catch(e){}
+      }
+    }
+    const dt=(performance.now()-(firstAt||t0))/1000;
+    if(nTok)a.tps=`${nTok} tok · ${(nTok/Math.max(dt,.001)).toFixed(1)} tok/s${isMTP(model)?' · MTP':''}`;
+  }catch(e){if(e.name!=='AbortError')a.content+=(a.content?'\n':'')+'[error: '+e.message+']';}
+  clearInterval(waitTick); a.wait='';
+  setStreaming(false); abortCtrl=null; renderChat(); pollGen(); pollUsage();
+}
+function stopChat(){if(abortCtrl)abortCtrl.abort();}
+function clearChat(){if(streaming)return;history=[];$('livestat').textContent='';renderChat();}
+$('sendbtn').addEventListener('click',sendChat);
+$('stopbtn').addEventListener('click',stopChat);
+$('clearbtn').addEventListener('click',clearChat);
+$('showthink').addEventListener('change',renderChat);
+$('chatmodel').addEventListener('change',updateBadge);
+$('prompt').addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){e.preventDefault();sendChat();}});
+$('convertbtn').addEventListener('click',startConvert);
+$('hfcheck').addEventListener('click',hfCheck);
+$('hfconvert').addEventListener('click',hfConvert);
+$('hfrepo').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();hfConvert();}});
+function loop(){pollStats();pollModels();pollJobs();pollGen();pollUsage();}
+loop();setInterval(pollStats,1500);setInterval(pollModels,3000);setInterval(pollJobs,1200);
+setInterval(pollGen,2000);setInterval(pollUsage,2500);
+</script>
+</body>
+</html>

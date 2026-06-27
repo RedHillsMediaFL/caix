@@ -1,0 +1,18 @@
+# build
+.build/
+dist/
+*.o
+*.swiftmodule
+
+# downloaded models (large; users provide their own)
+models/exports/*
+!models/exports/.gitkeep
+
+# prebuilt binary staged into a release (not committed to source)
+bin/
+
+# os / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
