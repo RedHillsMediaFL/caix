@@ -1,5 +1,10 @@
 import Foundation
 import PipelineRuntime
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 // MARK: - Dashboard / API DTOs
 
@@ -175,6 +180,11 @@ public struct EagleConfig: Sendable {
 /// (actor reentrancy keeps the manager responsive to `listModels`/`isLoaded` meanwhile), and
 /// concurrent loads of the same name are de-duplicated to a single in-flight `Task`.
 public actor ModelManager {
+    private struct DiscoveredBundle: Sendable {
+        var name: String
+        var mode: String
+    }
+
     private let exportsDir: URL
     private let registryPath: URL
     private let verbose: Bool
@@ -182,6 +192,8 @@ public actor ModelManager {
 
     private var handles: [String: ModelHandle] = [:]
     private var loadTasks: [String: Task<ModelHandle, Error>] = [:]
+    private var bundleCache: (updatedAt: Date, entries: [DiscoveredBundle])?
+    private let bundleDiscoveryCacheSeconds: TimeInterval = 5
     /// Memoized per-model output formats (detected from the bundle tokenizer/chat_template).
     private var formats: [String: OutputFormat] = [:]
 
@@ -197,24 +209,35 @@ public actor ModelManager {
 
     /// Bundle directories under `exportsDir`. A directory is loadable if it is either a direct
     /// `metadata.json` LLM bundle or an EAGLE target+draft package.
-    private func bundleNames() -> [String] {
-        let fm = FileManager.default
-        guard
-            let entries = try? fm.contentsOfDirectory(
-                at: exportsDir, includingPropertiesForKeys: [.isDirectoryKey])
-        else { return [] }
-        var names: [String] = []
-        for url in entries {
-            if Self.isDirectLLMBundle(at: url) || Self.isEagleBundle(at: url) {
-                names.append(url.lastPathComponent)
-            }
+    private func bundleEntries() -> [DiscoveredBundle] {
+        let now = Date()
+        if let cache = bundleCache,
+           now.timeIntervalSince(cache.updatedAt) < bundleDiscoveryCacheSeconds {
+            return cache.entries
         }
-        return names.sorted()
+        let entries = Self.discoverBundleEntries(in: exportsDir)
+        bundleCache = (updatedAt: now, entries: entries)
+        return entries
+    }
+
+    private static func discoverBundleEntries(in exportsDir: URL) -> [DiscoveredBundle] {
+        if let indexed = indexedBundleEntries(for: exportsDir) {
+            return indexed
+        }
+        var entries: [DiscoveredBundle] = []
+        for name in childNames(in: exportsDir) where !name.hasPrefix(".") {
+            let url = exportsDir.appendingPathComponent(name, isDirectory: true)
+            guard isDirectory(url), let mode = bundleMode(at: url) else {
+                continue
+            }
+            entries.append(DiscoveredBundle(name: name, mode: mode))
+        }
+        return entries.sorted { $0.name < $1.name }
     }
 
     /// Registry models (`models/registry.json`) → (key, params string), best-effort.
     private func registryModels() -> [(name: String, params: String)] {
-        guard let data = try? Data(contentsOf: registryPath),
+        guard let data = Self.readSmallFile(registryPath, timeoutSeconds: 2),
             let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let models = obj["models"] as? [String: Any]
         else { return [] }
@@ -247,13 +270,11 @@ public actor ModelManager {
                     memoryBytes: handles[cfg.name]?.memoryBytes, mode: "eagle"))
         }
 
-        for name in bundleNames() {
+        for bundle in bundleEntries() {
+            let name = bundle.name
             if seen.contains(Self.normalize(name)) { continue }
             seen.insert(Self.normalize(name))
             let loaded = handles[name] != nil
-            let mode = isEagleBundle(name)
-                ? "eagle"
-                : (isClassicSpeculativeBundle(name) ? "speculative" : "standard")
             entries.append(
                 ModelEntry(
                     name: name,
@@ -261,7 +282,7 @@ public actor ModelManager {
                     status: loaded ? "loaded" : "available",
                     bundle: true,
                     memoryBytes: handles[name]?.memoryBytes,
-                    mode: mode))
+                    mode: bundle.mode))
         }
 
         for (key, params) in registryModels() {
@@ -419,15 +440,18 @@ public actor ModelManager {
             return "refusing to delete the built-in MTP model"
         }
         let dir = exportsDir.appendingPathComponent(name)
-        let fm = FileManager.default
-        var isDir: ObjCBool = false
-        guard fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue,
-              bundleNames().contains(name) else {
+        guard Self.isDirectory(dir),
+              Self.isLoadableBundle(at: dir) else {
             return "no bundle named '\(name)' under exports"
         }
         handles.removeValue(forKey: name)
         formats.removeValue(forKey: name)
-        do { try fm.removeItem(at: dir) } catch { return "delete failed: \(error.localizedDescription)" }
+        do {
+            try FileManager.default.removeItem(at: dir)
+        } catch {
+            return "delete failed: \(error.localizedDescription)"
+        }
+        bundleCache = nil
         return nil
     }
 
@@ -467,11 +491,108 @@ public actor ModelManager {
     static func isDirectLLMBundle(at root: URL) -> Bool {
         let meta = root.appendingPathComponent("metadata.json")
         guard
-            FileManager.default.fileExists(atPath: meta.path),
-            let data = try? Data(contentsOf: meta),
+            fileExists(meta),
+            let data = try? Data(contentsOf: meta, options: [.mappedIfSafe]),
             let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return false }
         return (obj["kind"] as? String) == "llm"
+    }
+
+    static func isLoadableBundle(at root: URL) -> Bool {
+        isDirectLLMBundle(at: root) || isEagleBundle(at: root)
+    }
+
+    static func bundleMode(at root: URL) -> String? {
+        if isEagleBundle(at: root) { return "eagle" }
+        if isClassicSpeculativeBundle(at: root) { return "speculative" }
+        if isDirectLLMBundle(at: root) { return "standard" }
+        return nil
+    }
+
+    private static func indexedBundleEntries(for exportsDir: URL) -> [DiscoveredBundle]? {
+        let env = ProcessInfo.processInfo.environment
+        let path = env["CAIX_EXPORT_INDEX"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let path, !path.isEmpty else { return nil }
+        guard let data = readSmallFile(URL(fileURLWithPath: path), timeoutSeconds: 0.5),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        if let indexedExports = object["exportsDir"] as? String, indexedExports != exportsDir.path {
+            return nil
+        }
+        guard let bundles = object["bundles"] as? [[String: Any]] else { return nil }
+        let entries = bundles.compactMap { item -> DiscoveredBundle? in
+            guard let name = item["name"] as? String, !name.isEmpty else { return nil }
+            let mode = item["mode"] as? String ?? "standard"
+            return DiscoveredBundle(name: name, mode: mode)
+        }
+        return entries.sorted { $0.name < $1.name }
+    }
+
+    private static func childNames(in directory: URL) -> [String] {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/find")
+        process.arguments = [
+            directory.path, "-maxdepth", "1", "-mindepth", "1", "-type", "d", "-print",
+        ]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = Pipe()
+        do {
+            try process.run()
+        } catch {
+            return []
+        }
+        let deadline = Date().addingTimeInterval(2)
+        while process.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        guard !process.isRunning else {
+            process.terminate()
+            process.waitUntilExit()
+            return []
+        }
+        guard process.terminationStatus == 0 else { return [] }
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        guard let text = String(data: data, encoding: .utf8) else { return [] }
+        return text.split(separator: "\n").map { path in
+            URL(fileURLWithPath: String(path), isDirectory: true).lastPathComponent
+        }
+    }
+
+    private static func readSmallFile(_ url: URL, timeoutSeconds: TimeInterval) -> Data? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/cat")
+        process.arguments = [url.path]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = Pipe()
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while process.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        guard !process.isRunning else {
+            process.terminate()
+            process.waitUntilExit()
+            return nil
+        }
+        guard process.terminationStatus == 0 else { return nil }
+        return output.fileHandleForReading.readDataToEndOfFile()
+    }
+
+    private static func fileExists(_ url: URL) -> Bool {
+        var st = stat()
+        return lstat(url.path, &st) == 0
+    }
+
+    private static func isDirectory(_ url: URL) -> Bool {
+        var st = stat()
+        guard lstat(url.path, &st) == 0 else { return false }
+        return (st.st_mode & S_IFMT) == S_IFDIR
     }
 
     func isClassicSpeculativeBundle(_ name: String) -> Bool {
@@ -495,10 +616,8 @@ public actor ModelManager {
     }
 
     static func isEagleBundle(at root: URL) -> Bool {
-        let fm = FileManager.default
         func dirExists(_ url: URL) -> Bool {
-            var isDir = ObjCBool(false)
-            return fm.fileExists(atPath: url.path, isDirectory: &isDir) && isDir.boolValue
+            isDirectory(url)
         }
         let target = root.appendingPathComponent("eagle_target.aimodel", isDirectory: true)
         let draft = root.appendingPathComponent("eagle_draft.aimodel", isDirectory: true)
