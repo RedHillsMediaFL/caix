@@ -41,7 +41,7 @@ Everything else (the HTTP server, tokenizer, etc.) is fetched automatically by S
 
 ### Option A — download a prebuilt binary (easiest, no build) ⭐
 
-1. Go to the [**Releases**](https://github.com/<you>/caix/releases) page and download
+1. Go to the [**Releases**](https://github.com/redhillsmediafl/caix/releases) page and download
    `caix-<version>-macos-arm64.tar.gz`.
 2. Extract and run:
 
@@ -64,7 +64,7 @@ xattr -dr com.apple.quarantine ./bin/caix
 ### Option B — build from source
 
 ```bash
-git clone https://github.com/<you>/caix.git
+git clone https://github.com/redhillsmediafl/caix.git
 cd caix
 sudo xcode-select -s /Applications/Xcode-beta.app    # your Core AI–capable Xcode (once)
 ./scripts/install.sh                                 # = COREAI_RUNTIME=1 swift build -c release
