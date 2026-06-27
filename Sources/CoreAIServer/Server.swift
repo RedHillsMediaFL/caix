@@ -243,7 +243,8 @@ final class ServerRuntime: Sendable {
               Self.isAllowedRHMRepo(body.repo) else {
             return JSONResponder.error("expected {\"repo\":\"redhillsmediafl/<name>-caix\"}", status: .badRequest)
         }
-        guard let meta = try await fetchRHMBundleMetadata(repo: body.repo),
+        let meta = try? await fetchRHMBundleMetadata(repo: body.repo)
+        guard let meta,
               (meta.kind ?? "llm") == "llm" else {
             return JSONResponder.error("repo is not a direct caix bundle with root metadata.json", status: .badRequest)
         }
