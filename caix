@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# caix — native Apple Core AI inference server (BETA).
+# Launcher: builds the release binary on first run, then forwards all args to it.
+#   ./caix serve            # start the server (dashboard at http://localhost:1237)
+#   ./caix serve --port N   # custom port
+#   ./caix --help
+set -euo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Prefer a prebuilt release binary (bin/caix), else the locally-built one, else build from source.
+if   [ -x "$DIR/bin/caix" ];               then BIN="$DIR/bin/caix"
+elif [ -x "$DIR/.build/release/caix" ];    then BIN="$DIR/.build/release/caix"
+else
+  echo "caix: no prebuilt binary found — building from source (a few minutes)…" >&2
+  ( cd "$DIR" && COREAI_RUNTIME=1 swift build -c release )
+  BIN="$DIR/.build/release/caix"
+fi
+
+# Serve the bundled web UI + converter + model registry from this checkout by default.
+if [ "${1:-}" = "serve" ]; then
+  shift
+  exec "$BIN" serve \
+    --web "$DIR/web" \
+    --exports "${CAIX_EXPORTS:-$DIR/models/exports}" \
+    --registry "$DIR/models/registry.json" \
+    --convert-script "$DIR/python/converter/convert.py" \
+    "$@"
+fi
+exec "$BIN" "$@"

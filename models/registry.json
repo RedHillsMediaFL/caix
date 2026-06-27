@@ -1,0 +1,80 @@
+{
+  "_comment": "Pipeline-level model registry. Architecture facts from model-profile research; drives conversion (op-family adapter, compression target) and runtime (template, MTP pairing). bf16 sizes are HF download totals; 64GB unified mem => 4-bit required for >~20GB.",
+  "conversion_order": [
+    "gemma-4-31B-it-assistant",
+    "gemma-4-31B-it",
+    "Qwythos-9B",
+    "Qwen3.6-27B",
+    "diffusiongemma-26B-A4B-it",
+    "diffusiongemma-26B-A4B-it-HERETIC"
+  ],
+  "models": {
+    "gemma-4-31B-it-assistant": {
+      "hf_repo": "google/gemma-4-31B-it-assistant", "model_type": "gemma4_assistant",
+      "op_family": "standard-gqa", "role": "draft", "draft_for": "gemma-4-31B-it",
+      "params_b": 0.47, "bf16_gb": 0.94, "shards": 1,
+      "layers": 4, "hidden": 1024, "heads": 32, "kv_heads": 16, "head_dim": 256,
+      "vocab": 262144, "context": 262144, "tie_embeddings": true,
+      "prompt_template": "gemma4", "mtp": "external-draft", "compression": "none",
+      "downloaded": true, "first_light": true,
+      "notes": "Smallest/standard gemma4 op set. First smoke target + the EAGLE draft for gemma-4-31B-it."
+    },
+    "gemma-4-31B-it": {
+      "hf_repo": "google/gemma-4-31B-it", "model_type": "gemma4",
+      "op_family": "standard-gqa", "role": "target", "draft": "gemma-4-31B-it-assistant",
+      "params_b": 31.3, "bf16_gb": 62.5, "shards": 2,
+      "layers": 60, "hidden": 5376, "heads": 32, "kv_heads": 16, "head_dim": 256, "global_head_dim": 512,
+      "vocab": 262144, "context": 262144, "tie_embeddings": true,
+      "attention": "5:1 sliding(1024):full", "rope": "dual (proportional theta1e6 partial0.25 + default theta1e4)",
+      "final_logit_softcapping": 30.0, "multimodal": "vision (text-decoder first)",
+      "prompt_template": "gemma4", "mtp": "external-draft", "compression": "4bit",
+      "downloaded": false,
+      "notes": "Standard-path target. Quirks: dual RoPE, partial_rotary 0.25, per-layer head dims, logit softcap, attention_k_eq_v."
+    },
+    "Qwythos-9B": {
+      "hf_repo": "empero-ai/Qwythos-9B-Claude-Mythos-5-1M", "model_type": "qwen3_5",
+      "op_family": "hybrid-linear-attn", "role": "target",
+      "params_b": 9.4, "bf16_gb": 18.8, "shards": 1,
+      "layers": 32, "hidden": 4096, "heads": 16, "kv_heads": 4, "head_dim": 256,
+      "vocab": 248320, "context": 1048576, "rope": "mRoPE+YaRN(4x over 262144)", "tie_embeddings": false,
+      "attention": "3:1 linear(mamba/gated-delta+conv1d):full (interval 4)", "multimodal": "vision+video",
+      "prompt_template": "chatml-qwen", "mtp": "internal-head(mtp_num_hidden_layers=1)", "compression": "optional-4bit",
+      "min_kv_capacity": 512,
+      "downloaded": true,
+      "notes": "Non-standard op family: linear-attention/SSM state + conv1d. Convert text-only first. Highest per-param novelty risk."
+    },
+    "Qwen3.6-27B": {
+      "hf_repo": "Qwen/Qwen3.6-27B", "model_type": "qwen3_5",
+      "op_family": "hybrid-linear-attn", "role": "target",
+      "params_b": 27.8, "bf16_gb": 55.6, "shards": 15,
+      "layers": 64, "hidden": 5120, "heads": 24, "kv_heads": 4, "head_dim": 256,
+      "vocab": 248320, "context": 262144, "rope": "mRoPE theta1e7 partial0.25", "tie_embeddings": false,
+      "attention": "3:1 linear:full (interval 4)", "multimodal": "vision+video",
+      "prompt_template": "chatml-qwen", "mtp": "internal-head", "compression": "4bit",
+      "min_kv_capacity": 768,
+      "downloaded": false,
+      "notes": "Same qwen3_5 hybrid family as Qwythos, scaled up; larger SSM footprint -> min_kv_capacity 768 (not Qwythos's 512). Do after Qwythos proves the op set."
+    },
+    "diffusiongemma-26B-A4B-it": {
+      "hf_repo": "google/diffusiongemma-26B-A4B-it", "model_type": "diffusion_gemma",
+      "architecture": "DiffusionGemmaForBlockDiffusion", "op_family": "moe-diffusion", "role": "target",
+      "params_b": 25.2, "active_params_b": 3.8, "bf16_gb": 51.6, "shards": 11,
+      "moe": {"num_experts": 128, "top_k": 8, "shared_experts": 1, "moe_intermediate_size": 704},
+      "layers": 30, "hidden": 2816, "heads": 16, "kv_heads": 8, "global_kv_heads": 2, "head_dim": 256,
+      "vocab": 262144, "context": 262144, "canvas_length": 256, "tie_embeddings": true,
+      "attention": "bidirectional over canvas; 5:1 sliding(1024):full; non-causal", "final_logit_softcapping": 30.0,
+      "diffusion": {"type": "discrete-block", "max_denoising_steps": 48, "t_max": 0.8, "t_min": 0.4, "entropy_bound": 0.1, "self_conditioning": true},
+      "prompt_template": "gemma4-think", "mtp": "none (diffusion is the parallelism)", "compression": "4bit",
+      "downloaded": false,
+      "notes": "Hardest. Convertible unit = single bidirectional forward (non-causal mask + 128-expert MoE + self-cond). Host-side Swift denoise loop: random canvas init, 48-step entropy/MI-bound accept+renoise, adaptive stop, block commit."
+    },
+    "diffusiongemma-26B-A4B-it-HERETIC": {
+      "hf_repo": "edwixx/diffusiongemma-26B-A4B-it-HERETIC-Uncensored", "model_type": "diffusion_gemma",
+      "architecture": "DiffusionGemmaForBlockDiffusion", "op_family": "moe-diffusion", "role": "target",
+      "params_b": 25.2, "active_params_b": 3.8, "bf16_gb": 51.6, "shards": 11,
+      "same_architecture_as": "diffusiongemma-26B-A4B-it", "compression": "4bit",
+      "prompt_template": "gemma4-think", "mtp": "none", "downloaded": false,
+      "notes": "Abliterated/uncensored finetune of the google model; identical arch/config. No processor_config.json. Re-run of #5 with new weights."
+    }
+  }
+}

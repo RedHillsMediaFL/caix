@@ -1,0 +1,489 @@
+import CoreAIServer
+import PipelineRuntime
+import Dispatch
+import Foundation
+import MachineStats
+
+// Minimal CLI entry.
+//   stats                              prints a machine snapshot as JSON
+//   run --model <bundle> --prompt ...  native Core AI text generation
+let args = CommandLine.arguments
+let command = args.count > 1 ? args[1] : "stats"
+
+switch command {
+case "stats":
+    let snap = MachineStats.snapshot()
+    let enc = JSONEncoder()
+    enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+    if let data = try? enc.encode(snap), let s = String(data: data, encoding: .utf8) {
+        print(s)
+    }
+
+case "run":
+    runCommand(Array(args.dropFirst(2)))
+
+case "serve":
+    serveCommand(Array(args.dropFirst(2)))
+
+case "bench":
+    benchCommand(Array(args.dropFirst(2)))
+
+case "eagle":
+    eagleCommand(Array(args.dropFirst(2)))
+
+case "-h", "--help", "help":
+    printUsage()
+
+default:
+    FileHandle.standardError.write(Data("unknown command: \(command)\n".utf8))
+    printUsage()
+    exit(2)
+}
+
+// MARK: - run subcommand
+
+func printUsage() {
+    let usage = """
+        coreai-pipeline — native Apple Core AI serving pipeline
+
+        USAGE:
+          coreai-pipeline stats
+          coreai-pipeline run --model <bundle-dir> --prompt "..." [options]
+          coreai-pipeline serve [--port 8080] [--host 127.0.0.1]
+
+        serve OPTIONS:
+          --port <N>             Listen port (default: 8080)
+          --host <H>             Bind host (default: 127.0.0.1)
+          --exports <dir>        Exported bundles dir (default: ./exports)
+          --registry <path>      Model registry JSON (default: ./models/registry.json)
+          --web <dir>            Dashboard web dir (default: ./web)
+          --convert-script <p>   convert.py path (default: ./python/converter/convert.py)
+          --python <exe>         Python executable for conversion (default: python3)
+          --verbose              Emit per-request diagnostics to stderr
+
+        run OPTIONS:
+          --model <dir>          Exported .aimodel bundle directory (required)
+          --draft <dir>          Draft .aimodel bundle for speculative decoding (optional)
+          --draft-tokens <K>     Draft tokens proposed per step (default: 4; needs --draft)
+          --prompt <text>        Prompt text (required)
+          --max-tokens <N>       Max tokens to generate (default: 64)
+          --temperature <t>      Sampling temperature; 0 = greedy (default: 0)
+          --top-k <K>            Top-K filter (temperature > 0)
+          --top-p <P>            Top-P / nucleus filter (temperature > 0)
+          --seed <S>             RNG seed for reproducible sampling
+          --raw                  Skip the chat template (raw completion)
+          --kv-capacity <N>      Fixed KV cache capacity override (auto-floored per model)
+          --verbose              Emit timing/diagnostics to stderr
+
+        DIFFUSION (auto-detected from bundle metadata kind/diffusion block):
+          run routes diffusion bundles to the host denoise loop (random-canvas init →
+          entropy/MI-bound accept+renoise with self-conditioning → adaptive stop → block
+          commit). --temperature/--top-k/--top-p/--draft do not apply.
+          env COREAI_DIFFUSION_MAX_STEPS=<N>  cap denoise steps (smoke/debug; default: metadata)
+          env COREAI_DIFFUSION_CANVAS=<N>     cap canvas length (smoke/debug; default: metadata)
+        """
+    print(usage)
+}
+
+func runCommand(_ argv: [String]) {
+    var model: String?
+    var draft: String?
+    var draftTokens = 4
+    var prompt: String?
+    var maxTokens = 64
+    var temperature = 0.0
+    var topK: Int?
+    var topP: Double?
+    var seed: UInt64?
+    var applyChatTemplate = true
+    var kvCapacity: Int?
+    var verbose = false
+
+    func fail(_ msg: String) -> Never {
+        FileHandle.standardError.write(Data("error: \(msg)\n".utf8))
+        exit(2)
+    }
+
+    var i = 0
+    func value(_ flag: String) -> String {
+        i += 1
+        guard i < argv.count else { fail("missing value for \(flag)") }
+        return argv[i]
+    }
+    func intValue(_ flag: String) -> Int {
+        guard let v = Int(value(flag)) else { fail("invalid \(flag) (expected integer)") }
+        return v
+    }
+    func doubleValue(_ flag: String) -> Double {
+        guard let v = Double(value(flag)) else { fail("invalid \(flag) (expected number)") }
+        return v
+    }
+
+    while i < argv.count {
+        let arg = argv[i]
+        switch arg {
+        case "--model", "-m": model = value(arg)
+        case "--draft", "-d": draft = value(arg)
+        case "--draft-tokens": draftTokens = intValue(arg)
+        case "--prompt", "-p": prompt = value(arg)
+        case "--max-tokens", "-n": maxTokens = intValue(arg)
+        case "--temperature", "-t": temperature = doubleValue(arg)
+        case "--top-k": topK = intValue(arg)
+        case "--top-p": topP = doubleValue(arg)
+        case "--seed":
+            guard let s = UInt64(value(arg)) else { fail("invalid --seed") }
+            seed = s
+        case "--kv-capacity": kvCapacity = intValue(arg)
+        case "--raw", "--no-chat-template": applyChatTemplate = false
+        case "--verbose", "-v": verbose = true
+        case "-h", "--help": printUsage(); exit(0)
+        default: fail("unknown option: \(arg)")
+        }
+        i += 1
+    }
+
+    guard let modelPath = model else { fail("--model is required") }
+    guard let promptText = prompt else { fail("--prompt is required") }
+
+    if !CoreAIPipeline.isLinked {
+        FileHandle.standardError.write(
+            Data(
+                "note: Core AI runtime not linked — rebuild with COREAI_RUNTIME=1 (Xcode 27 / macOS 27).\n"
+                    .utf8))
+    }
+
+    let options = CoreAIPipeline.Options(
+        maxTokens: maxTokens,
+        temperature: temperature,
+        topK: topK,
+        topP: topP,
+        applyChatTemplate: applyChatTemplate,
+        kvCapacity: kvCapacity,
+        seed: seed,
+        verbose: verbose)
+
+    // Bridge the async runtime onto the blocking CLI entry point.
+    let draftPath = draft
+    let semaphore = DispatchSemaphore(value: 0)
+    nonisolated(unsafe) var exitCode: Int32 = 0
+    Task {
+        defer { semaphore.signal() }
+        do {
+            let onToken: (String) -> Void = { delta in
+                FileHandle.standardOutput.write(Data(delta.utf8))
+            }
+            if CoreAIPipeline.isDiffusionBundle(modelPath: modelPath) {
+                // Block-diffusion bundle (stateless bidirectional forward + host denoise loop).
+                let result = try await CoreAIPipeline.runDiffusion(
+                    modelPath: modelPath,
+                    prompt: promptText,
+                    options: options,
+                    onToken: onToken)
+                FileHandle.standardOutput.write(Data("\n".utf8))
+                // The denoise mechanics are the headline — always report them.
+                let summary = String(
+                    format:
+                        "[coreai] diffusion: %d prompt tok, %d generated, stop=%@, %d blocks, "
+                        + "%d total steps, load=%.2fs gen=%.2fs\n",
+                    result.promptTokenCount, result.generatedTokenCount, result.stopReason.rawValue,
+                    result.blocks.count, result.totalSteps, result.modelLoadSeconds,
+                    result.generateSeconds)
+                FileHandle.standardError.write(Data(summary.utf8))
+                for (i, b) in result.blocks.enumerated() {
+                    let line = String(
+                        format:
+                            "[coreai]   block %d: %d steps, stop=%@, finalAccepted=%d, committed=%d tok, %.2fs\n",
+                        i + 1, b.stepsRun, b.stopReason, b.finalAcceptedCount, b.committedTokens,
+                        b.seconds)
+                    FileHandle.standardError.write(Data(line.utf8))
+                }
+            } else if let draftPath {
+                // Speculative decoding: target + draft pair.
+                let result = try await CoreAIPipeline.runSpeculative(
+                    targetPath: modelPath,
+                    draftPath: draftPath,
+                    prompt: promptText,
+                    options: options,
+                    draftTokens: draftTokens,
+                    onToken: onToken)
+                FileHandle.standardOutput.write(Data("\n".utf8))
+                // The acceptance rate + speedup is the headline metric — always report it.
+                let summary = String(
+                    format:
+                        "[coreai] speculative: %d prompt tok, %d generated, stop=%@, K=%d, "
+                        + "%d/%d drafts accepted (%.1f%%), %.2f tok/target-pass, "
+                        + "load=%.2fs prefill=%.2fs decode=%.2fs (%.1f tok/s)\n",
+                    result.promptTokenCount, result.generatedTokenCount, result.stopReason.rawValue,
+                    result.draftTokens, result.acceptedDraftTokens, result.draftedTokens,
+                    result.acceptanceRate * 100, result.tokensPerTargetForward,
+                    result.modelLoadSeconds, result.prefillSeconds, result.decodeSeconds,
+                    result.decodeTokensPerSecond)
+                FileHandle.standardError.write(Data(summary.utf8))
+            } else {
+                let result = try await CoreAIPipeline.run(
+                    modelPath: modelPath,
+                    prompt: promptText,
+                    options: options,
+                    onToken: onToken)
+                // Newline after the streamed text, then a short summary to stderr.
+                FileHandle.standardOutput.write(Data("\n".utf8))
+                if verbose {
+                    let summary = String(
+                        format:
+                            "[coreai] %d prompt tok, %d generated, stop=%@, load=%.2fs prefill=%.2fs decode=%.2fs (%.1f tok/s)\n",
+                        result.promptTokenCount, result.generatedTokenCount, result.stopReason.rawValue,
+                        result.modelLoadSeconds, result.prefillSeconds, result.decodeSeconds,
+                        result.decodeTokensPerSecond)
+                    FileHandle.standardError.write(Data(summary.utf8))
+                }
+            }
+        } catch {
+            FileHandle.standardError.write(Data("error: \(error)\n".utf8))
+            exitCode = 1
+        }
+    }
+    // Pump the main RunLoop while waiting so Metal/MPSGraph GPU-completion callbacks dispatched to
+    // the main queue can fire. A bare `semaphore.wait()` blocks the main thread, which deadlocks
+    // Apple's pipelined engine (custom Metal command queue + ComputeStream). The sequential engine
+    // tolerates a blocked main thread, but the fast path does not.
+    while semaphore.wait(timeout: .now()) == .timedOut {
+        RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02))
+    }
+    exit(exitCode)
+}
+
+// MARK: - eagle subcommand
+
+func eagleCommand(_ argv: [String]) {
+    var target: String?
+    var draft: String?
+    var tokenizer: String?
+    var prompt: String?
+    var maxTokens = 64
+    var draftTokens = 4   // sweet spot on the sequential engine: K=4 maximizes tok/s across content
+                          // (K>=8 overflows the full-layer SDPA threadgroup limit on the verify forward)
+    var applyChatTemplate = true
+    var verbose = false
+    var targetOnly = false
+    var draftUnrolled: String?
+
+    func fail(_ m: String) -> Never {
+        FileHandle.standardError.write(Data("error: \(m)\n".utf8)); exit(2)
+    }
+    var i = 0
+    func value(_ f: String) -> String { i += 1; guard i < argv.count else { fail("missing value for \(f)") }; return argv[i] }
+    while i < argv.count {
+        switch argv[i] {
+        case "--target": target = value(argv[i])
+        case "--draft": draft = value(argv[i])
+        case "--draft-unrolled": draftUnrolled = value(argv[i])
+        case "--tokenizer": tokenizer = value(argv[i])
+        case "--prompt", "-p": prompt = value(argv[i])
+        case "--max-tokens", "-n": maxTokens = Int(value(argv[i])) ?? maxTokens
+        case "--draft-tokens": draftTokens = Int(value(argv[i])) ?? draftTokens
+        case "--raw", "--no-chat-template": applyChatTemplate = false
+        case "--target-only": targetOnly = true
+        case "--verbose", "-v": verbose = true
+        default: fail("unknown eagle option: \(argv[i])")
+        }
+        i += 1
+    }
+    guard let targetPath = target else { fail("eagle requires --target <aimodel>") }
+    guard let draftPath = draft else { fail("eagle requires --draft <aimodel>") }
+    guard let tokDir = tokenizer else { fail("eagle requires --tokenizer <dir>") }
+    guard let promptText = prompt else { fail("eagle requires --prompt") }
+
+    let options = CoreAIPipeline.Options(
+        maxTokens: maxTokens,
+        temperature: 0,
+        topK: nil,
+        topP: nil,
+        applyChatTemplate: applyChatTemplate,
+        kvCapacity: nil,
+        seed: nil,
+        verbose: verbose)
+
+    let targetP = targetPath, draftP = draftPath, tokD = tokDir, promptP = promptText
+    let dt = draftTokens
+    let tOnly = targetOnly
+    let unrolledP = draftUnrolled
+    let semaphore = DispatchSemaphore(value: 0)
+    nonisolated(unsafe) var exitCode: Int32 = 0
+    Task {
+        defer { semaphore.signal() }
+        do {
+            let onToken: (String) -> Void = { FileHandle.standardOutput.write(Data($0.utf8)) }
+            let r = try await CoreAIPipeline.runEagle(
+                targetAimodel: targetP, draftAimodel: draftP, tokenizerDir: tokD,
+                prompt: promptP, options: options, draftTokens: dt, targetOnly: tOnly,
+                draftUnrolledAimodel: unrolledP, onToken: onToken)
+            FileHandle.standardOutput.write(Data("\n".utf8))
+            let summary = String(
+                format: "[coreai] eagle: %d prompt, %d generated, stop=%@, K=%d, "
+                    + "%d/%d accepted (%.1f%%), %.2f tok/pass, load=%.2fs prefill=%.2fs "
+                    + "decode=%.2fs (%.1f tok/s)\n",
+                r.promptTokenCount, r.generatedTokenCount, r.stopReason.rawValue, r.draftTokens,
+                r.acceptedDraftTokens, r.draftedTokens,
+                r.draftedTokens > 0 ? Double(r.acceptedDraftTokens) / Double(r.draftedTokens) * 100 : 0,
+                r.iterations > 0 ? Double(r.generatedTokenCount) / Double(r.iterations) : 0,
+                r.modelLoadSeconds, r.prefillSeconds, r.decodeSeconds,
+                r.decodeSeconds > 0 ? Double(r.generatedTokenCount) / r.decodeSeconds : 0)
+            FileHandle.standardError.write(Data(summary.utf8))
+        } catch {
+            FileHandle.standardError.write(Data("eagle error: \(error)\n".utf8)); exitCode = 1
+        }
+    }
+    while semaphore.wait(timeout: .now()) == .timedOut {
+        RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02))
+    }
+    exit(exitCode)
+}
+
+// MARK: - bench subcommand
+
+func benchCommand(_ argv: [String]) {
+    var model: String?
+    var seqs: [Int] = [1, 2, 4, 7, 1]
+    var i = 0
+    while i < argv.count {
+        switch argv[i] {
+        case "--model", "-m":
+            i += 1
+            guard i < argv.count else { FileHandle.standardError.write(Data("error: --model needs a value\n".utf8)); exit(2) }
+            model = argv[i]
+        case "--seqs":
+            i += 1
+            guard i < argv.count else { break }
+            seqs = argv[i].split(separator: ",").compactMap { Int($0) }
+        default:
+            FileHandle.standardError.write(Data("unknown bench option: \(argv[i])\n".utf8)); exit(2)
+        }
+        i += 1
+    }
+    guard let modelPath = model else {
+        FileHandle.standardError.write(Data("error: bench requires --model <bundle>\n".utf8)); exit(2)
+    }
+
+    let semaphore = DispatchSemaphore(value: 0)
+    nonisolated(unsafe) var exitCode: Int32 = 0
+    Task {
+        defer { semaphore.signal() }
+        do {
+            _ = try await CoreAIPipeline.benchForward(modelPath: modelPath, seqLengths: seqs)
+        } catch {
+            FileHandle.standardError.write(Data("bench error: \(error)\n".utf8))
+            exitCode = 1
+        }
+    }
+    while semaphore.wait(timeout: .now()) == .timedOut {
+        RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02))
+    }
+    exit(exitCode)
+}
+
+// MARK: - serve subcommand
+
+func serveCommand(_ argv: [String]) {
+    let cwd = FileManager.default.currentDirectoryPath
+    var host = "127.0.0.1"
+    var port = 8080
+    var exportsDir = cwd + "/exports"
+    var registryPath = cwd + "/models/registry.json"
+    var webDir = cwd + "/web"
+    var convertScript = cwd + "/python/converter/convert.py"
+    var python = "python3"
+    var verbose = false
+    var statsFile: String? = nil   // usage-stats persistence (default ~/.caix/usage.json)
+    // EAGLE MTP model (the fastest gemma we built). Enabled by default with the known bundle paths;
+    // disable with --no-eagle, or override paths individually.
+    var eagleEnabled = true
+    var eagleName = "gemma-4-26b-a4b-mtp"
+    var eagleTarget = cwd + "/exports/gemma-4-26b-a4b-eagle-target/eagle_target.aimodel"
+    var eagleDraft = "/Volumes/SSD/ai-dev/eagle-resume/eagle_draft.aimodel"
+    var eagleUnrolled: String? = "/Volumes/SSD/ai-dev/eagle-resume/eagle_draft_unrolled_k4.aimodel"
+    var eagleTokenizer = cwd + "/exports/gemma-4-26b-a4b-coreai/tokenizer"
+
+    func fail(_ msg: String) -> Never {
+        FileHandle.standardError.write(Data("error: \(msg)\n".utf8))
+        exit(2)
+    }
+
+    var i = 0
+    func value(_ flag: String) -> String {
+        i += 1
+        guard i < argv.count else { fail("missing value for \(flag)") }
+        return argv[i]
+    }
+
+    while i < argv.count {
+        let arg = argv[i]
+        switch arg {
+        case "--port": guard let p = Int(value(arg)) else { fail("invalid --port") }; port = p
+        case "--host": host = value(arg)
+        case "--exports": exportsDir = value(arg)
+        case "--registry": registryPath = value(arg)
+        case "--web": webDir = value(arg)
+        case "--convert-script": convertScript = value(arg)
+        case "--python": python = value(arg)
+        case "--stats-file": statsFile = value(arg)
+        case "--no-eagle": eagleEnabled = false
+        case "--eagle-name": eagleName = value(arg)
+        case "--eagle-target": eagleTarget = value(arg)
+        case "--eagle-draft": eagleDraft = value(arg)
+        case "--eagle-unrolled": eagleUnrolled = value(arg)
+        case "--eagle-tokenizer": eagleTokenizer = value(arg)
+        case "--verbose", "-v": verbose = true
+        case "-h", "--help": printUsage(); exit(0)
+        default: fail("unknown option: \(arg)")
+        }
+        i += 1
+    }
+
+    // Build the EAGLE config only if the target+draft bundles actually exist on disk.
+    var eagleConfig: EagleConfig? = nil
+    if eagleEnabled {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: eagleTarget) && fm.fileExists(atPath: eagleDraft) {
+            let unrolled = eagleUnrolled.flatMap { fm.fileExists(atPath: $0) ? $0 : nil }
+            eagleConfig = EagleConfig(
+                name: eagleName, targetPath: eagleTarget, draftPath: eagleDraft,
+                unrolledPath: unrolled, tokenizerDir: eagleTokenizer)
+            FileHandle.standardError.write(Data(
+                "eagle MTP model: \(eagleName) (unrolled: \(unrolled != nil))\n".utf8))
+        } else {
+            FileHandle.standardError.write(Data(
+                "note: EAGLE bundles not found (\(eagleTarget)); serving standard models only.\n".utf8))
+        }
+    }
+
+    if !CoreAIPipeline.isLinked {
+        FileHandle.standardError.write(
+            Data(
+                "note: Core AI runtime not linked — /v1 inference returns 503. Rebuild with COREAI_RUNTIME=1 for native generation.\n"
+                    .utf8))
+    }
+
+    let semaphore = DispatchSemaphore(value: 0)
+    nonisolated(unsafe) var exitCode: Int32 = 0
+    Task {
+        defer { semaphore.signal() }
+        do {
+            try await CoreAIServer.serve(
+                host: host,
+                port: port,
+                exportsDir: exportsDir,
+                registryPath: registryPath,
+                webDir: webDir,
+                convertScript: convertScript,
+                pythonExecutable: python,
+                verbose: verbose,
+                eagleConfig: eagleConfig,
+                statsFile: statsFile)
+        } catch {
+            FileHandle.standardError.write(Data("serve error: \(error)\n".utf8))
+            exitCode = 1
+        }
+    }
+    semaphore.wait()
+    exit(exitCode)
+}
