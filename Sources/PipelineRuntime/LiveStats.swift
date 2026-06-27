@@ -54,9 +54,14 @@ public struct UsageSnapshot: Codable, Sendable {
     public var avgTokensPerSecond: Double        // lifetime, output-weighted
     public var rollingTokensPerSecond: Double    // last `rollingWindowMinutes`
     public var rollingWindowMinutes: Int
+    public var rollingRequests: Int
     public var rollingOutputTokens: Int
     public var uptimeSeconds: Double
     public var lastModel: String
+    public var lastOutputTokens: Int
+    public var lastTokensPerSecond: Double
+    public var lastDecodeSeconds: Double
+    public var lastAt: Double
     public var byModel: [ModelUsage]
 }
 
@@ -130,9 +135,12 @@ public enum Usage {
         lock.lock(); defer { lock.unlock() }
         let lifeTps = totalDecode > 0 ? Double(totalOutput) / totalDecode : 0
         let cutoff = now - Double(windowMinutes) * 60
-        var rollOut = 0; var rollDec = 0.0
-        for r in ring where r.at >= cutoff { rollOut += r.output; rollDec += r.decode }
+        var rollOut = 0; var rollDec = 0.0; var rollReq = 0
+        for r in ring where r.at >= cutoff { rollOut += r.output; rollDec += r.decode; rollReq += 1 }
         let rollTps = rollDec > 0 ? Double(rollOut) / rollDec : 0
+        let last = ring.last
+        let lastDecode = last?.decode ?? 0
+        let lastOutput = last?.output ?? 0
         let models = perModel.map { (k, v) in
             ModelUsage(model: k, requests: v.requests, inputTokens: v.input, outputTokens: v.output,
                        avgTokensPerSecond: v.decode > 0 ? Double(v.output) / v.decode : 0)
@@ -140,7 +148,10 @@ public enum Usage {
         return UsageSnapshot(
             totalRequests: totalRequests, totalInputTokens: totalInput, totalOutputTokens: totalOutput,
             avgTokensPerSecond: lifeTps, rollingTokensPerSecond: rollTps,
-            rollingWindowMinutes: windowMinutes, rollingOutputTokens: rollOut,
-            uptimeSeconds: startEpoch > 0 ? now - startEpoch : 0, lastModel: lastModel, byModel: models)
+            rollingWindowMinutes: windowMinutes, rollingRequests: rollReq, rollingOutputTokens: rollOut,
+            uptimeSeconds: startEpoch > 0 ? now - startEpoch : 0, lastModel: last?.model ?? lastModel,
+            lastOutputTokens: lastOutput,
+            lastTokensPerSecond: lastDecode > 0 ? Double(lastOutput) / lastDecode : 0,
+            lastDecodeSeconds: lastDecode, lastAt: last?.at ?? 0, byModel: models)
     }
 }

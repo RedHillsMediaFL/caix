@@ -12,6 +12,7 @@
 - Added EAGLE/MTP serve and CLI flags for vocabulary, hidden size, sliding window, and max context so speculative targets are not hardcoded to one Gemma size.
 - Exposed speculative runtime dimensions in the dashboard's advanced server panel.
 - Added local discovery/loading and RHM installability for EAGLE target+draft package directories.
+- Added a user-focused usage dashboard with rolling tok/s, last-generation speed, total input/output tokens, rolling-window output, and visible per-model throughput.
 
 ### Fixed
 

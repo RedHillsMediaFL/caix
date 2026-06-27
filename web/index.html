@@ -87,6 +87,9 @@
   .toolbar select{min-width:260px;flex:1}
   .summary{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--soft);border:1px solid var(--soft)}
   .summary .metric{background:#151a21}
+  .usage-summary{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+  .detail-grid .notice{min-height:58px}
   .models-list{display:flex;flex-direction:column}
   .model-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;padding:12px 13px;border-top:1px solid var(--soft)}
   .model-row:first-child{border-top:0}
@@ -119,7 +122,7 @@
     header{align-items:flex-start;flex-wrap:wrap}
     .connection{margin-left:0;width:100%;justify-content:space-between}
     .topline{grid-template-columns:repeat(2,minmax(0,1fr))}
-    .summary,.grid2,.grid3{grid-template-columns:1fr}
+    .summary,.usage-summary,.grid2,.grid3,.detail-grid{grid-template-columns:1fr}
     .toolbar select{min-width:0}
   }
   @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
@@ -141,12 +144,12 @@
   </header>
 
   <div class="topline">
-    <div class="metric"><b id="m_cpu">-</b><span>machine</span></div>
+    <div class="metric"><b id="m_tps">-</b><span>rolling tok/s</span></div>
+    <div class="metric"><b id="m_last">-</b><span>last generation</span></div>
+    <div class="metric"><b id="m_tok">-</b><span>tokens in/out</span></div>
+    <div class="metric"><b id="m_req">-</b><span>requests</span></div>
     <div class="metric"><b id="m_mem">-</b><span>memory</span></div>
     <div class="metric"><b id="m_gpu">-</b><span>gpu</span></div>
-    <div class="metric"><b id="m_req">-</b><span>requests</span></div>
-    <div class="metric"><b id="m_tok">-</b><span>tokens</span></div>
-    <div class="metric"><b id="m_tps">-</b><span>last tok/s</span></div>
   </div>
 
   <main class="layout">
@@ -182,13 +185,21 @@
           <h2>Usage</h2>
           <span class="meta" id="usageMeta">-</span>
         </div>
-        <div class="summary">
+        <div class="summary usage-summary">
+          <div class="metric"><b id="u_roll">-</b><span>rolling tok/s</span></div>
+          <div class="metric"><b id="u_avg">-</b><span>lifetime tok/s</span></div>
+          <div class="metric"><b id="u_last">-</b><span>last tok/s</span></div>
           <div class="metric"><b id="u_req">-</b><span>requests</span></div>
           <div class="metric"><b id="u_in">-</b><span>tokens in</span></div>
           <div class="metric"><b id="u_out">-</b><span>tokens out</span></div>
-          <div class="metric"><b id="u_avg">-</b><span>avg tok/s</span></div>
+          <div class="metric"><b id="u_roll_tokens">-</b><span>window output</span></div>
+          <div class="metric"><b id="u_last_model">-</b><span>last model</span></div>
         </div>
-        <div class="models-list advanced-only" id="perModel" hidden></div>
+        <div class="detail-grid">
+          <div class="notice"><span class="faint">Last generation</span><br><span id="u_last_detail">-</span></div>
+          <div class="notice"><span class="faint">Speculation</span><br><span id="u_spec_detail">-</span></div>
+        </div>
+        <div class="models-list" id="perModel"></div>
       </section>
     </div>
 
@@ -265,6 +276,14 @@ const $=id=>document.getElementById(id);
 const state={models:[],rhm:[],mode:'simple'};
 const gb=n=>n?((n/1073741824).toFixed(1)+' GB'):'-';
 const k=n=>{n=n||0;return n>=1e6?(n/1e6).toFixed(2)+'M':n>=1e3?(n/1e3).toFixed(1)+'k':String(n)};
+const tps=n=>((Number(n)||0).toFixed(1)+' tok/s');
+const secs=s=>{
+  s=Math.max(0,Number(s)||0);
+  if(s>=86400)return Math.floor(s/86400)+'d '+Math.floor((s%86400)/3600)+'h';
+  if(s>=3600)return Math.floor(s/3600)+'h '+Math.floor((s%3600)/60)+'m';
+  if(s>=60)return Math.round(s/60)+'m';
+  return Math.round(s)+'s';
+};
 const esc=s=>String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const attr=s=>esc(s).replace(/"/g,'&quot;');
 async function api(url,opt){
@@ -299,7 +318,6 @@ document.querySelectorAll('#modeSwitch button').forEach(b=>b.addEventListener('c
 async function pollStats(){
   try{
     const s=await api('/api/stats'); setConn(true);
-    $('m_cpu').textContent=(s.chip||'Apple silicon')+' / '+(s.logicalCores||'-')+'c';
     const used=Math.round((s.memoryUsedFraction||0)*100);
     $('m_mem').textContent=gb(s.usedRAMBytes)+' / '+gb(s.totalRAMBytes)+' ('+used+'%)';
     $('m_gpu').textContent=(s.gpuUtilizationPercent??0)+'% / '+gb(s.gpuInUseMemoryBytes);
@@ -326,22 +344,37 @@ async function pollServer(){
 async function pollUsage(){
   try{
     const u=await api('/api/usage');
+    const win=u.rollingWindowMinutes||10;
     $('m_req').textContent=k(u.totalRequests);
     $('m_tok').textContent=k(u.totalInputTokens)+' in / '+k(u.totalOutputTokens)+' out';
+    $('m_tps').textContent=tps(u.rollingTokensPerSecond);
+    $('m_last').textContent=u.lastOutputTokens? tps(u.lastTokensPerSecond) : '-';
     $('u_req').textContent=k(u.totalRequests);
     $('u_in').textContent=k(u.totalInputTokens);
     $('u_out').textContent=k(u.totalOutputTokens);
-    $('u_avg').textContent=(u.avgTokensPerSecond||0).toFixed(1);
-    $('usageMeta').textContent='up '+Math.round((u.uptimeSeconds||0)/60)+'m';
+    $('u_roll').textContent=tps(u.rollingTokensPerSecond);
+    $('u_avg').textContent=tps(u.avgTokensPerSecond);
+    $('u_last').textContent=u.lastOutputTokens? tps(u.lastTokensPerSecond) : '-';
+    $('u_roll_tokens').textContent=k(u.rollingOutputTokens)+' out / '+k(u.rollingRequests)+' req';
+    $('u_last_model').textContent=u.lastModel||'-';
+    $('usageMeta').textContent=win+'m window / up '+secs(u.uptimeSeconds);
+    const lastAge=u.lastAt?secs(Date.now()/1000-u.lastAt)+' ago':'never';
+    $('u_last_detail').textContent=u.lastOutputTokens
+      ? ((u.lastModel||'model')+' / '+k(u.lastOutputTokens)+' output / '+secs(u.lastDecodeSeconds)+' decode / '+lastAge)
+      : 'no completed generations yet';
     const pm=$('perModel');
-    pm.innerHTML=(u.byModel||[]).map(x=>'<div class="model-row"><div><div class="model-id">'+esc(x.model)+'</div><div class="model-sub">'+k(x.inputTokens)+' in / '+k(x.outputTokens)+' out</div></div><span class="pill">'+(x.avgTokensPerSecond||0).toFixed(1)+' tok/s</span></div>').join('');
+    pm.innerHTML=(u.byModel||[]).map(x=>'<div class="model-row"><div><div class="model-id">'+esc(x.model)+'</div><div class="model-sub">'+k(x.requests)+' req / '+k(x.inputTokens)+' in / '+k(x.outputTokens)+' out</div></div><span class="pill">'+tps(x.avgTokensPerSecond)+'</span></div>').join('')||'<div class="empty">no per-model usage yet</div>';
   }catch(e){}
 }
 async function pollGen(){
   try{
     const s=await api('/api/genstats');
-    if(s.available===false)return;
-    $('m_tps').textContent=(s.tokensPerSecond||0).toFixed(1)+' tok/s';
+    if(s.available===false){
+      $('u_spec_detail').textContent='no speculative generations yet';
+      return;
+    }
+    const age=s.at?secs(Date.now()/1000-s.at)+' ago':'';
+    $('u_spec_detail').textContent=(s.model||'speculative model')+' / '+Math.round((s.acceptanceRate||0)*100)+'% accept / '+(s.tokensPerPass||0).toFixed(2)+' tok/pass / K='+k(s.draftTokens)+' / '+age;
   }catch(e){}
 }
 async function pollModels(){
