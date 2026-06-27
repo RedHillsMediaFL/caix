@@ -266,14 +266,38 @@ public struct ResolvedBundle: Sendable {
     ///    else 0 (no floor — standard attention models).
     static func resolveMinKVCapacity(root: URL, manifest: BundleManifest) -> Int {
         if let explicit = manifest.language?.minKVCapacity, explicit > 0 { return explicit }
-        guard let hfId = manifest.source?.hfModelId,
+        if let hfId = manifest.source?.hfModelId,
             let entry = registryEntry(forHFRepo: hfId, near: root)
-        else { return 0 }
-        if let m = entry["min_kv_capacity"] as? Int, m > 0 { return m }
-        if let m = entry["min_kv_capacity"] as? Double, m > 0 { return Int(m) }
-        // qwen3_5 hybrids pack a recurrent state into a fixed 512-position KV prefix.
-        if (entry["model_type"] as? String) == "qwen3_5" { return 512 }
+        {
+            if let m = entry["min_kv_capacity"] as? Int, m > 0 { return m }
+            if let m = entry["min_kv_capacity"] as? Double, m > 0 { return Int(m) }
+            // qwen3_5 hybrids pack a recurrent state into a fixed 512-position KV prefix.
+            if (entry["model_type"] as? String) == "qwen3_5" { return 512 }
+        }
+        if let inferred = inferHybridMinKVCapacity(manifest: manifest), inferred > 0 {
+            return inferred
+        }
         return 0
+    }
+
+    /// Best-effort floor for qwen3_5 hybrid bundles converted outside the registry path.
+    /// The converter should eventually bake `language.min_kv_capacity` into metadata, but
+    /// dashboard/HF conversions may produce bundles before that metadata exists. A too-small
+    /// cache corrupts or rejects the SSM prefix; a conservative floor only allocates extra cache.
+    private static func inferHybridMinKVCapacity(manifest: BundleManifest) -> Int? {
+        let haystack = [
+            manifest.name,
+            manifest.source?.hfModelId,
+            manifest.language?.tokenizer,
+        ].compactMap { $0?.lowercased() }.joined(separator: " ")
+
+        if haystack.contains("qwen3.6-27b") { return 768 }
+        if haystack.contains("qwen3_5") || haystack.contains("qwen3.5")
+            || haystack.contains("qwythos") || haystack.contains("ornith")
+        {
+            return 512
+        }
+        return nil
     }
 
     /// Find the `models/registry.json` entry whose `hf_repo` equals `hfRepo`, searching upward
