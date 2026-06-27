@@ -129,6 +129,8 @@ final class ServerRuntime: Sendable {
         router.post("/api/convert") { req, ctx in try await self.convertHandler(req, ctx) }
         // Model management: supported types/settings, HF support check, HF convert, live gen stats.
         router.get("/api/supported") { _, _ in self.supportedHandler() }
+        router.get("/api/rhm-models") { _, _ in await self.rhmModelsHandler() }
+        router.post("/api/rhm-download") { req, ctx in try await self.rhmDownloadHandler(req, ctx) }
         router.post("/api/check-support") { req, ctx in try await self.checkSupportHandler(req, ctx) }
         router.post("/api/convert-hf") { req, ctx in try await self.convertHFHandler(req, ctx) }
         router.get("/api/genstats") { _, _ in self.genStatsHandler() }
@@ -213,6 +215,49 @@ final class ServerRuntime: Sendable {
             "note": .string("Paste a HuggingFace repo; unsupported architectures are flagged, supported ones convert + load."),
         ]
         return JSONResponder.encode(payload)
+    }
+
+    /// `GET /api/rhm-models` — discover Red Hills Media caix repos that can be installed locally.
+    private func rhmModelsHandler() async -> Response {
+        do {
+            let entries = try await fetchRHMModels()
+            let local = await manager.listModels()
+            let byName = Dictionary(uniqueKeysWithValues: local.map { ($0.name, $0) })
+            let enriched = entries.map { entry in
+                var next = entry
+                let localEntry = byName[entry.name] ?? entry.bundleName.flatMap { byName[$0] }
+                next.installed = localEntry?.bundle == true
+                next.loaded = localEntry?.status == "loaded"
+                next.installedName = localEntry?.name
+                return next
+            }
+            return JSONResponder.encode(enriched)
+        } catch {
+            return JSONResponder.error("RHM model discovery failed: \(error.localizedDescription)", status: .badGateway)
+        }
+    }
+
+    /// `POST /api/rhm-download` {repo, name?} — install an already-converted RHM caix repo.
+    private func rhmDownloadHandler(_ request: Request, _ context: BasicRequestContext) async throws -> Response {
+        guard let body = try? await Self.decode(RHMDownloadRequest.self, request),
+              Self.isAllowedRHMRepo(body.repo) else {
+            return JSONResponder.error("expected {\"repo\":\"redhillsmediafl/<name>-caix\"}", status: .badRequest)
+        }
+        guard let meta = try await fetchRHMBundleMetadata(repo: body.repo),
+              (meta.kind ?? "llm") == "llm" else {
+            return JSONResponder.error("repo is not a direct caix bundle with root metadata.json", status: .badRequest)
+        }
+        let name = body.name?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+            ?? Self.defaultRHMDownloadName(for: body.repo)
+        if let err = await jobs.startDownloadRHM(name: name, hfRepo: body.repo, exportsDir: exportsDir) {
+            return JSONResponder.error(err, status: .badRequest)
+        }
+        return JSONResponder.encode([
+            "ok": .bool(true),
+            "started": .bool(true),
+            "repo": .string(body.repo),
+            "name": .string(name),
+        ] as [String: JSONValue])
     }
 
     /// `GET /api/server` — read-only runtime metadata for the dashboard's server panel.
@@ -323,6 +368,91 @@ final class ServerRuntime: Sendable {
             return JSONResponder.encode(["text": String(text.prefix(8000))])
         } catch {
             return JSONResponder.error("fetch failed: \(error.localizedDescription)", status: .badGateway)
+        }
+    }
+
+    private func fetchRHMModels() async throws -> [RHMModelEntry] {
+        let url = URL(string: "https://huggingface.co/api/models?author=redhillsmediafl&search=caix&full=true")!
+        var req = URLRequest(url: url, timeoutInterval: 20)
+        req.setValue("caix/1.0", forHTTPHeaderField: "User-Agent")
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        if let http = resp as? HTTPURLResponse, http.statusCode < 200 || http.statusCode >= 300 {
+            throw NSError(domain: "caix.hf", code: http.statusCode)
+        }
+        guard let rows = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return []
+        }
+        var out: [RHMModelEntry] = []
+        for row in rows {
+            guard
+                let repo = row["id"] as? String,
+                Self.isAllowedRHMRepo(repo),
+                (row["library_name"] as? String) == "caix"
+            else { continue }
+            let tags = row["tags"] as? [String] ?? []
+            let siblings = (row["siblings"] as? [[String: Any]]) ?? []
+            let hasMetadata = siblings.contains { ($0["rfilename"] as? String) == "metadata.json" }
+            let meta: RHMBundleMetadata?
+            if hasMetadata {
+                meta = try? await fetchRHMBundleMetadata(repo: repo)
+            } else {
+                meta = nil
+            }
+            let name = Self.defaultRHMDownloadName(for: repo)
+            out.append(RHMModelEntry(
+                repo: repo,
+                name: name,
+                bundleName: meta?.name,
+                baseModel: Self.baseModel(from: tags),
+                downloads: row["downloads"] as? Int,
+                lastModified: row["lastModified"] as? String,
+                tags: Self.displayTags(from: tags),
+                installable: hasMetadata && ((meta?.kind ?? "llm") == "llm"),
+                installed: false,
+                loaded: false,
+                installedName: nil,
+                note: hasMetadata ? nil : "package requires manual server flags"))
+        }
+        return out.sorted { $0.repo < $1.repo }
+    }
+
+    private func fetchRHMBundleMetadata(repo: String) async throws -> RHMBundleMetadata? {
+        guard Self.isAllowedRHMRepo(repo) else { return nil }
+        let encodedRepo = repo.split(separator: "/").map { String($0).addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? String($0) }.joined(separator: "/")
+        guard let url = URL(string: "https://huggingface.co/\(encodedRepo)/resolve/main/metadata.json") else {
+            return nil
+        }
+        var req = URLRequest(url: url, timeoutInterval: 20)
+        req.setValue("caix/1.0", forHTTPHeaderField: "User-Agent")
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        if let http = resp as? HTTPURLResponse, http.statusCode == 404 {
+            return nil
+        }
+        return try JSONDecoder().decode(RHMBundleMetadata.self, from: data)
+    }
+
+    private static func isAllowedRHMRepo(_ repo: String) -> Bool {
+        let parts = repo.split(separator: "/", omittingEmptySubsequences: false)
+        guard parts.count == 2, parts[0].lowercased() == "redhillsmediafl",
+              parts[1].lowercased().hasSuffix("-caix") else { return false }
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
+        return parts[1].unicodeScalars.allSatisfy { allowed.contains($0) }
+    }
+
+    private static func defaultRHMDownloadName(for repo: String) -> String {
+        repo.split(separator: "/").last.map(String.init) ?? "rhm-model-caix"
+    }
+
+    private static func baseModel(from tags: [String]) -> String? {
+        tags.first { $0.hasPrefix("base_model:") && !$0.hasPrefix("base_model:finetune:") }
+            .map { String($0.dropFirst("base_model:".count)) }
+    }
+
+    private static func displayTags(from tags: [String]) -> [String] {
+        let hiddenPrefixes = ["base_model:", "license:", "region:"]
+        let hidden = Set(["caix", "core-ai", "coreai", "apple-silicon"])
+        return tags.filter { tag in
+            !hidden.contains(tag) && !hiddenPrefixes.contains { tag.hasPrefix($0) }
         }
     }
 
@@ -578,6 +708,32 @@ struct HFConvertRequest: Codable, Sendable {
     var compute_precision: String?  // float16 | bfloat16 | float32
     var context: Int?
     var gguf_file: String?
+}
+
+/// `POST /api/rhm-download` body.
+struct RHMDownloadRequest: Codable, Sendable {
+    let repo: String
+    var name: String?
+}
+
+struct RHMBundleMetadata: Codable, Sendable {
+    var name: String?
+    var kind: String?
+}
+
+struct RHMModelEntry: Codable, Sendable {
+    var repo: String
+    var name: String
+    var bundleName: String?
+    var baseModel: String?
+    var downloads: Int?
+    var lastModified: String?
+    var tags: [String]
+    var installable: Bool
+    var installed: Bool
+    var loaded: Bool
+    var installedName: String?
+    var note: String?
 }
 
 struct ServerInfo: Codable, Sendable {

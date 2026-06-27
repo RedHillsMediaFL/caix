@@ -10,6 +10,7 @@ import Foundation
 actor JobTracker {
     private enum State: Sendable { case running, done, failed }
     private struct Job: Sendable {
+        let kind: String
         let model: String
         let start: Date
         let logPath: String?
@@ -56,7 +57,9 @@ actor JobTracker {
             try? logHandle?.close()
             return "failed to launch converter: \(error.localizedDescription)"
         }
-        jobs[model] = Job(model: model, start: Date(), logPath: logURL?.path, state: .running, finishedAt: nil)
+        jobs[model] = Job(
+            kind: "convert", model: model, start: Date(), logPath: logURL?.path,
+            state: .running, finishedAt: nil)
         return nil
     }
 
@@ -145,7 +148,9 @@ actor JobTracker {
             try? logHandle?.close()
             return "failed to launch converter: \(error.localizedDescription)"
         }
-        jobs[name] = Job(model: name, start: Date(), logPath: logURL?.path, state: .running, finishedAt: nil)
+        jobs[name] = Job(
+            kind: "convert", model: name, start: Date(), logPath: logURL?.path,
+            state: .running, finishedAt: nil)
         return nil
     }
 
@@ -186,7 +191,52 @@ actor JobTracker {
             try? logHandle?.close()
             return "failed to launch converter: \(error.localizedDescription)"
         }
-        jobs[name] = Job(model: name, start: Date(), logPath: logURL?.path, state: .running, finishedAt: nil)
+        jobs[name] = Job(
+            kind: "convert", model: name, start: Date(), logPath: logURL?.path,
+            state: .running, finishedAt: nil)
+        return nil
+    }
+
+    /// Download an already-converted caix bundle from Hugging Face into `exportsDir/name`.
+    /// The repo must already contain root `metadata.json`; conversion is not run here.
+    func startDownloadRHM(name: String, hfRepo: String, exportsDir: URL) -> String? {
+        if let existing = jobs[name], existing.state == .running {
+            return "download already running for \(name)"
+        }
+        guard Self.isSafeName(name) else {
+            return "unsafe bundle name '\(name)'"
+        }
+        do {
+            try FileManager.default.createDirectory(at: exportsDir, withIntermediateDirectories: true)
+        } catch {
+            return "could not create exports directory: \(error.localizedDescription)"
+        }
+
+        let destination = exportsDir.appendingPathComponent(name, isDirectory: true)
+        let argv = ["hf", "download", hfRepo, "--local-dir", destination.path]
+        let (logURL, logHandle) = Self.openLog(kind: "download-rhm", name: name, argv: argv)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = argv
+        var env = ProcessInfo.processInfo.environment
+        env["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+        process.environment = env
+        process.standardOutput = logHandle ?? FileHandle.nullDevice
+        process.standardError = logHandle ?? FileHandle.nullDevice
+        process.terminationHandler = { proc in
+            let ok = proc.terminationStatus == 0
+            Task { await self.finish(model: name, success: ok) }
+        }
+        do {
+            try process.run()
+            try? logHandle?.close()
+        } catch {
+            try? logHandle?.close()
+            return "failed to launch hf download: \(error.localizedDescription)"
+        }
+        jobs[name] = Job(
+            kind: "download", model: name, start: Date(), logPath: logURL?.path,
+            state: .running, finishedAt: nil)
         return nil
     }
 
@@ -206,16 +256,16 @@ actor JobTracker {
             switch job.state {
             case .running:
                 let pct = min(95, 5 + elapsed)
-                out.append(JobEntry(label: "convert \(job.model)", pct: pct, status: "running",
+                out.append(JobEntry(label: "\(job.kind) \(job.model)", pct: pct, status: "running",
                                     seconds: elapsed, logPath: job.logPath))
             case .done:
                 if let f = job.finishedAt, now.timeIntervalSince(f) < 60 {
-                    out.append(JobEntry(label: "convert \(job.model) ✓", pct: 100, status: "done",
+                    out.append(JobEntry(label: "\(job.kind) \(job.model) ✓", pct: 100, status: "done",
                                         seconds: elapsed, logPath: job.logPath))
                 }
             case .failed:
                 if let f = job.finishedAt, now.timeIntervalSince(f) < 3600 {
-                    out.append(JobEntry(label: "convert \(job.model) ✗ failed", pct: 100, status: "failed",
+                    out.append(JobEntry(label: "\(job.kind) \(job.model) ✗ failed", pct: 100, status: "failed",
                                         seconds: elapsed, logPath: job.logPath))
                 }
             }
@@ -308,6 +358,12 @@ actor JobTracker {
         let value = s.unicodeScalars.map { allowed.contains($0) ? String($0) : "-" }.joined()
             .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
         return String(value.prefix(80))
+    }
+
+    private static func isSafeName(_ s: String) -> Bool {
+        guard !s.isEmpty, s.count <= 160 else { return false }
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
+        return s.unicodeScalars.allSatisfy { allowed.contains($0) }
     }
 }
 
