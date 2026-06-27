@@ -121,7 +121,7 @@ final class ServerRuntime: Sendable {
         router.get("/api/stats") { _, _ in JSONResponder.encode(MachineStats.snapshot()) }
         router.get("/api/models") { _, _ in JSONResponder.encode(await self.manager.listModels()) }
         router.get("/api/jobs") { _, _ in JSONResponder.encode(await self.jobs.snapshot()) }
-        router.get("/api/server") { _, _ in self.serverInfoHandler() }
+        router.get("/api/server") { _, _ in await self.serverInfoHandler() }
         router.post("/api/load") { req, ctx in try await self.loadHandler(req, ctx) }
         router.post("/api/offload") { req, ctx in try await self.offloadHandler(req, ctx) }
         router.post("/api/offload-all") { _, _ in await self.offloadAllHandler() }
@@ -264,8 +264,8 @@ final class ServerRuntime: Sendable {
     }
 
     /// `GET /api/server` — read-only runtime metadata for the dashboard's server panel.
-    private func serverInfoHandler() -> Response {
-        let eagle = manager.eagleSummary()
+    private func serverInfoHandler() async -> Response {
+        let eagle = await manager.eagleSummary()
         let info = ServerInfo(
             ok: true,
             name: "coreai-pipeline",
@@ -753,6 +753,10 @@ struct ServerInfo: Codable, Sendable {
         var draftPath: String?
         var unrolledPath: String?
         var tokenizerDir: String?
+        var vocab: Int?
+        var backbone: Int?
+        var slidingWindow: Int?
+        var maxContext: Int?
     }
     var ok: Bool
     var name: String

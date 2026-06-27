@@ -59,6 +59,14 @@ func printUsage() {
           --web <dir>            Dashboard web dir (default: ./web)
           --convert-script <p>   convert.py path (default: ./python/converter/convert.py)
           --python <exe>         Python executable for conversion (default: python3)
+          --eagle-vocab <N>      EAGLE/MTP vocabulary size (default: 262144)
+          --eagle-backbone <N>   EAGLE/MTP hidden size (default: 2816)
+          --eagle-hidden-size <N>
+                                  Alias for --eagle-backbone
+          --eagle-sliding-window <N>
+                                  EAGLE/MTP sliding KV window (default: 1024)
+          --eagle-max-context <N>
+                                  EAGLE/MTP max context length (default: 4096)
           --verbose              Emit per-request diagnostics to stderr
 
         run OPTIONS:
@@ -266,12 +274,20 @@ func eagleCommand(_ argv: [String]) {
     var verbose = false
     var targetOnly = false
     var draftUnrolled: String?
+    var vocabSize = 262144
+    var backbone = 2816
+    var slidingWindow = 1024
+    var maxContext = 4096
 
     func fail(_ m: String) -> Never {
         FileHandle.standardError.write(Data("error: \(m)\n".utf8)); exit(2)
     }
     var i = 0
     func value(_ f: String) -> String { i += 1; guard i < argv.count else { fail("missing value for \(f)") }; return argv[i] }
+    func intValue(_ f: String) -> Int {
+        guard let n = Int(value(f)) else { fail("invalid \(f)") }
+        return n
+    }
     while i < argv.count {
         switch argv[i] {
         case "--target": target = value(argv[i])
@@ -284,6 +300,11 @@ func eagleCommand(_ argv: [String]) {
         case "--raw", "--no-chat-template": applyChatTemplate = false
         case "--target-only": targetOnly = true
         case "--verbose", "-v": verbose = true
+        case "--vocab", "--eagle-vocab": vocabSize = intValue(argv[i])
+        case "--backbone", "--hidden-size", "--eagle-backbone", "--eagle-hidden-size":
+            backbone = intValue(argv[i])
+        case "--sliding-window", "--eagle-sliding-window": slidingWindow = intValue(argv[i])
+        case "--max-context", "--eagle-max-context": maxContext = intValue(argv[i])
         default: fail("unknown eagle option: \(argv[i])")
         }
         i += 1
@@ -307,6 +328,7 @@ func eagleCommand(_ argv: [String]) {
     let dt = draftTokens
     let tOnly = targetOnly
     let unrolledP = draftUnrolled
+    let vocabP = vocabSize, backboneP = backbone, slidingP = slidingWindow, contextP = maxContext
     let semaphore = DispatchSemaphore(value: 0)
     nonisolated(unsafe) var exitCode: Int32 = 0
     Task {
@@ -315,8 +337,10 @@ func eagleCommand(_ argv: [String]) {
             let onToken: (String) -> Void = { FileHandle.standardOutput.write(Data($0.utf8)) }
             let r = try await CoreAIPipeline.runEagle(
                 targetAimodel: targetP, draftAimodel: draftP, tokenizerDir: tokD,
-                prompt: promptP, options: options, draftTokens: dt, targetOnly: tOnly,
-                draftUnrolledAimodel: unrolledP, onToken: onToken)
+                prompt: promptP, options: options, draftTokens: dt,
+                vocabSize: vocabP, backbone: backboneP, slidingWindow: slidingP,
+                maxContext: contextP, targetOnly: tOnly, draftUnrolledAimodel: unrolledP,
+                onToken: onToken)
             FileHandle.standardOutput.write(Data("\n".utf8))
             let summary = String(
                 format: "[coreai] eagle: %d prompt, %d generated, stop=%@, K=%d, "
@@ -402,6 +426,10 @@ func serveCommand(_ argv: [String]) {
     var eagleDraft = "/Volumes/SSD/ai-dev/eagle-resume/eagle_draft.aimodel"
     var eagleUnrolled: String? = "/Volumes/SSD/ai-dev/eagle-resume/eagle_draft_unrolled_k4.aimodel"
     var eagleTokenizer = cwd + "/exports/gemma-4-26b-a4b-coreai/tokenizer"
+    var eagleVocab = 262144
+    var eagleBackbone = 2816
+    var eagleSlidingWindow = 1024
+    var eagleMaxContext = 4096
 
     func fail(_ msg: String) -> Never {
         FileHandle.standardError.write(Data("error: \(msg)\n".utf8))
@@ -413,6 +441,10 @@ func serveCommand(_ argv: [String]) {
         i += 1
         guard i < argv.count else { fail("missing value for \(flag)") }
         return argv[i]
+    }
+    func intValue(_ flag: String) -> Int {
+        guard let n = Int(value(flag)) else { fail("invalid \(flag)") }
+        return n
     }
 
     while i < argv.count {
@@ -432,6 +464,10 @@ func serveCommand(_ argv: [String]) {
         case "--eagle-draft": eagleDraft = value(arg)
         case "--eagle-unrolled": eagleUnrolled = value(arg)
         case "--eagle-tokenizer": eagleTokenizer = value(arg)
+        case "--eagle-vocab": eagleVocab = intValue(arg)
+        case "--eagle-backbone", "--eagle-hidden-size": eagleBackbone = intValue(arg)
+        case "--eagle-sliding-window": eagleSlidingWindow = intValue(arg)
+        case "--eagle-max-context": eagleMaxContext = intValue(arg)
         case "--verbose", "-v": verbose = true
         case "-h", "--help": printUsage(); exit(0)
         default: fail("unknown option: \(arg)")
@@ -447,9 +483,11 @@ func serveCommand(_ argv: [String]) {
             let unrolled = eagleUnrolled.flatMap { fm.fileExists(atPath: $0) ? $0 : nil }
             eagleConfig = EagleConfig(
                 name: eagleName, targetPath: eagleTarget, draftPath: eagleDraft,
-                unrolledPath: unrolled, tokenizerDir: eagleTokenizer)
+                unrolledPath: unrolled, tokenizerDir: eagleTokenizer, vocab: eagleVocab,
+                backbone: eagleBackbone, slidingWindow: eagleSlidingWindow,
+                maxContext: eagleMaxContext)
             FileHandle.standardError.write(Data(
-                "eagle MTP model: \(eagleName) (unrolled: \(unrolled != nil))\n".utf8))
+                "eagle MTP model: \(eagleName) (hidden: \(eagleBackbone), unrolled: \(unrolled != nil))\n".utf8))
         } else {
             FileHandle.standardError.write(Data(
                 "note: EAGLE bundles not found (\(eagleTarget)); serving standard models only.\n".utf8))

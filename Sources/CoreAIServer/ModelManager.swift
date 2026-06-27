@@ -56,6 +56,12 @@ final class ModelHandle: @unchecked Sendable {
 
     var name: String { displayName }
     var memoryBytes: UInt64 { bytes }
+    var eagleBackbone: Int? {
+        #if COREAI_RUNTIME
+        if case .eagle(let engine) = backend { return engine.backbone }
+        #endif
+        return nil
+    }
 
     /// Serialised generation. The engine call runs in the caller's context; the gate only
     /// guarantees mutual exclusion per model. `tools` (when present) is threaded into the chat
@@ -284,16 +290,19 @@ public actor ModelManager {
         handles.values.reduce(0) { $0 + $1.memoryBytes }
     }
 
-    nonisolated func eagleSummary() -> ServerInfo.Eagle {
+    func eagleSummary() -> ServerInfo.Eagle {
         guard let cfg = eagleConfig else {
             return ServerInfo.Eagle(
                 enabled: false, name: nil, targetPath: nil, draftPath: nil,
-                unrolledPath: nil, tokenizerDir: nil)
+                unrolledPath: nil, tokenizerDir: nil, vocab: nil, backbone: nil,
+                slidingWindow: nil, maxContext: nil)
         }
         return ServerInfo.Eagle(
             enabled: true, name: cfg.name, targetPath: cfg.targetPath,
             draftPath: cfg.draftPath, unrolledPath: cfg.unrolledPath,
-            tokenizerDir: cfg.tokenizerDir)
+            tokenizerDir: cfg.tokenizerDir, vocab: cfg.vocab,
+            backbone: handles[cfg.name]?.eagleBackbone ?? cfg.backbone,
+            slidingWindow: cfg.slidingWindow, maxContext: cfg.maxContext)
     }
 
     /// Resolve a bundle directory name to its path under `exportsDir`.

@@ -24,6 +24,11 @@ import Tokenizers
 // MARK: - small NDArray helpers (f16; row-major, stride-aware)
 
 enum EagleND {
+    static func positiveTrailingDimension(_ descriptor: NDArrayDescriptor?) -> Int? {
+        guard let dim = descriptor?.shape.last, dim > 0 else { return nil }
+        return dim
+    }
+
     /// Copy element `[0, row, :]` of an `[1, R, D]` f16 array into a fresh `[1, 1, D]` f16 array.
     static func hiddenRow(_ src: NDArray, row: Int, dim: Int, descriptor: NDArrayDescriptor) -> NDArray {
         var out = NDArray(descriptor: descriptor.resolvingDynamicDimensions([1, 1, dim]))
@@ -146,6 +151,7 @@ final class EagleTargetEngine {
         for n in d.outputNames { outs[n] = nd("out", n) }
         self.inDesc = ins
         self.outDesc = outs
+        let resolvedHiddenSize = EagleND.positiveTrailingDimension(outs["hidden"]) ?? hiddenSize
         // repr-layer geometry from the KV output descriptors: [1, H, seq(-1), Dh].
         let kfShp = outs["k_full"]?.shape ?? [1, 2, -1, 512]
         let ksShp = outs["k_sliding"]?.shape ?? [1, 8, -1, 256]
@@ -164,7 +170,7 @@ final class EagleTargetEngine {
         self.keyCache = NDArray(descriptor: kd.resolvingDynamicDimensions(kd.shape.map { $0 < 0 ? 1 : $0 }))
         self.valueCache = NDArray(descriptor: vd.resolvingDynamicDimensions(vd.shape.map { $0 < 0 ? 1 : $0 }))
         self.vocabSize = vocabSize
-        self.hiddenSize = hiddenSize
+        self.hiddenSize = resolvedHiddenSize
         guard let fn = try model.loadFunction(named: "main") else {
             throw CoreAIPipeline.RuntimeError.modelContract("eagle target: load 'main' failed")
         }
@@ -283,7 +289,13 @@ final class EagleDraftEngine {
         self.inDesc = ins
         self.outDesc = outs
         self.vocabSize = vocabSize
-        self.hiddenSize = hiddenSize
+        let inputHidden = EagleND.positiveTrailingDimension(ins["hidden"])
+        let outputHidden = EagleND.positiveTrailingDimension(outs["next_hidden"])
+        if let inputHidden, let outputHidden, inputHidden != outputHidden {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "eagle draft: hidden input/output mismatch \(inputHidden) != \(outputHidden)")
+        }
+        self.hiddenSize = inputHidden ?? outputHidden ?? hiddenSize
         guard let fn = try model.loadFunction(named: "main") else {
             throw CoreAIPipeline.RuntimeError.modelContract("eagle draft: load 'main' failed")
         }
@@ -354,7 +366,7 @@ final class EagleDraftUnrolledEngine {
         self.inDesc = ins
         self.outDesc = od
         self.numSteps = od.shape.count >= 2 && od.shape[1] > 0 ? od.shape[1] : 4
-        self.hiddenSize = hiddenSize
+        self.hiddenSize = EagleND.positiveTrailingDimension(ins["hidden"]) ?? hiddenSize
         guard let fn = try model.loadFunction(named: "main") else {
             throw CoreAIPipeline.RuntimeError.modelContract("eagle unrolled draft: load 'main' failed")
         }
@@ -401,7 +413,7 @@ public final class EagleEngine {
     let draft: EagleDraftEngine
     let tokenizer: any Tokenizer
     let draftTokens: Int
-    let backbone: Int
+    public let backbone: Int
     let slidingWindow: Int
     let maxContext: Int
     public let loadSeconds: Double
@@ -426,14 +438,20 @@ public final class EagleEngine {
                             verbose: Bool, unrolledURL: URL? = nil) async throws -> EagleEngine {
         let t0 = Date()
         async let tok = AutoTokenizer.from(modelFolder: tokenizerDir)
-        async let tgt = EagleTargetEngine.load(aimodelURL: targetURL, vocabSize: vocabSize, hiddenSize: backbone)
-        async let drf = EagleDraftEngine.load(aimodelURL: draftURL, vocabSize: vocabSize, hiddenSize: backbone)
+        let target = try await EagleTargetEngine.load(
+            aimodelURL: targetURL, vocabSize: vocabSize, hiddenSize: backbone)
+        let resolvedBackbone = target.hiddenSize
+        if verbose && resolvedBackbone != backbone {
+            FileHandle.standardError.write(Data(
+                "eagle target hidden size inferred as \(resolvedBackbone) (configured \(backbone))\n".utf8))
+        }
+        async let drf = EagleDraftEngine.load(
+            aimodelURL: draftURL, vocabSize: vocabSize, hiddenSize: resolvedBackbone)
         let tokenizer = try await tok
-        let target = try await tgt
         let draft = try await drf
         var unrolled: EagleDraftUnrolledEngine? = nil
         if let u = unrolledURL {
-            unrolled = try await EagleDraftUnrolledEngine.load(aimodelURL: u, hiddenSize: backbone)
+            unrolled = try await EagleDraftUnrolledEngine.load(aimodelURL: u, hiddenSize: resolvedBackbone)
         }
         // Same turn-ending stop set as the standard engine, read from the model's published
         // generation_config.json eos_token_id list (gemma-4: [1,106,50]) so greedy EAGLE halts at
@@ -441,7 +459,7 @@ public final class EagleEngine {
         let stops = LLMEngine.stopTokenIds(tokenizer: tokenizer, tokenizerDir: tokenizerDir)
         return EagleEngine(
             target: target, draft: draft, tokenizer: tokenizer, draftTokens: draftTokens,
-            backbone: backbone, slidingWindow: slidingWindow, maxContext: maxContext,
+            backbone: resolvedBackbone, slidingWindow: slidingWindow, maxContext: maxContext,
             loadSeconds: Date().timeIntervalSince(t0), stopIds: stops, draftUnrolled: unrolled)
     }
 

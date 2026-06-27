@@ -251,6 +251,7 @@
           <div class="notice"><span class="faint">Endpoint</span><br><span id="srvEndpoint">-</span></div>
           <div class="notice"><span class="faint">Runtime</span><br><span id="srvRuntime">-</span></div>
           <div class="notice"><span class="faint">Exports</span><br><span id="srvExports">-</span></div>
+          <div class="notice advanced-only" hidden><span class="faint">Speculative runtime</span><br><span id="srvSpec">-</span></div>
           <div class="notice advanced-only" hidden><span class="faint">Registry</span><br><span id="srvRegistry">-</span></div>
           <div class="notice advanced-only" hidden><span class="faint">Logs</span><br><span id="srvLogs">-</span></div>
         </div>
@@ -311,6 +312,10 @@ async function pollServer(){
     $('srvEndpoint').textContent=s.baseURL||location.origin;
     $('srvRuntime').textContent=(s.runtimeLinked?'Core AI linked':'runtime unavailable')+' / '+(s.computeUnit||'gpu')+' / pid '+(s.pid||'-');
     $('srvExports').textContent=s.exportsDir||'-';
+    const e=s.eagle||{};
+    $('srvSpec').textContent=e.enabled
+      ? (e.name||'enabled')+' / hidden '+(e.backbone||'-')+' / vocab '+(e.vocab||'-')+' / ctx '+(e.maxContext||'-')
+      : 'disabled';
     $('srvRegistry').textContent=s.registryPath||'-';
     $('srvLogs').textContent=(s.logsDir||'-')+' / '+(s.supportLogsDir||'-');
   }catch(e){
