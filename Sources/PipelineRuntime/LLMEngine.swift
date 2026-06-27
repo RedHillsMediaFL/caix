@@ -217,7 +217,21 @@ final class LLMEngine {
         let decodeStart = Date()
         var generated: [Int] = []
         var streamedText = ""
+        var finalTextOverride: String?
         var stopReason: CoreAIPipeline.StopReason = .maxTokens
+        let stopSequences = options.stopSequences.filter { !$0.isEmpty }
+
+        func emitVisibleText(_ text: String) {
+            guard let onToken else {
+                streamedText = text
+                return
+            }
+            if text.hasPrefix(streamedText) {
+                let delta = String(text.dropFirst(streamedText.count))
+                if !delta.isEmpty { onToken(delta) }
+            }
+            streamedText = text
+        }
 
         // Coarse per-phase profiling (gated on COREAI_PROFILE) to find the decode bottleneck.
         let profile = ProcessInfo.processInfo.environment["COREAI_PROFILE"] != nil
@@ -237,15 +251,23 @@ final class LLMEngine {
 
             // Best-effort streaming detokenization: decode the full continuation and emit the
             // newly added suffix (handles BPE merges/spacing correctly).
-            if let onToken {
+            if onToken != nil || !stopSequences.isEmpty {
                 let t0 = profile ? Date() : decodeStart
                 let text = tokenizer.decode(tokens: generated)
-                if text.hasPrefix(streamedText) {
-                    let delta = String(text.dropFirst(streamedText.count))
-                    if !delta.isEmpty { onToken(delta) }
-                    streamedText = text
+                if let stopRange = CoreAIPipeline.firstStopRange(
+                    in: text, stopSequences: stopSequences)
+                {
+                    let visible = String(text[..<stopRange.lowerBound])
+                    emitVisibleText(visible)
+                    finalTextOverride = visible
+                    stopReason = .stopSequence
+                    if profile { detokT += Date().timeIntervalSince(t0) }
+                    break
                 } else {
-                    streamedText = text
+                    let visible = stopSequences.isEmpty
+                        ? text
+                        : CoreAIPipeline.visibleTextAvoidingPartialStop(text, stopSequences: stopSequences)
+                    emitVisibleText(visible)
                 }
                 if profile { detokT += Date().timeIntervalSince(t0) }
             }
@@ -268,7 +290,10 @@ final class LLMEngine {
                         "[coreai] PROFILE decode: forward+readback=%.3fs (run=%.3fs readback=%.3fs) sample=%.3fs detok=%.3fs (n=%d)\n",
                     fwdT, Self.profRunT, Self.profReadT, sampT, detokT, generated.count)).utf8))
         }
-        let finalText = tokenizer.decode(tokens: generated)
+        let finalText = finalTextOverride ?? tokenizer.decode(tokens: generated)
+        if finalTextOverride == nil, onToken != nil {
+            emitVisibleText(finalText)
+        }
         log(
             String(
                 format: "decode %d tokens in %.3fs (%.1f tok/s), stop=%@",

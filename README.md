@@ -195,6 +195,29 @@ python3 python/converter/convert.py --hf-id Qwen/Qwen2-0.5B --compression 4bit -
 Or do it from the dashboard: paste a HF repo in **Add model → HuggingFace → Core AI**, pick
 compression/precision, and click Convert. Unsupported architectures are flagged with a reason.
 
+### GGUF repos (llama.cpp models)
+
+caix can also convert **GGUF** repos. If a repo ships only `.gguf` files (no safetensors), caix
+**dequantizes** the GGUF back to an HF checkpoint, then runs the normal export — so you can pull a
+llama.cpp model straight into a Core AI `.aimodel`:
+
+```bash
+# repo: caix picks the highest-quality quant present (F16 > Q8_0 > Q6_K > …)
+python3 python/converter/convert.py --gguf unsloth/Qwen3-0.6B-GGUF --name qwen3-0.6b-coreai
+# or pin a specific file:
+python3 python/converter/convert.py --gguf unsloth/Qwen3-0.6B-GGUF --gguf-file Qwen3-0.6B-BF16.gguf
+```
+
+From the dashboard, just paste a GGUF-only repo — it's detected automatically and routed through the
+dequant step (the support check confirms the architecture *after* dequant).
+
+> **Quality caveat.** A GGUF is already quantized; dequantizing then re-exporting (often to 4-bit)
+> is quant-on-quant and loses quality versus converting the **original safetensors**. Prefer the
+> original release when it exists; use GGUF only when that's all that's published. The architecture
+> still has to be one caix supports (below) — GGUF doesn't add new architectures.
+> Needs `gguf>=0.10.0` (added automatically for the dequant run). Note: `gemma4` GGUFs are **not**
+> convertible — `transformers` has no GGUF dequantizer for that architecture yet.
+
 ---
 
 ## Where things live

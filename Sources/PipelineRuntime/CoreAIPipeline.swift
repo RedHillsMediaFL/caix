@@ -36,6 +36,9 @@ public enum CoreAIPipeline {
         /// Optional fixed KV-cache capacity (tokens). Defaults to
         /// `min(promptLen + maxTokens + 8, maxContextLength)`.
         public var kvCapacity: Int?
+        /// Optional decoded-text stop strings. Generation stops once the continuation contains
+        /// one of these strings; the matched stop text is not emitted.
+        public var stopSequences: [String]
         /// RNG seed for reproducible temperature sampling. `nil` = system RNG.
         public var seed: UInt64?
         /// Emit progress/diagnostics to stderr.
@@ -48,6 +51,7 @@ public enum CoreAIPipeline {
             topP: Double? = nil,
             applyChatTemplate: Bool = true,
             kvCapacity: Int? = nil,
+            stopSequences: [String] = [],
             seed: UInt64? = nil,
             verbose: Bool = false
         ) {
@@ -57,6 +61,7 @@ public enum CoreAIPipeline {
             self.topP = topP
             self.applyChatTemplate = applyChatTemplate
             self.kvCapacity = kvCapacity
+            self.stopSequences = stopSequences
             self.seed = seed
             self.verbose = verbose
         }
@@ -69,6 +74,7 @@ public enum CoreAIPipeline {
         case eos
         case maxTokens
         case contextLimit
+        case stopSequence
     }
 
     /// Outcome of a `run`.
@@ -102,6 +108,34 @@ public enum CoreAIPipeline {
             self.prefillSeconds = prefillSeconds
             self.decodeSeconds = decodeSeconds
         }
+    }
+
+    // MARK: - Stop sequence helpers
+
+    static func firstStopRange(in text: String, stopSequences: [String]) -> Range<String.Index>? {
+        var best: Range<String.Index>?
+        for stop in stopSequences where !stop.isEmpty {
+            guard let range = text.range(of: stop) else { continue }
+            if let current = best {
+                if range.lowerBound < current.lowerBound { best = range }
+            } else {
+                best = range
+            }
+        }
+        return best
+    }
+
+    static func visibleTextAvoidingPartialStop(_ text: String, stopSequences: [String]) -> String {
+        guard !text.isEmpty else { return text }
+        var holdback = 0
+        for stop in stopSequences where stop.count > 1 {
+            let limit = min(stop.count - 1, text.count)
+            if limit <= 0 { continue }
+            for n in 1...limit where stop.hasPrefix(String(text.suffix(n))) {
+                holdback = max(holdback, n)
+            }
+        }
+        return holdback > 0 ? String(text.dropLast(holdback)) : text
     }
 
     // MARK: - Speculative-decoding result

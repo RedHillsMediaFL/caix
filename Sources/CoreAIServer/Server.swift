@@ -30,6 +30,8 @@ public enum CoreAIServer {
         let statsPath = statsFile ?? (NSHomeDirectory() + "/.caix/usage.json")
         Usage.configure(path: statsPath)
         let runtime = ServerRuntime(
+            host: host,
+            port: port,
             exportsDir: URL(fileURLWithPath: exportsDir, isDirectory: true),
             registryPath: URL(fileURLWithPath: registryPath),
             webDir: URL(fileURLWithPath: webDir, isDirectory: true),
@@ -70,6 +72,9 @@ public enum CoreAIServer {
 final class ServerRuntime: Sendable {
     let manager: ModelManager
     let jobs: JobTracker
+    let host: String
+    let port: Int
+    let exportsDir: URL
     let webDir: URL
     let registryPath: URL
     let convertScript: String
@@ -79,9 +84,12 @@ final class ServerRuntime: Sendable {
     let verbose: Bool
 
     init(
-        exportsDir: URL, registryPath: URL, webDir: URL, convertScript: String,
+        host: String, port: Int, exportsDir: URL, registryPath: URL, webDir: URL, convertScript: String,
         pythonExecutable: String, verbose: Bool, eagleConfig: EagleConfig? = nil
     ) {
+        self.host = host
+        self.port = port
+        self.exportsDir = exportsDir
         self.manager = ModelManager(
             exportsDir: exportsDir, registryPath: registryPath, verbose: verbose,
             eagleConfig: eagleConfig)
@@ -113,6 +121,7 @@ final class ServerRuntime: Sendable {
         router.get("/api/stats") { _, _ in JSONResponder.encode(MachineStats.snapshot()) }
         router.get("/api/models") { _, _ in JSONResponder.encode(await self.manager.listModels()) }
         router.get("/api/jobs") { _, _ in JSONResponder.encode(await self.jobs.snapshot()) }
+        router.get("/api/server") { _, _ in self.serverInfoHandler() }
         router.post("/api/load") { req, ctx in try await self.loadHandler(req, ctx) }
         router.post("/api/offload") { req, ctx in try await self.offloadHandler(req, ctx) }
         router.post("/api/delete") { req, ctx in try await self.deleteHandler(req, ctx) }
@@ -193,10 +202,33 @@ final class ServerRuntime: Sendable {
         let payload: [String: JSONValue] = [
             "compression": .string("none,4bit,8bit"),
             "compute_precision": .string("float16,bfloat16,float32"),
+            "generation": .string("max_tokens,temperature,top_p,top_k,seed,stop,system_prompt"),
             "context_default": .int(4096),
             "note": .string("Paste a HuggingFace repo; unsupported architectures are flagged, supported ones convert + load."),
         ]
         return JSONResponder.encode(payload)
+    }
+
+    /// `GET /api/server` — read-only runtime metadata for the dashboard's server panel.
+    private func serverInfoHandler() -> Response {
+        let eagle = manager.eagleSummary()
+        let info = ServerInfo(
+            ok: true,
+            name: "coreai-pipeline",
+            pid: Int(ProcessInfo.processInfo.processIdentifier),
+            runtimeLinked: CoreAIPipeline.isLinked,
+            host: host,
+            port: port,
+            baseURL: "http://\(host):\(port)",
+            webDir: webDir.path,
+            exportsDir: exportsDir.path,
+            registryPath: registryPath.path,
+            convertScript: convertScript,
+            pythonExecutable: pythonExecutable,
+            computeUnit: ProcessInfo.processInfo.environment["COREAI_COMPUTE"] ?? "gpu",
+            verbose: verbose,
+            eagle: eagle)
+        return JSONResponder.encode(info)
     }
 
     /// `POST /api/check-support` {hf_repo} — returns the raw check JSON (supported/flagged + reason).
@@ -223,27 +255,39 @@ final class ServerRuntime: Sendable {
         let checkJSON = await jobs.runCheckSupport(
             hfRepo: body.hf_repo, script: convertScript, workingDir: convertWorkingDir,
             pythonExecutable: pythonExecutable)
-        let supported = (try? JSONSerialization.jsonObject(with: Data(checkJSON.utf8)) as? [String: Any])?
-            .flatMap { $0["supported"] as? Bool } ?? false
-        if !supported {
+        let checkObject = (try? JSONSerialization.jsonObject(with: Data(checkJSON.utf8)) as? [String: Any])
+        let supported = (checkObject?["supported"] as? Bool) ?? false
+        let ggufOnly = (checkObject?["gguf_only"] as? Bool) ?? false
+        if !supported && !ggufOnly {
             var headers = HTTPFields(); headers[.contentType] = "application/json"
             // Pass the check JSON straight through (carries model_type, supported_types, reason).
             return Response(status: .ok, headers: headers,
                             body: ResponseBody(byteBuffer: ByteBuffer(string: checkJSON)))
         }
         let name = body.name?.trimmingCharacters(in: .whitespaces).nonEmpty
-            ?? (body.hf_repo.split(separator: "/").last.map { $0.lowercased() + "-coreai" } ?? "model-coreai")
-        let err = await jobs.startConvertHF(
-            name: name, hfRepo: body.hf_repo,
-            compression: body.compression?.nonEmpty ?? "4bit",
-            precision: body.compute_precision?.nonEmpty ?? "float16",
-            context: body.context, script: convertScript, workingDir: convertWorkingDir,
-            pythonExecutable: pythonExecutable)
+            ?? Self.defaultModelName(for: body.hf_repo)
+        let err: String?
+        if ggufOnly {
+            err = await jobs.startConvertGGUF(
+                name: name, ggufRepo: body.hf_repo, ggufFile: body.gguf_file?.nonEmpty,
+                compression: body.compression?.nonEmpty ?? "4bit",
+                precision: body.compute_precision?.nonEmpty ?? "float16",
+                context: body.context, script: convertScript, workingDir: convertWorkingDir,
+                pythonExecutable: pythonExecutable)
+        } else {
+            err = await jobs.startConvertHF(
+                name: name, hfRepo: body.hf_repo,
+                compression: body.compression?.nonEmpty ?? "4bit",
+                precision: body.compute_precision?.nonEmpty ?? "float16",
+                context: body.context, script: convertScript, workingDir: convertWorkingDir,
+                pythonExecutable: pythonExecutable)
+        }
         if let err {
             return JSONResponder.error(err, status: .badRequest)
         }
         return JSONResponder.encode([
             "ok": .bool(true), "supported": .bool(true), "started": .bool(true),
+            "gguf": .bool(ggufOnly),
             "name": .string(name)] as [String: JSONValue])
     }
 
@@ -436,12 +480,13 @@ final class ServerRuntime: Sendable {
             topK: gen.topK,
             topP: gen.topP,
             applyChatTemplate: true,
+            stopSequences: gen.stop,
             seed: gen.seed)
     }
 
     static func openAIFinish(_ reason: CoreAIPipeline.StopReason) -> String {
         switch reason {
-        case .eos: return "stop"
+        case .eos, .stopSequence: return "stop"
         case .maxTokens, .contextLimit: return "length"
         }
     }
@@ -449,12 +494,22 @@ final class ServerRuntime: Sendable {
     static func anthropicStop(_ reason: CoreAIPipeline.StopReason) -> String {
         switch reason {
         case .eos: return "end_turn"
+        case .stopSequence: return "stop_sequence"
         case .maxTokens, .contextLimit: return "max_tokens"
         }
     }
 
     static func shortID() -> String {
         UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(24).lowercased()
+    }
+
+    private static func defaultModelName(for repo: String) -> String {
+        let base = repo.split(separator: "/").last.map(String.init) ?? "model"
+        let cleaned = base
+            .replacingOccurrences(of: ".gguf", with: "", options: [.caseInsensitive])
+            .replacingOccurrences(of: "-GGUF", with: "", options: [.caseInsensitive])
+            .replacingOccurrences(of: "_GGUF", with: "", options: [.caseInsensitive])
+        return cleaned.lowercased() + "-coreai"
     }
 
     // MARK: - Request decoding / static responses
@@ -513,6 +568,33 @@ struct HFConvertRequest: Codable, Sendable {
     var compression: String?        // none | 4bit | 8bit
     var compute_precision: String?  // float16 | bfloat16 | float32
     var context: Int?
+    var gguf_file: String?
+}
+
+struct ServerInfo: Codable, Sendable {
+    struct Eagle: Codable, Sendable {
+        var enabled: Bool
+        var name: String?
+        var targetPath: String?
+        var draftPath: String?
+        var unrolledPath: String?
+        var tokenizerDir: String?
+    }
+    var ok: Bool
+    var name: String
+    var pid: Int
+    var runtimeLinked: Bool
+    var host: String
+    var port: Int
+    var baseURL: String
+    var webDir: String
+    var exportsDir: String
+    var registryPath: String
+    var convertScript: String
+    var pythonExecutable: String
+    var computeUnit: String
+    var verbose: Bool
+    var eagle: Eagle
 }
 
 // MARK: - OpenAI model list DTO

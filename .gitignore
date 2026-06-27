@@ -3,6 +3,8 @@
 dist/
 *.o
 *.swiftmodule
+__pycache__/
+*.pyc
 
 # downloaded models (large; users provide their own)
 models/exports/*

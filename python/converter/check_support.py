@@ -15,7 +15,7 @@ Run inside the vendored Apple env so the registry import is authoritative:
 from __future__ import annotations
 import argparse, json, os, sys
 
-os.environ.setdefault("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
+os.environ.setdefault("HF_HOME", "/Volumes/SSD/hf-cache")
 
 BF16_TYPES = {"gemma4", "gemma4_assistant", "diffusion_gemma", "qwen3_5"}
 
@@ -31,13 +31,35 @@ def main() -> int:
     args = ap.parse_args()
     hf_id = args.hf_id.strip()
 
-    # 1) fetch config.json (public or token-gated)
+    # 1) fetch config.json — local dir (e.g. a dequantized GGUF) or HF repo (public/gated)
+    if os.path.isdir(hf_id) and os.path.exists(os.path.join(hf_id, "config.json")):
+        cfg = json.load(open(os.path.join(hf_id, "config.json")))
+        _local = True
+    else:
+        _local = False
     try:
-        from huggingface_hub import hf_hub_download
-        token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
-        cfg_path = hf_hub_download(hf_id, "config.json", token=token)
-        cfg = json.load(open(cfg_path))
+        if _local:
+            pass
+        else:
+            from huggingface_hub import hf_hub_download, HfApi
+            token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+            cfg_path = hf_hub_download(hf_id, "config.json", token=token)
+            cfg = json.load(open(cfg_path))
     except Exception as e:
+        # No config.json — most often a GGUF-only (llama.cpp) repo, which caix can't convert
+        # (it needs the original HF safetensors). Detect that and say so plainly.
+        try:
+            from huggingface_hub import HfApi
+            files = list(HfApi(token=token).list_repo_files(hf_id))
+            ggufs = [f for f in files if f.endswith(".gguf")]
+            has_st = any(f.endswith(".safetensors") for f in files)
+            if ggufs and not has_st:
+                return emit({"ok": False, "supported": False, "hf_id": hf_id, "gguf_only": True,
+                             "reason": f"GGUF-only repo ({len(ggufs)} .gguf files). caix can dequantize + convert "
+                                       "it (quality is reduced vs the original safetensors); the "
+                                       "architecture is verified after dequant. Click Convert to try."})
+        except Exception:
+            pass
         return emit({"ok": False, "supported": False, "hf_id": hf_id,
                      "reason": f"could not fetch config.json ({type(e).__name__}: {e}). "
                                "Check the repo id and access (gated repos need HF_TOKEN)."})

@@ -23,7 +23,9 @@ public struct ModelEntry: Codable, Sendable {
 final class ModelHandle: @unchecked Sendable {
     enum Backend {
         case persistent(PersistentModel)
+        #if COREAI_RUNTIME
         case eagle(EagleEngine)  // fastest gemma MTP (EAGLE speculative decoding)
+        #endif
     }
     let backend: Backend
     private let displayName: String
@@ -36,11 +38,13 @@ final class ModelHandle: @unchecked Sendable {
         self.bytes = model.bundleByteSize
     }
 
+    #if COREAI_RUNTIME
     init(eagle: EagleEngine, name: String, bytes: UInt64) {
         self.backend = .eagle(eagle)
         self.displayName = name
         self.bytes = bytes
     }
+    #endif
 
     var name: String { displayName }
     var memoryBytes: UInt64 { bytes }
@@ -61,6 +65,7 @@ final class ModelHandle: @unchecked Sendable {
             case .persistent(let model):
                 result = try await model.generate(
                     messages: messages, options: options, tools: tools, onToken: onToken)
+            #if COREAI_RUNTIME
             case .eagle(let engine):
                 let r = try await engine.generate(
                     messages: messages, options: options, tools: tools, onToken: onToken)
@@ -76,6 +81,7 @@ final class ModelHandle: @unchecked Sendable {
                     generatedTokenCount: r.generatedTokenCount, stopReason: r.stopReason,
                     modelLoadSeconds: r.modelLoadSeconds, prefillSeconds: r.prefillSeconds,
                     decodeSeconds: r.decodeSeconds)
+            #endif
             }
             await gate.release()
             Usage.record(model: displayName, inputTokens: result.promptTokenCount,
@@ -254,6 +260,18 @@ public actor ModelManager {
         handles.values.reduce(0) { $0 + $1.memoryBytes }
     }
 
+    nonisolated func eagleSummary() -> ServerInfo.Eagle {
+        guard let cfg = eagleConfig else {
+            return ServerInfo.Eagle(
+                enabled: false, name: nil, targetPath: nil, draftPath: nil,
+                unrolledPath: nil, tokenizerDir: nil)
+        }
+        return ServerInfo.Eagle(
+            enabled: true, name: cfg.name, targetPath: cfg.targetPath,
+            draftPath: cfg.draftPath, unrolledPath: cfg.unrolledPath,
+            tokenizerDir: cfg.tokenizerDir)
+    }
+
     /// Resolve a bundle directory name to its path under `exportsDir`.
     private func bundlePath(for name: String) -> String {
         exportsDir.appendingPathComponent(name).path
@@ -294,6 +312,7 @@ public actor ModelManager {
         let task = Task<ModelHandle, Error> {
             // EAGLE MTP model: build the speculative engine from its target+draft[+unrolled] bundles.
             if let cfg = eagle, cfg.name == name {
+                #if COREAI_RUNTIME
                 let engine = try await EagleEngine.load(
                     targetURL: URL(fileURLWithPath: cfg.targetPath),
                     draftURL: URL(fileURLWithPath: cfg.draftPath),
@@ -302,6 +321,9 @@ public actor ModelManager {
                     slidingWindow: cfg.slidingWindow, maxContext: cfg.maxContext, verbose: verbose,
                     unrolledURL: cfg.unrolledPath.map { URL(fileURLWithPath: $0) })
                 return ModelHandle(eagle: engine, name: cfg.name, bytes: cfg.bundleBytes)
+                #else
+                throw CoreAIPipeline.RuntimeError.runtimeUnavailable
+                #endif
             }
             let model = try await PersistentModel.load(bundlePath: path, verbose: verbose)
             return ModelHandle(model: model)

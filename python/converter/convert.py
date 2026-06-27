@@ -18,16 +18,34 @@ from pathlib import Path
 
 PIPELINE_ROOT = Path(__file__).resolve().parents[2]
 REGISTRY = PIPELINE_ROOT / "models" / "registry.json"
-# Path to Apple's coreai-models python checkout (provides `coreai.llm.export`). Needed only for
-# CONVERSION (advanced) — not for serving a pre-converted model. Override with CAIX_COREAI_MODELS.
-APPLE_ENV = Path(os.environ.get("CAIX_COREAI_MODELS",
-                                str(PIPELINE_ROOT.parent / "coreai-models" / "python"))).expanduser()
-# Where exported .aimodel bundles are written (point your server's --exports here).
+# Apple's coreai-models python checkout (provides coreai.llm.export). Required for CONVERSION only.
+_apple_env_candidates = [
+    Path(os.environ["CAIX_COREAI_MODELS"]).expanduser() if os.environ.get("CAIX_COREAI_MODELS") else None,
+    PIPELINE_ROOT.parent / "coreai-models" / "python",
+    Path("/Volumes/SSD/ai-dev/coreai-gemma4/vendor/coreai-models/python"),
+]
+APPLE_ENV = next((p for p in _apple_env_candidates if p and p.exists()), _apple_env_candidates[1])
 EXPORTS = Path(os.environ.get("CAIX_EXPORTS", str(PIPELINE_ROOT / "exports"))).expanduser()
-# HuggingFace cache (downloads land here).
 HF_HOME = os.environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface"))
-TMPDIR_EXPORT = os.environ.get("CAIX_TMPDIR", str(Path.home() / ".cache" / "caix-export"))
+TMPDIR_EXPORT = os.environ.get("CAIX_TMPDIR", str(PIPELINE_ROOT.parent / "coreai-tmp"))
 CHECK_SUPPORT = Path(__file__).resolve().parent / "check_support.py"
+GGUF_DEQUANT = Path(__file__).resolve().parent / "gguf_dequant.py"
+
+
+def dequant_gguf(repo: str, gguf_file: str | None, out_dir: str) -> dict:
+    """Dequantize a GGUF repo/file to an HF dir (in the Apple env). Returns the parsed JSON dict."""
+    env = {**os.environ, "HF_HOME": HF_HOME}
+    # transformers needs `gguf>=0.10.0` to dequantize a GGUF checkpoint; add it for this run.
+    cmd = ["uv", "run", "--directory", str(APPLE_ENV), "--with", "gguf>=0.10.0",
+           "python", str(GGUF_DEQUANT), "--repo", repo, "--out", out_dir]
+    if gguf_file:
+        cmd += ["--gguf-file", gguf_file]
+    try:
+        out = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=3600)
+        line = [l for l in out.stdout.splitlines() if l.strip().startswith("{")]
+        return json.loads(line[-1]) if line else {"ok": False, "reason": f"no JSON (stderr: {out.stderr[-300:]})"}
+    except Exception as e:
+        return {"ok": False, "reason": f"dequant failed: {type(e).__name__}: {e}"}
 
 
 def check_support(hf_id: str) -> dict:
@@ -107,7 +125,29 @@ def main() -> int:
                     help="only check Core AI support for the HF repo; print JSON and exit")
     ap.add_argument("--force", action="store_true",
                     help="convert even if the support check says the type is unsupported")
+    ap.add_argument("--gguf", help="GGUF repo id or local .gguf path — dequantize to HF, then convert")
+    ap.add_argument("--gguf-file", help="specific .gguf filename in the repo (else best quant chosen)")
     args = ap.parse_args()
+
+    # GGUF path: dequantize to a temp HF dir, then convert that as a local model.
+    if args.gguf:
+        import tempfile
+        os.makedirs(TMPDIR_EXPORT, exist_ok=True)
+        tmp = tempfile.mkdtemp(prefix="caix-gguf-hf-",
+                               dir=(TMPDIR_EXPORT))
+        print(f"[gguf] dequantizing {args.gguf} -> {tmp}")
+        deq = dequant_gguf(args.gguf, args.gguf_file, tmp)
+        if not deq.get("ok"):
+            print(json.dumps(deq)); return 3
+        print(f"[gguf] dequantized model_type={deq.get('model_type')} from {deq.get('gguf_file')}")
+        # convert the local dequantized dir from here on
+        args.hf_id = tmp
+        if not args.name:
+            base = args.gguf.rstrip("/").split("/")[-1].replace(".gguf", "")
+            args.name = base.lower() + "-coreai"
+        mt = deq.get("model_type", "")
+        if not args.compute_precision:
+            args.compute_precision = "bfloat16" if mt in ("gemma3", "gemma2", "gemma4") else "float16"
 
     # Architecture support gate: for raw HF ids (not registry keys), verify the model_type is
     # authored for Core AI before downloading/converting. Unsupported => flag, don't convert.

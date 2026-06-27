@@ -68,6 +68,8 @@
   .btn:focus-visible{outline:2px solid var(--signal);outline-offset:2px}
   .btn.go{border-color:var(--signal-line);background:var(--signal-dim);color:#cfc8ff}
   .btn.go:hover{background:var(--signal);color:#0b0a1a;border-color:var(--signal)}
+  .btn.danger{border-color:rgba(240,98,93,.36);color:#f5aaa7}
+  .btn.danger:hover{background:rgba(240,98,93,.14);border-color:rgba(240,98,93,.7);color:#fff}
   .empty{padding:22px 16px;color:var(--faint);font-family:var(--mono);font-size:12px}
 
   /* ---- convert + jobs ---- */
@@ -86,6 +88,12 @@
       color:var(--muted);padding:8px 14px;border-top:1px solid var(--line-soft)}
   .pm:first-child{border-top:0}.pm b{color:var(--text);font-weight:500}.pm .nm{color:var(--text)}
   .panel .hint{color:var(--faint);font-size:12px}
+  .path{font-family:var(--mono);font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .servergrid{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line-soft)}
+  .servergrid .cell{background:var(--bg);padding:10px 12px;min-width:0}
+  .servergrid .cell b{display:block;color:var(--text);font-weight:500;font-family:var(--mono);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .servergrid .cell span{display:block;color:var(--faint);font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px}
+  @media(max-width:720px){.servergrid{grid-template-columns:1fr}}
   .jobs{margin-top:12px;display:flex;flex-direction:column;gap:10px}
   .job .jl{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-bottom:5px}
   .job .jl b{color:var(--text);font-weight:500}
@@ -95,6 +103,21 @@
   .chat{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--surface)}
   .chatbar{display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap}
   .chatbar select{min-width:200px;padding:5px 9px}
+  .chatopts{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line-soft);flex-wrap:wrap}
+  .seg{display:inline-grid;grid-auto-flow:column;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--raised)}
+  .seg button{font-family:var(--mono);font-size:11.5px;color:var(--muted);background:transparent;border:0;border-left:1px solid var(--line);padding:6px 10px;cursor:pointer;min-width:76px}
+  .seg button:first-child{border-left:0}
+  .seg button.active{background:var(--signal-dim);color:#d9d4ff}
+  .promptgrid{display:grid;grid-template-columns:1fr;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line-soft)}
+  .advgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:12px 14px;border-bottom:1px solid var(--line-soft);background:#151820}
+  .field{display:flex;flex-direction:column;gap:5px;min-width:0;color:var(--faint);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+  .field input,.field textarea{font-family:var(--mono);font-size:12px;color:var(--text);background:var(--raised);border:1px solid var(--line);border-radius:7px;padding:7px 9px;min-width:0;width:100%}
+  .field textarea{font-family:var(--sans);font-size:13px;line-height:1.35;resize:vertical;min-height:44px;text-transform:none;letter-spacing:0}
+  .field input[type=range]{padding:0;accent-color:var(--signal)}
+  .field .row{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center}
+  .field output{font-family:var(--mono);font-size:11.5px;color:var(--text);min-width:42px;text-align:right}
+  [hidden]{display:none!important}
+  @media(max-width:720px){.advgrid{grid-template-columns:1fr 1fr}.seg{width:100%;grid-auto-columns:1fr}}
   .badge{font-family:var(--mono);font-size:10.5px;color:#cfc8ff;background:var(--signal-dim);border:1px solid var(--signal-line);
          border-radius:20px;padding:3px 10px;letter-spacing:.02em}
   .badge.std{color:var(--muted);background:transparent;border-color:var(--line)}
@@ -179,6 +202,16 @@
     <div class="chip"><span id="sp_k">—</span><small>EAGLE draft (K)</small></div>
   </section>
 
+  <div class="head"><h2>Server</h2><span class="rule"></span><span class="meta" id="servermeta">—</span></div>
+  <section class="models servergrid" id="servergrid">
+    <div class="cell"><span>endpoint</span><b id="srv_base">—</b></div>
+    <div class="cell"><span>runtime</span><b id="srv_runtime">—</b></div>
+    <div class="cell"><span>process</span><b id="srv_pid">—</b></div>
+    <div class="cell"><span>exports</span><b id="srv_exports">—</b></div>
+    <div class="cell"><span>registry</span><b id="srv_registry">—</b></div>
+    <div class="cell"><span>eagle</span><b id="srv_eagle">—</b></div>
+  </section>
+
   <div class="head"><h2>Models</h2><span class="rule"></span><span class="meta" id="modelmeta"></span></div>
   <section class="models" id="models"><div class="empty">loading models…</div></section>
 
@@ -190,6 +223,39 @@
       <label class="tog"><input type="checkbox" id="showthink" checked/> show thinking</label>
       <span class="livestat" id="livestat"></span>
       <button class="btn" id="clearbtn" style="margin-left:auto">Clear</button>
+    </div>
+    <div class="chatopts">
+      <div class="seg" id="presetseg" aria-label="Response style">
+        <button type="button" data-preset="balanced" class="active">Balanced</button>
+        <button type="button" data-preset="precise">Precise</button>
+        <button type="button" data-preset="creative">Creative</button>
+      </div>
+      <label class="tog" style="margin-left:auto"><input type="checkbox" id="advanced"/> advanced</label>
+    </div>
+    <div class="promptgrid">
+      <label class="field">Instructions
+        <textarea id="systemprompt" rows="2" placeholder="Optional system prompt"></textarea>
+      </label>
+    </div>
+    <div class="advgrid" id="advancedgrid" hidden>
+      <label class="field">Max tokens
+        <input id="maxtokens" type="number" min="1" max="8192" step="1" value="1024"/>
+      </label>
+      <label class="field">Temperature
+        <span class="row"><input id="temperature" type="range" min="0" max="2" step="0.05" value="0.7"/><output id="tempout">0.70</output></span>
+      </label>
+      <label class="field">Top P
+        <span class="row"><input id="topp" type="range" min="0.05" max="1" step="0.01" value="0.95"/><output id="toppout">0.95</output></span>
+      </label>
+      <label class="field">Top K
+        <input id="topk" type="number" min="0" max="1000" step="1" placeholder="off"/>
+      </label>
+      <label class="field">Seed
+        <input id="seed" type="number" min="0" step="1" placeholder="random"/>
+      </label>
+      <label class="field">Stop
+        <input id="stopseq" placeholder="comma-separated"/>
+      </label>
     </div>
     <div class="transcript" id="transcript"><div class="empty">pick a model and say something — streams as it generates</div></div>
     <div class="composer">
@@ -216,6 +282,8 @@
         <input class="tin" id="hfctx" placeholder="auto" style="width:90px"/></label>
       <label class="hint">name
         <input class="tin" id="hfname" placeholder="auto" style="width:160px"/></label>
+      <label class="hint">GGUF file
+        <input class="tin" id="hfgguf" placeholder="auto" style="width:190px"/></label>
     </div>
     <div id="hfresult" class="hint" style="font-family:var(--mono);font-size:12px"></div>
   </section>
@@ -241,6 +309,65 @@ const gb=b=>(b/1073741824).toFixed(1)+' GB';
 async function j(u,o){const r=await fetch(u,o);if(!r.ok)throw new Error(r.status);return r.json();}
 function conn(ok){const c=$('conn');c.classList.toggle('live',ok);$('connlbl').textContent=ok?'live':'server offline';
   $('connlbl').style.color=ok?'var(--ok)':'var(--bad)';}
+const esc=s=>(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const attr=s=>esc(s).replace(/"/g,'&quot;');
+
+// ---- generation controls ----
+const presets={
+  balanced:{temperature:0.7,top_p:0.95,top_k:'',max_tokens:1024},
+  precise:{temperature:0,top_p:1,top_k:'1',max_tokens:768},
+  creative:{temperature:1.05,top_p:0.9,top_k:'50',max_tokens:1200}
+};
+function savePrefs(){
+  const prefs={
+    preset:document.querySelector('#presetseg button.active')?.dataset.preset||'balanced',
+    advanced:$('advanced').checked, system:$('systemprompt').value,
+    max_tokens:$('maxtokens').value, temperature:$('temperature').value, top_p:$('topp').value,
+    top_k:$('topk').value, seed:$('seed').value, stop:$('stopseq').value
+  };
+  localStorage.setItem('caix.dashboard.prefs',JSON.stringify(prefs));
+}
+function setPreset(name,applyValues=true){
+  document.querySelectorAll('#presetseg button').forEach(b=>b.classList.toggle('active',b.dataset.preset===name));
+  const p=presets[name]||presets.balanced;
+  if(applyValues){
+    $('temperature').value=p.temperature;$('topp').value=p.top_p;$('topk').value=p.top_k;$('maxtokens').value=p.max_tokens;
+  }
+  syncGenOutputs();savePrefs();
+}
+function syncGenOutputs(){
+  $('tempout').textContent=(parseFloat($('temperature').value)||0).toFixed(2);
+  $('toppout').textContent=(parseFloat($('topp').value)||0).toFixed(2);
+  $('advancedgrid').hidden=!$('advanced').checked;
+}
+function loadPrefs(){
+  let prefs={};try{prefs=JSON.parse(localStorage.getItem('caix.dashboard.prefs')||'{}');}catch(e){}
+  setPreset(prefs.preset||'balanced',false);
+  $('advanced').checked=!!prefs.advanced;
+  $('systemprompt').value=prefs.system||'';
+  if(prefs.max_tokens)$('maxtokens').value=prefs.max_tokens;
+  if(prefs.temperature)$('temperature').value=prefs.temperature;
+  if(prefs.top_p)$('topp').value=prefs.top_p;
+  if(prefs.top_k!==undefined)$('topk').value=prefs.top_k;
+  if(prefs.seed!==undefined)$('seed').value=prefs.seed;
+  if(prefs.stop!==undefined)$('stopseq').value=prefs.stop;
+  syncGenOutputs();
+}
+function chatPayload(model,msgs){
+  const maxTokens=Math.max(1,parseInt($('maxtokens').value||'1024',10)||1024);
+  const body={model,messages:msgs,max_tokens:maxTokens,temperature:parseFloat($('temperature').value)||0,
+    top_p:Math.max(0.01,Math.min(1,parseFloat($('topp').value)||1)),stream:true};
+  const topK=parseInt($('topk').value||'',10); if(Number.isFinite(topK)&&topK>0)body.top_k=topK;
+  const seed=parseInt($('seed').value||'',10); if(Number.isFinite(seed)&&seed>=0)body.seed=seed;
+  const stops=$('stopseq').value.split(',').map(s=>s.trim()).filter(Boolean); if(stops.length)body.stop=stops;
+  return body;
+}
+loadPrefs();
+document.querySelectorAll('#presetseg button').forEach(b=>b.addEventListener('click',()=>setPreset(b.dataset.preset,true)));
+['advanced','systemprompt','maxtokens','temperature','topp','topk','seed','stopseq'].forEach(id=>{
+  $(id).addEventListener('input',()=>{syncGenOutputs();savePrefs();});
+  $(id).addEventListener('change',()=>{syncGenOutputs();savePrefs();});
+});
 
 async function pollStats(){
   try{const s=await j('/api/stats');conn(true);
@@ -252,6 +379,21 @@ async function pollStats(){
       $('gpumembar').style.width=Math.min(100,Math.round(s.gpuInUseMemoryBytes/s.totalRAMBytes*100))+'%';}
     else $('gpumem').textContent='—';
   }catch(e){conn(false);}
+}
+async function pollServer(){
+  try{const s=await j('/api/server');
+    $('servermeta').textContent=s.name+' · '+(s.runtimeLinked?'runtime linked':'runtime unavailable');
+    $('srv_base').textContent=s.baseURL||location.origin;
+    $('srv_runtime').textContent=(s.runtimeLinked?'Core AI linked':'not linked')+' · '+(s.computeUnit||'gpu');
+    $('srv_pid').textContent='pid '+s.pid+' · '+(s.verbose?'verbose':'normal');
+    $('srv_exports').textContent=s.exportsDir||'—';$('srv_exports').title=s.exportsDir||'';
+    $('srv_registry').textContent=s.registryPath||'—';$('srv_registry').title=s.registryPath||'';
+    $('srv_eagle').textContent=s.eagle?.enabled?(s.eagle.name||'enabled'):'off';
+  }catch(e){
+    $('servermeta').textContent='server metadata unavailable until next caix restart';
+    $('srv_base').textContent=location.origin;$('srv_runtime').textContent='legacy API';
+    $('srv_pid').textContent='—';$('srv_exports').textContent='—';$('srv_registry').textContent='—';$('srv_eagle').textContent='—';
+  }
 }
 async function pollModels(){
   try{const m=await j('/api/models');
@@ -275,15 +417,17 @@ async function pollModels(){
       const loaded=x.status==='loaded';
       const tps=x.tokensPerSecond?`<b>${x.tokensPerSecond.toFixed(0)}</b> tok/s`:(loaded?'idle':'');
       const reqs=x.requests?` · ${x.requests} req`:'';
+      const actions=x.bundle
+        ? `<button class="btn ${loaded?'':'go'}" data-action="${loaded?'offload':'load'}" data-model="${attr(x.name)}">${loaded?'Offload':'Load'}</button>
+           <button class="btn danger" data-action="delete" data-model="${attr(x.name)}">Delete</button>`
+        : `<span class="sub">not converted</span>`;
       return `<div class="m">
-        <div><div class="id">${x.name}</div><div class="sub">${x.params||x.bundle||'core ai bundle'}</div></div>
+        <div><div class="id">${esc(x.name)}</div><div class="sub">${esc(x.params||'core ai bundle')}</div></div>
         <div class="stat"><span class="status ${loaded?'loaded':''}"><i></i>${loaded?'loaded':'available'}</span>
           <div style="margin-top:4px">${tps}${reqs}</div></div>
-        <div>${loaded?`<button class="btn" onclick="act('offload','${x.name}')">Offload</button>`
-              :x.bundle?`<button class="btn go" onclick="act('load','${x.name}')">Load</button>`
-              :`<span class="sub">not converted</span>`}</div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">${actions}</div>
       </div>`;}).join('')||'<div class="empty">no models yet — convert one below</div>';
-    const rsel=$('modelsel');if(!rsel.dataset.filled&&m.length){rsel.innerHTML=m.map(x=>`<option>${x.name}</option>`).join('');rsel.dataset.filled='1';}
+    const rsel=$('modelsel');if(!rsel.dataset.filled&&m.length){rsel.innerHTML=m.map(x=>`<option>${esc(x.name)}</option>`).join('');rsel.dataset.filled='1';}
   }catch(e){$('models').innerHTML='<div class="empty">server offline — start it with <span style="font-family:var(--mono)">coreai-pipeline serve</span></div>';}
 }
 async function pollJobs(){
@@ -292,8 +436,17 @@ async function pollJobs(){
       <div class="track"><i style="width:${x.pct}%"></i></div></div>`).join('');
   }catch(e){}
 }
-async function act(a,name){try{await j('/api/'+a,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:name})});}catch(e){}pollModels();}
+async function act(a,name){
+  if(a==='delete'&&!confirm(`Delete ${name} from disk?`))return;
+  try{await j('/api/'+a,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:name})});}
+  catch(e){alert(`${a} failed: ${e.message||e}`);}
+  pollModels();
+}
 async function startConvert(){await act('convert',$('modelsel').value);pollJobs();}
+$('models').addEventListener('click',e=>{
+  const b=e.target.closest('button[data-action]');if(!b)return;
+  act(b.dataset.action,b.dataset.model);
+});
 
 // ---- usage analytics (cumulative) ----
 const kfmt=n=>{n=n||0;return n>=1e6?(n/1e6).toFixed(2)+'M':n>=1e3?(n/1e3).toFixed(1)+'k':''+n;};
@@ -331,8 +484,9 @@ async function pollGen(){
 // ---- HuggingFace → Core AI: support check + convert ----
 function hfBody(){
   const b={hf_repo:$('hfrepo').value.trim()};
-  const c=$('hfcomp').value,p=$('hfprec').value,ctx=$('hfctx').value.trim(),nm=$('hfname').value.trim();
+  const c=$('hfcomp').value,p=$('hfprec').value,ctx=$('hfctx').value.trim(),nm=$('hfname').value.trim(),gf=$('hfgguf').value.trim();
   if(c)b.compression=c; if(p)b.compute_precision=p; if(ctx)b.context=parseInt(ctx,10); if(nm)b.name=nm;
+  if(gf)b.gguf_file=gf;
   return b;
 }
 function hfShow(html,cls){const el=$('hfresult');el.innerHTML=html;el.className='hint '+(cls||'');el.style.fontFamily='var(--mono)';}
@@ -341,6 +495,7 @@ async function hfCheck(){
   hfShow('checking architecture support…');
   try{const d=await j('/api/check-support',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({hf_repo:repo})});
     if(d.supported){hfShow(`✓ supported · <b>${d.model_type}</b>${d.params_b?` · ~${d.params_b}B`:''} · ready to convert`,'ok-txt');}
+    else if(d.gguf_only){hfShow(`GGUF-only repo · caix can dequantize then convert; original safetensors are better when available`,'work-txt');}
     else{hfShow(`⚑ flagged · ${esc(d.reason||'unsupported architecture')}`,'bad-txt');}
   }catch(e){hfShow('check failed: '+e,'bad-txt');}
 }
@@ -348,14 +503,13 @@ async function hfConvert(){
   const repo=$('hfrepo').value.trim(); if(!repo){hfShow('paste a HuggingFace repo id first','bad-txt');return;}
   hfShow('checking support, then converting…','work-txt');
   try{const d=await j('/api/convert-hf',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(hfBody())});
-    if(d.started){hfShow(`▸ converting <b>${d.name}</b> — track progress below; it loads when done`,'work-txt');pollJobs();}
+    if(d.started){hfShow(`▸ ${d.gguf?'dequantizing GGUF, then converting':'converting'} <b>${esc(d.name)}</b> — track progress below`,'work-txt');pollJobs();}
     else if(d.supported===false){hfShow(`⚑ flagged · ${esc(d.reason||'unsupported architecture — not converted')}`,'bad-txt');}
     else{hfShow('convert: '+JSON.stringify(d),'');}
   }catch(e){hfShow('convert failed: '+e,'bad-txt');}
 }
 
 // ---- chat (streaming, OpenAI-style) ----
-const esc=s=>(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 let history=[], streaming=false, abortCtrl=null;
 const isMTP=n=>/eagle|mtp|spec/i.test(n||'');
 function renderChat(){
@@ -400,10 +554,12 @@ async function sendChat(){
     $('livestat').innerHTML=`<span class="spin"></span> ${a.wait}`;
     renderChat();
   },400);
-  const msgs=history.filter(m=>m.role==='user'||m.content||m.reasoning).map(m=>({role:m.role,content:m.content||''}));
+  const msgs=[];
+  const sys=$('systemprompt').value.trim(); if(sys)msgs.push({role:'system',content:sys});
+  msgs.push(...history.filter(m=>m.role==='user'||m.content||m.reasoning).map(m=>({role:m.role,content:m.content||''})));
   try{
     const res=await fetch('/v1/chat/completions',{method:'POST',headers:{'content-type':'application/json'},signal:abortCtrl.signal,
-      body:JSON.stringify({model,messages:msgs,max_tokens:1024,temperature:0.7,top_p:0.95,stream:true})});
+      body:JSON.stringify(chatPayload(model,msgs))});
     if(!res.ok||!res.body)throw new Error('HTTP '+res.status);
     const reader=res.body.getReader(), dec=new TextDecoder(); let buf='';
     for(;;){const {done,value}=await reader.read(); if(done)break;
@@ -438,9 +594,9 @@ $('convertbtn').addEventListener('click',startConvert);
 $('hfcheck').addEventListener('click',hfCheck);
 $('hfconvert').addEventListener('click',hfConvert);
 $('hfrepo').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();hfConvert();}});
-function loop(){pollStats();pollModels();pollJobs();pollGen();pollUsage();}
+function loop(){pollStats();pollServer();pollModels();pollJobs();pollGen();pollUsage();}
 loop();setInterval(pollStats,1500);setInterval(pollModels,3000);setInterval(pollJobs,1200);
-setInterval(pollGen,2000);setInterval(pollUsage,2500);
+setInterval(pollServer,5000);setInterval(pollGen,2000);setInterval(pollUsage,2500);
 </script>
 </body>
 </html>

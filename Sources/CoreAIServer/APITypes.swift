@@ -48,7 +48,9 @@ public struct OpenAIChatRequest: Codable, Sendable {
     public var model: String
     public var messages: [ChatMessage]
     public var max_tokens: Int?
+    public var max_completion_tokens: Int?
     public var temperature: Double?
+    public var top_k: Int?
     public var top_p: Double?
     public var stop: StringOrArray?
     public var stream: Bool?
@@ -56,8 +58,8 @@ public struct OpenAIChatRequest: Codable, Sendable {
     /// Function/tool definitions (`[{type:"function", function:{name, description, parameters}}]`).
     public var tools: [JSONAny]?
     public func toGeneration() -> GenerationRequest {
-        GenerationRequest(model: model, messages: messages, maxTokens: max_tokens ?? 512,
-                          temperature: temperature ?? 0.7, topP: top_p, topK: nil,
+        GenerationRequest(model: model, messages: messages, maxTokens: max_tokens ?? max_completion_tokens ?? 512,
+                          temperature: temperature ?? 0.7, topP: top_p, topK: top_k,
                           stop: stop?.values ?? [], stream: stream ?? false,
                           seed: seed.map { UInt64(bitPattern: Int64($0)) }, tools: tools)
     }

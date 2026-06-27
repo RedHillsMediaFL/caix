@@ -546,21 +546,44 @@ public final class EagleEngine {
         var committed = promptTokens
         var generated: [Int] = []
         var streamed = ""
+        var finalTextOverride: String?
         var stop: CoreAIPipeline.StopReason = .maxTokens
         var drafted = 0, accepted = 0, iters = 0
+        let stopSequences = options.stopSequences.filter { !$0.isEmpty }
+
+        func emitVisibleText(_ text: String) {
+            guard let onToken else {
+                streamed = text
+                return
+            }
+            if text.hasPrefix(streamed) {
+                let delta = String(text.dropFirst(streamed.count))
+                if !delta.isEmpty { onToken(delta) }
+            }
+            streamed = text
+        }
 
         func emit(_ token: Int) -> Bool {
             if stopIds.contains(token) { stop = .eos; return false }
             if generated.count >= maxTokens { stop = .maxTokens; return false }
             if committed.count >= maxContext { stop = .contextLimit; return false }
             generated.append(token); committed.append(token)
-            if let onToken {
+            if onToken != nil || !stopSequences.isEmpty {
                 let text = tokenizer.decode(tokens: generated)
-                if text.hasPrefix(streamed) {
-                    let delta = String(text.dropFirst(streamed.count))
-                    if !delta.isEmpty { onToken(delta) }
+                if let stopRange = CoreAIPipeline.firstStopRange(
+                    in: text, stopSequences: stopSequences)
+                {
+                    let visible = String(text[..<stopRange.lowerBound])
+                    emitVisibleText(visible)
+                    finalTextOverride = visible
+                    stop = .stopSequence
+                    return false
+                } else {
+                    let visible = stopSequences.isEmpty
+                        ? text
+                        : CoreAIPipeline.visibleTextAvoidingPartialStop(text, stopSequences: stopSequences)
+                    emitVisibleText(visible)
                 }
-                streamed = text
             }
             return true
         }
@@ -624,7 +647,10 @@ public final class EagleEngine {
         }
 
         let decodeSeconds = Date().timeIntervalSince(decodeStart)
-        let text = tokenizer.decode(tokens: generated)
+        let text = finalTextOverride ?? tokenizer.decode(tokens: generated)
+        if finalTextOverride == nil, onToken != nil {
+            emitVisibleText(text)
+        }
         let accRate = drafted > 0 ? Double(accepted) / Double(drafted) : 0
         log(String(format: "eagle decode %d tok in %.3fs (%.1f tok/s) over %d passes; "
                    + "drafts %d accepted %d (%.1f%%), %.2f tok/pass, stop=%@",

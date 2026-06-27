@@ -125,6 +125,44 @@ actor JobTracker {
         return nil
     }
 
+    /// Launch a GGUF-only repo conversion:
+    /// `convert.py --gguf <repo> [--gguf-file f] --name <name> --compression ...`.
+    /// Tracked under `name`; support is checked after dequantization inside the converter.
+    func startConvertGGUF(name: String, ggufRepo: String, ggufFile: String?, compression: String,
+                          precision: String, context: Int?, script: String, workingDir: URL,
+                          pythonExecutable: String) -> String? {
+        if let existing = jobs[name], existing.state == .running {
+            return "conversion already running for \(name)"
+        }
+        guard FileManager.default.fileExists(atPath: script) else {
+            return "converter not found at \(script)"
+        }
+        var argv = [script, "--gguf", ggufRepo, "--name", name,
+                    "--compression", compression, "--compute-precision", precision]
+        if let ggufFile { argv += ["--gguf-file", ggufFile] }
+        if let c = context { argv += ["--context", String(c)] }
+        let process = Process()
+        process.currentDirectoryURL = workingDir
+        process.executableURL = URL(fileURLWithPath: pythonExecutable)
+        process.arguments = argv
+        var env = ProcessInfo.processInfo.environment
+        env["PYTHONUNBUFFERED"] = "1"
+        process.environment = env
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        process.terminationHandler = { proc in
+            let ok = proc.terminationStatus == 0
+            Task { await self.finish(model: name, success: ok) }
+        }
+        do {
+            try process.run()
+        } catch {
+            return "failed to launch converter: \(error.localizedDescription)"
+        }
+        jobs[name] = Job(model: name, start: Date(), state: .running, finishedAt: nil)
+        return nil
+    }
+
     private func finish(model: String, success: Bool) {
         guard var job = jobs[model] else { return }
         job.state = success ? .done : .failed
