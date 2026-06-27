@@ -1,5 +1,11 @@
 # caix · native Apple Core AI inference server
 
+[![Release](https://img.shields.io/github/v/release/RedHillsMediaFL/caix?include_prereleases&sort=semver&color=E5484D)](https://github.com/RedHillsMediaFL/caix/releases)
+[![Stars](https://img.shields.io/github/stars/RedHillsMediaFL/caix)](https://github.com/RedHillsMediaFL/caix/stargazers)
+[![Apple silicon · Core AI](https://img.shields.io/badge/Apple%20silicon-Core%20AI-black?logo=apple&logoColor=white)](https://github.com/RedHillsMediaFL/caix)
+[![Swift](https://img.shields.io/badge/Swift-F05138?logo=swift&logoColor=white)](https://github.com/RedHillsMediaFL/caix)
+[![🤗 Models](https://img.shields.io/badge/%F0%9F%A4%97%20Models-redhillsmediafl-ffcc4d)](https://huggingface.co/redhillsmediafl)
+
 > **BETA.** caix is beta software and will remain so until Apple's **Core AI** runtime leaves
 > beta. Things may change; expect rough edges. It runs entirely on your Mac — no data leaves the
 > device.
