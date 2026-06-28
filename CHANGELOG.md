@@ -17,6 +17,7 @@
 - Added `scripts/refresh-export-index.sh` and `CAIX_EXPORT_INDEX` support for launchd/external-volume model discovery.
 - Added an OpenCode provider config that points OpenCode at the local OpenAI-compatible caix server.
 - Added README status badges for GitHub releases, stars, Apple silicon/Core AI, Swift, and RHM Hugging Face models.
+- Published verified RHM GLM-4-9B-0414 and GLM-4-32B-0414 Core AI bundles and documented them in the README model table.
 
 ### Fixed
 
