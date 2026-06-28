@@ -213,8 +213,34 @@ final class OutputNormalizerTests: XCTestCase {
         }
         let f = OutputFormat.detect(modelName: "qwythos-9b-coreai", tokenizerDir: dir)
         XCTAssertEqual(f.family, .qwen)
-        // Qwythos generation prompt opens `<think>` ⇒ output starts inside reasoning.
-        XCTAssertTrue(f.implicitReasoningStart)
+        XCTAssertEqual(f.reasoningStarts, ["<think>"])
+        XCTAssertEqual(f.toolStarts, ["<tool_call>"])
+    }
+
+    func testQwythosDefaultTemplateDanglesThinking() {
+        let template = """
+        {%- if add_generation_prompt %}
+            {{- '<|im_start|>assistant\\n' }}
+            {%- if enable_thinking is defined and enable_thinking is false %}
+                {{- '<think>\\n\\n</think>\\n\\n' }}
+            {%- else %}
+                {{- '<think>\\n' }}
+            {%- endif %}
+        {%- endif %}
+        """
+        XCTAssertTrue(OutputFormat.detectImplicitReasoningStart(
+            template: template, opens: ["<think>"], closes: ["</think>"]))
+    }
+
+    func testQwythosPatchedTemplateStartsInFinalText() {
+        let template = """
+        {%- if add_generation_prompt %}
+            {{- '<|im_start|>assistant\\n' }}
+            {{- '<think>\\n\\n</think>\\n\\n' }}
+        {%- endif %}
+        """
+        XCTAssertFalse(OutputFormat.detectImplicitReasoningStart(
+            template: template, opens: ["<think>"], closes: ["</think>"]))
     }
 
     func testDetectGemmaBundle() throws {

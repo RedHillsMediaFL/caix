@@ -28,6 +28,7 @@
 - Added `scripts/conversion-guard.sh` so local conversion queues can avoid overlapping `convert.py`, raw `coreai.llm.export`, and CLI verification jobs.
 - Added `mixtral-8x7b-instruct-coreai` to the OpenCode provider map.
 - Removed `qwythos-9b-coreai` from the OpenCode provider map until its qwen3_5 reasoning-only output is fixed.
+- Added converter postprocessing for Qwythos chat templates so future qwen3_5 exports bake the model's no-thinking branch for OpenAI-visible content.
 
 ### Fixed
 

@@ -82,6 +82,15 @@ def check_support(hf_id: str) -> dict:
 BF16_FAMILIES = ("gemma4", "gemma4_assistant", "diffusion_gemma", "qwen3_5", "qwen3_5_moe", "glm4")
 
 
+QWYTHOS_THINKING_BRANCH = """{%- if enable_thinking is defined and enable_thinking is false %}
+        {{- '<think>\\n\\n</think>\\n\\n' }}
+    {%- else %}
+        {{- '<think>\\n' }}
+    {%- endif %}"""
+
+QWYTHOS_NO_THINK_BRANCH = "{{- '<think>\\n\\n</think>\\n\\n' }}"
+
+
 def load_registry() -> dict:
     return json.loads(REGISTRY.read_text()) if REGISTRY.exists() else {"models": {}}
 
@@ -134,6 +143,35 @@ def _log_convert_event(target: str, kind: str, reason: str, model_type) -> None:
                     f"model_type={model_type}\t{reason}\n")
     except Exception:
         pass
+
+
+def patch_chat_templates(bundle: Path, hf_id: str) -> list[str]:
+    """Apply CAIX runtime compatibility patches to exported tokenizer templates.
+
+    Apple's CoreAILanguageModels tokenizer API currently lets us pass messages/tools, but not
+    arbitrary chat-template kwargs. Qwythos exposes the right no-thinking path behind
+    `enable_thinking=false`; without that kwarg its generation prompt dangles an open `<think>`,
+    which makes OpenAI clients receive reasoning_content with empty visible content.
+    """
+    patched: list[str] = []
+    if "Qwythos-9B-Claude-Mythos-5-1M" not in hf_id:
+        return patched
+
+    tok_dir = bundle / "tokenizer"
+    candidates = [tok_dir / "chat_template.jinja"]
+    cfg = tok_dir / "tokenizer_config.json"
+    if cfg.exists():
+        candidates.append(cfg)
+
+    for path in candidates:
+        if not path.exists():
+            continue
+        text = path.read_text()
+        if QWYTHOS_THINKING_BRANCH not in text:
+            continue
+        path.write_text(text.replace(QWYTHOS_THINKING_BRANCH, QWYTHOS_NO_THINK_BRANCH))
+        patched.append(str(path.relative_to(bundle)))
+    return patched
 
 
 def main() -> int:
@@ -220,6 +258,12 @@ def main() -> int:
                 print(f"  bundled generation_config.json (published stop tokens)")
         except Exception as e:
             print(f"  note: could not bundle generation_config.json: {e}")
+        try:
+            patched = patch_chat_templates(bundle, r["hf_id"])
+            if patched:
+                print(f"  patched chat template(s) for OpenAI-visible output: {', '.join(patched)}")
+        except Exception as e:
+            print(f"  note: could not patch chat template: {e}")
     if not args.dry_run:
         print(f"  result: {'OK ' + str(bundle) if ok else 'FAILED (no .aimodel/main.mlirb)'}  exit={rc}")
         if not ok:
