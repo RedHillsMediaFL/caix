@@ -31,10 +31,25 @@ public struct BundleManifest: Codable, Sendable {
     }
 
     public struct Language: Codable, Sendable {
+        public struct FunctionMap: Codable, Sendable {
+            public let byRole: [String: [String]]
+
+            public init(from decoder: Decoder) throws {
+                let c = try decoder.singleValueContainer()
+                self.byRole = try c.decode([String: [String]].self)
+            }
+
+            public func name(for role: String) -> String? {
+                byRole[role]?.first
+            }
+        }
+
         public let tokenizer: String
         public let vocabSize: Int
         public let maxContextLength: Int
         public let embeddedTokenizer: Bool
+        /// Optional logical role -> exported function names map (`main`, `decode`, etc.).
+        public let functionMap: FunctionMap?
         /// Optional per-model KV-cache floor baked into the bundle (overrides registry lookup).
         public let minKVCapacity: Int?
 
@@ -43,6 +58,7 @@ public struct BundleManifest: Codable, Sendable {
             case vocabSize = "vocab_size"
             case maxContextLength = "max_context_length"
             case embeddedTokenizer = "embedded_tokenizer"
+            case functionMap = "function_map"
             case minKVCapacity = "min_kv_capacity"
         }
 
@@ -53,6 +69,7 @@ public struct BundleManifest: Codable, Sendable {
             self.maxContextLength = try c.decode(Int.self, forKey: .maxContextLength)
             self.embeddedTokenizer =
                 try c.decodeIfPresent(Bool.self, forKey: .embeddedTokenizer) ?? true
+            self.functionMap = try c.decodeIfPresent(FunctionMap.self, forKey: .functionMap)
             self.minKVCapacity = try c.decodeIfPresent(Int.self, forKey: .minKVCapacity)
         }
     }

@@ -37,7 +37,7 @@
 - Recorded the Ornith-1.0-35B runtime block: int8 conversion completes, but the 32 GB bundle does not pass live smoke on the 64 GB host, so HF publication remains blocked.
 - Recorded the next Ornith-1.0-35B support path: CoreAI fork commit `648ad274` adds opt-in authored qwen3_5_moe quantization, and a one-layer mixed dense-int4/expert-int8 probe passes GPU fast-path smoke while full-bundle size tuning remains open.
 - Recorded the authored Ornith-1.0-35B int4+head-quant path: CoreAI fork commit `7eafd4d` quantizes the shared head, one-layer and four-layer structural bundles pass GPU fast-path smoke, and the full 40-layer export completes at 17 GB, but full runtime warmup currently fails with an MPS reshape error, so HF publication remains held.
-- Narrowed the authored Ornith-1.0-35B runtime boundary: 13-layer int4+head-quant bundles now export with baked `language.min_kv_capacity=1024` and pass default-route generation, while 14 layers complete prefill then hit the Core AI `mps.reshape` decode gate.
+- Narrowed the authored Ornith-1.0-35B runtime boundary: the single-function 14-layer int4+head-quant probe exposed a prefill/decode shape-specialization gate, and a dual-entrypoint 14-layer export now passes two-token sequential generation without Core AI reshape/slice diagnostics; deeper/full-bundle validation remains held before HF publication.
 
 ### Fixed
 
@@ -48,6 +48,9 @@
 - Stopped the sequential language engine from running an unused final decode forward after the
   requested `maxTokens` count has already been emitted, which lets the 14-layer Ornith-35B depth
   probe complete one-token generation and avoids extra decode-shape pressure on hybrid exports.
+- Loaded optional `language.function_map` decode entrypoints in the sequential runtime and routed
+  one-token forwards through them; added opt-in `COREAI_PREFILL_CHUNK`/`COREAI_PREFILL_MODE`
+  diagnostics for prefill/decode shape investigation without changing the default batched prefill.
 - Baked `language.min_kv_capacity` into future converted qwen3_5/qwen3_5_moe bundle metadata and
   corrected the Ornith-1.0-35B registry floor to 1024.
 - Fixed server-side CoreAILanguageModels generation stalls by pumping the main runloop while `serve` waits on the HTTP server task.

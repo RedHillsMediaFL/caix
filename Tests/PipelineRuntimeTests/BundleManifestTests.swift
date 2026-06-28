@@ -39,7 +39,19 @@ final class BundleManifestTests: XCTestCase {
             tokenizer: "deepreinforce-ai/Ornith-1.0-9B")
 
         let bundle = try ResolvedBundle.load(at: root.path)
-        XCTAssertEqual(bundle.minKVCapacity, 512)
+        XCTAssertEqual(bundle.minKVCapacity, 1024)
+    }
+
+    func testLanguageFunctionMapDecodesRoles() throws {
+        let root = try makeBundle(
+            name: "ornith-1.0-35b-coreai",
+            hfModelId: "deepreinforce-ai/Ornith-1.0-35B",
+            tokenizer: "deepreinforce-ai/Ornith-1.0-35B",
+            functionMap: #"{"main":["main"],"decode":["decode"]}"#)
+
+        let bundle = try ResolvedBundle.load(at: root.path)
+        XCTAssertEqual(bundle.manifest.language?.functionMap?.name(for: "main"), "main")
+        XCTAssertEqual(bundle.manifest.language?.functionMap?.name(for: "decode"), "decode")
     }
 
     func testStandardQwenKeepsZeroFloorWithoutRegistry() throws {
@@ -57,12 +69,13 @@ final class BundleManifestTests: XCTestCase {
         name: String,
         hfModelId: String,
         tokenizer: String,
-        minKVCapacity: Int? = nil
+        minKVCapacity: Int? = nil,
+        functionMap: String? = nil
     ) throws -> URL {
         let root = try makeTempDir().appendingPathComponent(name, isDirectory: true)
         try makeBundle(
             at: root, name: name, hfModelId: hfModelId, tokenizer: tokenizer,
-            minKVCapacity: minKVCapacity)
+            minKVCapacity: minKVCapacity, functionMap: functionMap)
         return root
     }
 
@@ -71,7 +84,8 @@ final class BundleManifestTests: XCTestCase {
         name: String,
         hfModelId: String,
         tokenizer: String,
-        minKVCapacity: Int? = nil
+        minKVCapacity: Int? = nil,
+        functionMap: String? = nil
     ) throws {
         let fm = FileManager.default
         try fm.createDirectory(at: root, withIntermediateDirectories: true)
@@ -81,6 +95,7 @@ final class BundleManifestTests: XCTestCase {
         try "{}".write(to: tokDir.appendingPathComponent("tokenizer.json"), atomically: true, encoding: .utf8)
 
         let minField = minKVCapacity.map { #","min_kv_capacity":\#($0)"# } ?? ""
+        let functionMapField = functionMap.map { #","function_map":\#($0)"# } ?? ""
         let json = """
             {
               "metadata_version": "0.2",
@@ -91,7 +106,7 @@ final class BundleManifestTests: XCTestCase {
                 "tokenizer": "\(tokenizer)",
                 "vocab_size": 248320,
                 "max_context_length": 8192,
-                "embedded_tokenizer": true\(minField)
+                "embedded_tokenizer": true\(minField)\(functionMapField)
               },
               "source": {
                 "model_definition": "torch",

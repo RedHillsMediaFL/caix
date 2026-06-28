@@ -41,7 +41,8 @@ import Tokenizers
 /// Not `Sendable`: an instance is created and driven entirely within a single task; the
 /// `ModelManager` confines each engine to one model handle and serialises generation.
 final class LLMEngine {
-    private let function: InferenceFunction
+    private let prefillFunction: InferenceFunction
+    private let decodeFunction: InferenceFunction
     let tokenizer: any Tokenizer
 
     private let inputIdsName: String
@@ -111,6 +112,8 @@ final class LLMEngine {
             vocabSize: bundle.vocabSize,
             maxContextLength: bundle.maxContextLength,
             minKVCapacity: bundle.minKVCapacity,
+            mainFunctionName: bundle.manifest.language?.functionMap?.name(for: "main") ?? "main",
+            decodeFunctionName: bundle.manifest.language?.functionMap?.name(for: "decode"),
             loadSeconds: loadSeconds,
             verbose: verbose,
             tokenizerDir: bundle.tokenizerDir)
@@ -205,7 +208,21 @@ final class LLMEngine {
         // Prefill.
         let prefillStart = Date()
         let prompt32 = promptTokens.map { Int32($0) }
-        var lastLogits = try await step(tokens: prompt32)
+        let prefillChunkSize = resolvedPrefillChunkSize(promptCount: prompt32.count)
+        if prefillChunkSize < prompt32.count {
+            log("prefill mode chunked/\(prefillChunkSize) (decode-shape diagnostic)")
+        }
+        var lastLogits: [Float] = []
+        if prefillChunkSize < prompt32.count {
+            var offset = 0
+            while offset < prompt32.count {
+                let end = min(offset + prefillChunkSize, prompt32.count)
+                lastLogits = try await step(tokens: Array(prompt32[offset..<end]))
+                offset = end
+            }
+        } else {
+            lastLogits = try await step(tokens: prompt32)
+        }
         var nextToken = sampler.sample(lastLogits, using: &rng)
         let prefillSeconds = Date().timeIntervalSince(prefillStart)
         log(
@@ -324,6 +341,8 @@ final class LLMEngine {
         vocabSize: Int,
         maxContextLength: Int,
         minKVCapacity: Int,
+        mainFunctionName: String,
+        decodeFunctionName: String?,
         loadSeconds: Double,
         verbose: Bool,
         tokenizerDir: URL? = nil
@@ -334,9 +353,9 @@ final class LLMEngine {
         self.minKVCapacity = minKVCapacity
         self.loadSeconds = loadSeconds
 
-        guard let descriptor = model.functionDescriptor(for: "main") else {
+        guard let descriptor = model.functionDescriptor(for: mainFunctionName) else {
             throw CoreAIPipeline.RuntimeError.modelContract(
-                "function 'main' not found; have \(model.functionNames)")
+                "function '\(mainFunctionName)' not found; have \(model.functionNames)")
         }
 
         guard descriptor.inputNames.count == 2 else {
@@ -403,10 +422,24 @@ final class LLMEngine {
                         .utf8))
         }
 
-        guard let fn = try model.loadFunction(named: "main") else {
-            throw CoreAIPipeline.RuntimeError.modelContract("could not load function 'main'")
+        guard let prefillFn = try model.loadFunction(named: mainFunctionName) else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "could not load function '\(mainFunctionName)'")
         }
-        self.function = fn
+        self.prefillFunction = prefillFn
+        if let decodeFunctionName, decodeFunctionName != mainFunctionName {
+            guard let decodeFn = try model.loadFunction(named: decodeFunctionName) else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "could not load function '\(decodeFunctionName)'")
+            }
+            self.decodeFunction = decodeFn
+            if verbose {
+                FileHandle.standardError.write(
+                    Data("[coreai] using decode function '\(decodeFunctionName)'\n".utf8))
+            }
+        } else {
+            self.decodeFunction = prefillFn
+        }
         self.stopIds = Self.stopTokenIds(tokenizer: tokenizer, tokenizerDir: tokenizerDir)
 
         // Placeholder 1-slot caches; replaced by allocateKVCache(capacity:) before use.
@@ -421,6 +454,23 @@ final class LLMEngine {
     }
 
     // MARK: - KV cache
+
+    /// Diagnostic prefill chunking for hybrid qwen3_5/qwen3_5_moe graph-shape work. Smaller
+    /// chunks reduce query-width changes at the decode boundary, but can be slow for large Core AI
+    /// bundles, so the default remains the standard single batched prefill.
+    func resolvedPrefillChunkSize(promptCount: Int) -> Int {
+        if let raw = ProcessInfo.processInfo.environment["COREAI_PREFILL_CHUNK"],
+            let parsed = Int(raw.trimmingCharacters(in: .whitespacesAndNewlines)),
+            parsed > 0
+        {
+            return min(parsed, max(1, promptCount))
+        }
+        switch ProcessInfo.processInfo.environment["COREAI_PREFILL_MODE"]?.lowercased() {
+        case "token", "tokenwise", "single", "1", "true", "yes": return 1
+        case "batch", "batched", "0", "false", "no", "off": return max(1, promptCount)
+        default: return max(1, promptCount)
+        }
+    }
 
     /// The fixed KV-cache capacity (tokens) to allocate for a request: the larger of the
     /// requested/derived size and the per-model floor `minKVCapacity + maxTokens`, clamped to
@@ -539,7 +589,8 @@ final class LLMEngine {
         var outputViews = InferenceFunction.MutableViews()
         outputViews.insert(&logits, for: logitsName)
 
-        _ = try await function.run(
+        let activeFunction = tokens.count == 1 ? decodeFunction : prefillFunction
+        _ = try await activeFunction.run(
             inputs: [inputIdsName: inputIds, positionIdsName: positionIds],
             states: consume states,
             outputViews: consume outputViews)
