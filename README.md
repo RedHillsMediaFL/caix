@@ -119,6 +119,7 @@ All bundles are pre-converted Core AI `.aimodel` repos, named `rhm-…-caix`.
 | [`rhm-qwen3-0.6b-caix`](https://huggingface.co/redhillsmediafl/rhm-qwen3-0.6b-caix) | Qwen3-0.6B — tiny & fast; handy edge/draft model | ~335 MB |
 | [`rhm-qwen3-4b-caix`](https://huggingface.co/redhillsmediafl/rhm-qwen3-4b-caix) | Qwen3-4B — general chat, **reliable tool-caller** | ~2.1 GB |
 | [`rhm-ornith-1.0-9b-caix`](https://huggingface.co/redhillsmediafl/rhm-ornith-1.0-9b-caix) | Ornith-1.0-9B (DeepReinforce) | ~17 GB (f16) |
+| [`rhm-qwythos-9b-caix`](https://huggingface.co/redhillsmediafl/rhm-qwythos-9b-caix) | Qwythos-9B-Claude-Mythos-5-1M — qwen3_5 hybrid with visible-content template patch | ~4.7 GB |
 | [`rhm-glm-4-9b-0414-caix`](https://huggingface.co/redhillsmediafl/rhm-glm-4-9b-0414-caix) | GLM-4-9B-0414 — dense bilingual model | ~5.0 GB |
 | [`rhm-glm-4-32b-0414-caix`](https://huggingface.co/redhillsmediafl/rhm-glm-4-32b-0414-caix) | GLM-4-32B-0414 — dense large model | ~17 GB |
 | [`rhm-mixtral-8x7b-instruct-caix`](https://huggingface.co/redhillsmediafl/rhm-mixtral-8x7b-instruct-caix) | Mixtral-8x7B-Instruct-v0.1 — sparse MoE instruction model | ~24 GB |

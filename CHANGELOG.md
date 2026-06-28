@@ -29,6 +29,8 @@
 - Added `mixtral-8x7b-instruct-coreai` to the OpenCode provider map.
 - Removed `qwythos-9b-coreai` from the OpenCode provider map until its qwen3_5 reasoning-only output is fixed.
 - Added converter postprocessing for Qwythos chat templates so future qwen3_5 exports bake the model's no-thinking branch for OpenAI-visible content.
+- Published verified RHM Qwythos-9B-Claude-Mythos-5-1M Core AI bundle and documented it in the README model table.
+- Restored `qwythos-9b-coreai` to the OpenCode provider map after no-thinking template verification.
 
 ### Fixed
 
