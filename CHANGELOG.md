@@ -37,6 +37,7 @@
 - Recorded the Ornith-1.0-35B runtime block: int8 conversion completes, but the 32 GB bundle does not pass live smoke on the 64 GB host, so HF publication remains blocked.
 - Recorded the next Ornith-1.0-35B support path: CoreAI fork commit `648ad274` adds opt-in authored qwen3_5_moe quantization, and a one-layer mixed dense-int4/expert-int8 probe passes GPU fast-path smoke while full-bundle size tuning remains open.
 - Recorded the authored Ornith-1.0-35B int4+head-quant path: CoreAI fork commit `7eafd4d` quantizes the shared head, one-layer and four-layer structural bundles pass GPU fast-path smoke, and the full 40-layer export completes at 17 GB, but full runtime warmup currently fails with an MPS reshape error, so HF publication remains held.
+- Narrowed the authored Ornith-1.0-35B runtime boundary: 13-layer int4+head-quant bundles now export with baked `language.min_kv_capacity=1024` and pass default-route generation, while 14 layers complete prefill then hit the Core AI `mps.reshape` decode gate.
 
 ### Fixed
 
