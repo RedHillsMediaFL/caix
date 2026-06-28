@@ -45,6 +45,9 @@
   sequential engine by default, because the CoreAILanguageModels fast warmup currently uses a cache
   shape too small for Ornith's 1024-position SSM prefix; `COREAI_FAST_HYBRID_ENGINE=1` can still
   opt into the experimental fast path.
+- Stopped the sequential language engine from running an unused final decode forward after the
+  requested `maxTokens` count has already been emitted, which lets the 14-layer Ornith-35B depth
+  probe complete one-token generation and avoids extra decode-shape pressure on hybrid exports.
 - Baked `language.min_kv_capacity` into future converted qwen3_5/qwen3_5_moe bundle metadata and
   corrected the Ornith-1.0-35B registry floor to 1024.
 - Fixed server-side CoreAILanguageModels generation stalls by pumping the main runloop while `serve` waits on the HTTP server task.

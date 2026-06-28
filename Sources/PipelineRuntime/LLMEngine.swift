@@ -237,7 +237,8 @@ final class LLMEngine {
         let profile = ProcessInfo.processInfo.environment["COREAI_PROFILE"] != nil
         var fwdT = 0.0, sampT = 0.0, detokT = 0.0
 
-        for _ in 0..<max(0, options.maxTokens) {
+        let maxNewTokens = max(0, options.maxTokens)
+        for _ in 0..<maxNewTokens {
             if stopIds.contains(nextToken) {
                 stopReason = .eos
                 break
@@ -270,6 +271,10 @@ final class LLMEngine {
                     emitVisibleText(visible)
                 }
                 if profile { detokT += Date().timeIntervalSince(t0) }
+            }
+
+            if generated.count >= maxNewTokens {
+                break
             }
 
             let t1 = profile ? Date() : decodeStart
