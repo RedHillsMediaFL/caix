@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check whether a HuggingFace repo is a Core AI-supported architecture.
+"""Check whether a HuggingFace repo has a Core AI-authored architecture.
 
 Fetches the repo's config.json, reads its model_type, and checks it against the authored
 Core AI modeling registry (coreai_models.models.registry). Emits a single JSON line:
@@ -17,12 +17,80 @@ import argparse, json, os, sys
 
 os.environ.setdefault("HF_HOME", "/Volumes/SSD/hf-cache")
 
-BF16_TYPES = {"gemma4", "gemma4_assistant", "diffusion_gemma", "qwen3_5", "glm4"}
+BF16_TYPES = {"gemma4", "gemma4_assistant", "diffusion_gemma", "qwen3_5", "qwen3_5_moe", "glm4"}
+
+AUTHORING_GAPS = {
+    "qwen3_5_moe": {
+        "status": "needs_coreai_authoring",
+        "summary": (
+            "Qwen3.5 MoE combines the qwen3_5 hybrid recurrent/full-attention decoder "
+            "with qwen3_moe-style SwitchGLU experts."
+        ),
+        "requirements": [
+            "register qwen3_5_moe and qwen3_5_moe_text AutoConfig shims before AutoConfig.from_pretrained",
+            "unwrap top-level multimodal checkpoints through text_config and model.language_model weights",
+            "reuse qwen3_5 recurrent-state packing for linear_attention layers",
+            "replace dense qwen3_5 MLP blocks with router + shared expert + top-k SwitchGLU experts",
+            "remap per-expert safetensors into SwitchGLU layout and preserve top-k/router normalization semantics",
+            "verify parity on a tiny random-weight qwen3_5_moe config, then run a structural export before full conversion",
+        ],
+        "next_step": "author coreai_models.models.macos.qwen3_5_moe and register it in coreai_models.models.registry",
+    },
+}
 
 
 def emit(d: dict) -> int:
     print(json.dumps(d))
     return 0
+
+
+def _text_config(cfg: dict) -> dict:
+    return cfg.get("text_config") or cfg
+
+
+def _rough_params_b(cfg: dict) -> float | None:
+    """Rough sizing for UI planning; MoE estimate is total parameters, not active params."""
+    tc = _text_config(cfg)
+    try:
+        h = tc.get("hidden_size")
+        layers = tc.get("num_hidden_layers")
+        vocab = tc.get("vocab_size")
+        if not (h and layers and vocab):
+            return None
+
+        embed = 2 * vocab * h
+        num_experts = tc.get("num_experts") or 0
+        moe_hidden = tc.get("moe_intermediate_size") or 0
+        shared_hidden = tc.get("shared_expert_intermediate_size") or 0
+        if num_experts and moe_hidden:
+            # gate/up/down per expert, plus a small router. Attention/SSM terms are intentionally
+            # coarse; the goal is sizing guidance, not a parameter-count audit.
+            expert_ffn = layers * (3 * h * moe_hidden * num_experts + h * num_experts)
+            shared_ffn = layers * (3 * h * shared_hidden) if shared_hidden else 0
+            attentionish = layers * 6 * h * h
+            return round((embed + expert_ffn + shared_ffn + attentionish) / 1e9, 2)
+
+        return round((12 * layers * h * h + embed) / 1e9, 2)
+    except Exception:
+        return None
+
+
+def _authoring_gap(model_type: str, cfg: dict) -> dict:
+    gap = AUTHORING_GAPS.get(model_type)
+    if gap:
+        return dict(gap)
+    return {
+        "status": "needs_coreai_authoring",
+        "summary": f"Core AI does not yet have an authored macOS model for model_type '{model_type or '?'}'.",
+        "requirements": [
+            "identify the HF config and state-dict layout",
+            "add or remap the model_type in coreai_models.models.registry",
+            "author the macOS model class using existing Core AI primitives where possible",
+            "add parity checks against the HF reference or a minimal reference implementation",
+            "run structural export, full export, and load/generate coherence before publishing",
+        ],
+        "next_step": "author the Core AI macOS model path and register the model_type",
+    }
 
 
 def main() -> int:
@@ -80,14 +148,8 @@ def main() -> int:
     supported = remapped in supported_types
 
     # 4) rough param count for sizing/UX
-    tc = cfg.get("text_config") or cfg
-    params_b = None
-    try:
-        h = tc.get("hidden_size"); L = tc.get("num_hidden_layers"); V = tc.get("vocab_size")
-        if h and L and V:
-            params_b = round((12 * L * h * h + 2 * V * h) / 1e9, 2)
-    except Exception:
-        pass
+    params_b = _rough_params_b(cfg)
+    gap = {} if supported else _authoring_gap(mt, cfg)
 
     return emit({
         "ok": True, "supported": supported, "hf_id": hf_id,
@@ -96,9 +158,11 @@ def main() -> int:
         "params_b": params_b,
         "suggested_compression": "4bit",
         "suggested_precision": "bfloat16" if remapped in BF16_TYPES else "float16",
-        "reason": "" if supported else (
-            f"model_type '{mt or '?'}' is not authored for Core AI. "
-            f"Supported types: {', '.join(supported_types)}. Flagged for review."),
+        "support_status": "supported" if supported else gap.get("status", "needs_coreai_authoring"),
+        "authoring_required": not supported,
+        "requirements": gap.get("requirements", []),
+        "next_step": gap.get("next_step", ""),
+        "reason": "" if supported else gap.get("summary", ""),
     })
 
 

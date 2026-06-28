@@ -66,7 +66,7 @@ def check_support(hf_id: str) -> dict:
 
 # Gemma-family decoders require bfloat16 for parity; qwen3_5 (hybrid SSM) also validated in
 # bfloat16 (the proven Qwythos path) — fp16's narrow range risks overflow in its activations.
-BF16_FAMILIES = ("gemma4", "gemma4_assistant", "diffusion_gemma", "qwen3_5", "glm4")
+BF16_FAMILIES = ("gemma4", "gemma4_assistant", "diffusion_gemma", "qwen3_5", "qwen3_5_moe", "glm4")
 
 
 def load_registry() -> dict:
@@ -111,7 +111,7 @@ def build_cmd(r: dict, args) -> list[str]:
 
 
 def _log_convert_event(target: str, kind: str, reason: str, model_type) -> None:
-    """Persist unsupported/failed conversion diagnostics without affecting conversion flow."""
+    """Persist gated/failed conversion diagnostics without affecting conversion flow."""
     try:
         import time as _time
         log_dir = os.path.join(os.path.expanduser("~"), ".caix")
@@ -138,7 +138,7 @@ def main() -> int:
     ap.add_argument("--check", action="store_true",
                     help="only check Core AI support for the HF repo; print JSON and exit")
     ap.add_argument("--force", action="store_true",
-                    help="convert even if the support check says the type is unsupported")
+                    help="convert even if the support check has not passed")
     ap.add_argument("--gguf", help="GGUF repo id or local .gguf path — dequantize to HF, then convert")
     ap.add_argument("--gguf-file", help="specific .gguf filename in the repo (else best quant chosen)")
     args = ap.parse_args()
@@ -164,7 +164,7 @@ def main() -> int:
             args.compute_precision = "bfloat16" if mt in ("gemma3", "gemma2", "gemma4") else "float16"
 
     # Architecture support gate: for raw HF ids (not registry keys), verify the model_type is
-    # authored for Core AI before downloading/converting. Unsupported => flag, don't convert.
+    # authored for Core AI before downloading/converting. Not-yet-authored => flag, don't convert.
     hf_for_check = args.hf_id or (args.model if args.model and args.model not in load_registry()["models"] else None)
     support_info = None
     if args.check or hf_for_check:
@@ -176,8 +176,8 @@ def main() -> int:
             return 0 if sup.get("supported") else 3
         if not sup.get("supported") and not args.force:
             print(json.dumps(sup))
-            print(f"  FLAGGED: {sup.get('reason', 'unsupported architecture')}")
-            _log_convert_event(target, "unsupported", sup.get("reason", ""), sup.get("model_type"))
+            print(f"  FLAGGED: {sup.get('next_step') or sup.get('reason', 'Core AI authoring required')}")
+            _log_convert_event(target, "authoring_required", sup.get("reason", ""), sup.get("model_type"))
             return 3
 
     r = resolve(args, support=support_info)

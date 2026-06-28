@@ -209,13 +209,13 @@ async function del(name){if(!confirm('Delete bundle '+name+' from disk? This can
 function hfShow(h,c){$('hfresult').innerHTML=h;$('hfresult').className='hintbox '+(c||'');}
 $('hfcheck').onclick=async()=>{const repo=$('hfrepo').value.trim();if(!repo)return hfShow('paste a repo id','bad-txt');
   hfShow('checking…');try{const d=await api('/api/check-support',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({hf_repo:repo})});
-    hfShow(d.supported?`✓ supported · ${d.model_type}${d.params_b?` · ~${d.params_b}B`:''}`:`⚑ flagged · ${d.reason||'unsupported'}`,d.supported?'ok-txt':'bad-txt');}catch(e){hfShow('check failed','bad-txt');}};
+    hfShow(d.supported?`✓ supported · ${d.model_type}${d.params_b?` · ~${d.params_b}B`:''}`:`⚑ needs authoring · ${d.reason||d.next_step||'model path not authored yet'}`,d.supported?'ok-txt':'bad-txt');}catch(e){hfShow('check failed','bad-txt');}};
 $('hfconvert').onclick=async()=>{const repo=$('hfrepo').value.trim();if(!repo)return hfShow('paste a repo id','bad-txt');
   hfShow('checking + converting…','work-txt');
   try{const d=await api('/api/convert-hf',{method:'POST',headers:{'content-type':'application/json'},
     body:JSON.stringify({hf_repo:repo,compression:$('hfcomp').value,compute_precision:$('hfprec').value})});
     if(d.started)hfShow(`▸ converting ${d.name} — appears in the list when done`,'work-txt');
-    else if(d.supported===false)hfShow(`⚑ flagged · ${d.reason||'unsupported — not converted'}`,'bad-txt');
+    else if(d.supported===false)hfShow(`⚑ needs authoring · ${d.next_step||d.reason||'not converted'}`,'bad-txt');
     else hfShow(JSON.stringify(d));}catch(e){hfShow('convert failed','bad-txt');}loadModels();};
 
 // ---------- skills ----------

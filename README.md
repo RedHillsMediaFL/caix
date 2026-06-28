@@ -201,8 +201,8 @@ gives you a private HTTPS URL on your tailnet (no ports opened to the internet).
     tool-caller.)*
   - **MCP** — connect a streamable-HTTP MCP server and use its tools in chat.
 - **APIs** — OpenAI (`/v1/chat/completions`, `/v1/models`) and Anthropic (`/v1/messages`), streaming.
-- **Model management from the UI** — download + convert from a Hugging Face repo (unsupported
-  architectures are flagged), load, unload, delete.
+- **Model management from the UI** — download + convert from a Hugging Face repo, with new
+  architectures flagged with the Core AI authoring work required.
 
 ---
 
@@ -224,8 +224,9 @@ scripts/refresh-export-index.sh /Volumes/SSD/ai-dev/coreai-pipeline/exports \
 ```
 - **Greedy tool-calling:** the MTP/speculative path is greedy, so small models may not reliably emit
   tool calls. Use a qwen-family model for tool-heavy chats.
-- **Supported architectures** (for conversion): gemma3/gemma4, qwen2/qwen3/qwen3_moe/qwen3_5,
-  mistral, mixtral, gpt_oss. Others are flagged "unsupported" in the UI.
+- **Authored architectures** (for conversion): gemma3/gemma4, qwen2/qwen3/qwen3_moe/qwen3_5,
+  glm4, mistral, mixtral, gpt_oss. New model types are flagged with their required Core AI
+  authoring steps in the UI and support logs.
 - **Diffusion models** are on the roadmap, not in this beta.
 
 ---
@@ -247,7 +248,8 @@ python3 python/converter/convert.py --hf-id Qwen/Qwen2-0.5B --compression 4bit -
 ```
 
 Or do it from the dashboard: paste a HF repo in **Add model → HuggingFace → Core AI**, pick
-compression/precision, and click Convert. Unsupported architectures are flagged with a reason.
+compression/precision, and click Convert. New architectures are flagged with the authoring work
+needed before conversion.
 
 ### GGUF repos (llama.cpp models)
 

@@ -137,7 +137,8 @@ actor JobTracker {
 
     /// Launch a settings-aware conversion of a raw HF repo:
     /// `convert.py --hf-id <repo> --name <name> --compression <c> --compute-precision <p> [--context N]`.
-    /// convert.py re-gates on support and refuses unsupported types. Tracked under `name`.
+    /// convert.py re-gates on support and refuses model types that still need Core AI authoring.
+    /// Tracked under `name`.
     func startConvertHF(name: String, hfRepo: String, compression: String, precision: String,
                         context: Int?, script: String, workingDir: URL, pythonExecutable: String)
         -> String?

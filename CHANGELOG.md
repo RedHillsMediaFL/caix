@@ -18,6 +18,7 @@
 - Added an OpenCode provider config that points OpenCode at the local OpenAI-compatible caix server.
 - Added README status badges for GitHub releases, stars, Apple silicon/Core AI, Swift, and RHM Hugging Face models.
 - Published verified RHM GLM-4-9B-0414 and GLM-4-32B-0414 Core AI bundles and documented them in the README model table.
+- Added structured Core AI authoring requirements for `qwen3_5_moe` support checks, covering the larger Ornith and Qwen3.6 MoE lane.
 
 ### Fixed
 
@@ -27,4 +28,4 @@
 - Listed all accepted EAGLE serve flags in CLI help.
 - Kept dashboard model listing responsive under launchd by using bounded model-index and registry reads instead of blocking indefinitely on inaccessible export paths.
 - Bounded dashboard Hugging Face support checks so a launchd/external-volume converter hang returns JSON and writes a support log instead of wedging the API.
-- Defaulted raw HF `glm4` conversions to bfloat16 after support detection and logged unsupported/failed converter attempts to `~/.caix/convert-failures.log`.
+- Defaulted raw HF `glm4` conversions to bfloat16 after support detection and logged not-yet-authored or failed converter attempts to `~/.caix/convert-failures.log`.

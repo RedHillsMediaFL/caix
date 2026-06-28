@@ -212,7 +212,7 @@ final class ServerRuntime: Sendable {
             "compute_precision": .string("float16,bfloat16,float32"),
             "generation": .string("max_tokens,temperature,top_p,top_k,seed,stop,system_prompt,kv_capacity,apply_chat_template"),
             "context_default": .int(4096),
-            "note": .string("Paste a HuggingFace repo; unsupported architectures are flagged, supported ones convert + load."),
+            "note": .string("Paste a HuggingFace repo; authored architectures convert + load, new architectures are flagged with the Core AI authoring work required."),
         ]
         return JSONResponder.encode(payload)
     }
@@ -317,7 +317,7 @@ final class ServerRuntime: Sendable {
         let ggufOnly = (checkObject?["gguf_only"] as? Bool) ?? false
         if !supported && !ggufOnly {
             var headers = HTTPFields(); headers[.contentType] = "application/json"
-            // Pass the check JSON straight through (carries model_type, supported_types, reason).
+            // Pass the check JSON straight through (carries model_type, requirements, next_step, reason).
             return Response(status: .ok, headers: headers,
                             body: ResponseBody(byteBuffer: ByteBuffer(string: checkJSON)))
         }

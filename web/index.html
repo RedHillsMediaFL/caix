@@ -491,7 +491,10 @@ async function hfCheck(){
     const d=await api('/api/check-support',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({hf_repo:repo})});
     if(d.supported)hfShow('supported / '+esc(d.model_type||'model')+(d.params_b?' / ~'+d.params_b+'B':''),'ok');
     else if(d.gguf_only)hfShow('GGUF-only repo / conversion can start from GGUF','work');
-    else hfShow('unsupported / '+esc(d.reason||'architecture not supported')+(d.support_log?'<br><span class="faint">'+esc(d.support_log)+'</span>':''),'bad');
+    else{
+      const req=(d.requirements&&d.requirements.length)?'<br><span class="faint">next: '+esc(d.requirements[0])+'</span>':'';
+      hfShow('needs Core AI authoring / '+esc(d.reason||d.next_step||'model path not authored yet')+req+(d.support_log?'<br><span class="faint">'+esc(d.support_log)+'</span>':''),'bad');
+    }
   }catch(e){hfShow('check failed / '+esc(e.message),'bad');}
 }
 async function hfConvert(){
@@ -500,7 +503,7 @@ async function hfConvert(){
   try{
     const d=await api('/api/convert-hf',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
     if(d.started)hfShow('conversion started / '+esc(d.name),'work');
-    else if(d.supported===false)hfShow('unsupported / '+esc(d.reason||'not converted'),'bad');
+    else if(d.supported===false)hfShow('needs authoring / '+esc(d.next_step||d.reason||'not converted'),'bad');
     else hfShow(esc(JSON.stringify(d)));
     pollJobs();
   }catch(e){hfShow('convert failed / '+esc(e.message),'bad');}
