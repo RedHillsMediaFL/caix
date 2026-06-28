@@ -50,12 +50,19 @@ final class LLMEngine {
     private let keyCacheName: String
     private let valueCacheName: String
     private let logitsName: String
+    private enum CacheContract {
+        case stateful
+        case explicitOutputs
+    }
+    private let cacheContract: CacheContract
 
     private let inputIdsDescriptor: NDArrayDescriptor
     private let positionIdsDescriptor: NDArrayDescriptor
     private let logitsDescriptor: NDArrayDescriptor
     private let keyCacheDescriptor: NDArrayDescriptor
     private let valueCacheDescriptor: NDArrayDescriptor
+    private let keyCacheOutputDescriptor: NDArrayDescriptor
+    private let valueCacheOutputDescriptor: NDArrayDescriptor
 
     /// Actual scalar types as declared by the compiled graph (never assumed).
     private let logitsScalarType: NDArray.ScalarType
@@ -371,23 +378,34 @@ final class LLMEngine {
                 "function '\(mainFunctionName)' not found; have \(model.functionNames)")
         }
 
-        guard descriptor.inputNames.count == 2 else {
-            throw CoreAIPipeline.RuntimeError.modelContract(
-                "expected 2 inputs, got \(descriptor.inputNames)")
-        }
-        guard descriptor.stateNames.count == 2 else {
-            throw CoreAIPipeline.RuntimeError.modelContract(
-                "expected 2 states (KV cache), got \(descriptor.stateNames)")
-        }
         guard descriptor.outputNames.count >= 1 else {
             throw CoreAIPipeline.RuntimeError.modelContract("expected >= 1 output")
         }
+        let hasStateKV = descriptor.inputNames.count == 2 && descriptor.stateNames.count == 2
+        let hasExplicitKV =
+            descriptor.stateNames.isEmpty
+            && descriptor.inputNames.contains("keyCache")
+            && descriptor.inputNames.contains("valueCache")
+            && descriptor.outputNames.contains("keyCache")
+            && descriptor.outputNames.contains("valueCache")
+        guard hasStateKV || hasExplicitKV else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "expected stateful KV inputs/states or explicit-cache inputs/outputs; "
+                    + Self.ioSummary(descriptor))
+        }
+        self.cacheContract = hasStateKV ? .stateful : .explicitOutputs
 
         // Resolve I/O by the contract's canonical names, falling back to declaration order.
         self.inputIdsName = Self.pick("input_ids", descriptor.inputNames, index: 0)
         self.positionIdsName = Self.pick("position_ids", descriptor.inputNames, index: 1)
-        self.keyCacheName = Self.pick("keyCache", descriptor.stateNames, index: 0)
-        self.valueCacheName = Self.pick("valueCache", descriptor.stateNames, index: 1)
+        self.keyCacheName =
+            hasStateKV
+            ? Self.pick("keyCache", descriptor.stateNames, index: 0)
+            : Self.pick("keyCache", descriptor.inputNames, index: 2)
+        self.valueCacheName =
+            hasStateKV
+            ? Self.pick("valueCache", descriptor.stateNames, index: 1)
+            : Self.pick("valueCache", descriptor.inputNames, index: 3)
         self.logitsName = Self.pick("logits", descriptor.outputNames, index: 0)
 
         guard case .ndArray(let inDesc) = descriptor.inputDescriptor(of: inputIdsName) else {
@@ -400,10 +418,35 @@ final class LLMEngine {
         guard case .ndArray(let logitsDesc) = descriptor.outputDescriptor(of: logitsName) else {
             throw CoreAIPipeline.RuntimeError.modelContract("output '\(logitsName)' is not an NDArray")
         }
-        guard case .ndArray(let keyDesc) = descriptor.stateDescriptor(of: keyCacheName),
-            case .ndArray(let valueDesc) = descriptor.stateDescriptor(of: valueCacheName)
-        else {
-            throw CoreAIPipeline.RuntimeError.modelContract("KV cache states are not NDArrays")
+        let keyDesc: NDArrayDescriptor
+        let valueDesc: NDArrayDescriptor
+        let keyOutDesc: NDArrayDescriptor
+        let valueOutDesc: NDArrayDescriptor
+        if hasStateKV {
+            guard case .ndArray(let stateKeyDesc) = descriptor.stateDescriptor(of: keyCacheName),
+                case .ndArray(let stateValueDesc) = descriptor.stateDescriptor(of: valueCacheName)
+            else {
+                throw CoreAIPipeline.RuntimeError.modelContract("KV cache states are not NDArrays")
+            }
+            keyDesc = stateKeyDesc
+            valueDesc = stateValueDesc
+            keyOutDesc = stateKeyDesc
+            valueOutDesc = stateValueDesc
+        } else {
+            guard case .ndArray(let inputKeyDesc) = descriptor.inputDescriptor(of: keyCacheName),
+                case .ndArray(let inputValueDesc) = descriptor.inputDescriptor(of: valueCacheName)
+            else {
+                throw CoreAIPipeline.RuntimeError.modelContract("KV cache inputs are not NDArrays")
+            }
+            guard case .ndArray(let outputKeyDesc) = descriptor.outputDescriptor(of: keyCacheName),
+                case .ndArray(let outputValueDesc) = descriptor.outputDescriptor(of: valueCacheName)
+            else {
+                throw CoreAIPipeline.RuntimeError.modelContract("KV cache outputs are not NDArrays")
+            }
+            keyDesc = inputKeyDesc
+            valueDesc = inputValueDesc
+            keyOutDesc = outputKeyDesc
+            valueOutDesc = outputValueDesc
         }
 
         self.inputIdsDescriptor = inDesc
@@ -411,6 +454,8 @@ final class LLMEngine {
         self.logitsDescriptor = logitsDesc
         self.keyCacheDescriptor = keyDesc
         self.valueCacheDescriptor = valueDesc
+        self.keyCacheOutputDescriptor = keyOutDesc
+        self.valueCacheOutputDescriptor = valueOutDesc
 
         // Dtype-aware: record the graph's declared scalar types instead of assuming Float16.
         self.logitsScalarType = logitsDesc.scalarType
@@ -431,8 +476,11 @@ final class LLMEngine {
         if verbose {
             FileHandle.standardError.write(
                 Data(
-                    "[coreai] dtypes: logits=\(logitsDesc.scalarType) keyCache=\(keyDesc.scalarType) valueCache=\(valueDesc.scalarType)\n"
-                        .utf8))
+                        "[coreai] dtypes: logits=\(logitsDesc.scalarType) keyCache=\(keyDesc.scalarType) valueCache=\(valueDesc.scalarType)\n"
+                            .utf8))
+            if cacheContract == .explicitOutputs {
+                FileHandle.standardError.write(Data("[coreai] using explicit KV-cache IO\n".utf8))
+            }
         }
 
         guard let prefillFn = try model.loadFunction(named: mainFunctionName) else {
@@ -465,6 +513,10 @@ final class LLMEngine {
 
     private static func pick(_ wanted: String, _ names: [String], index: Int) -> String {
         names.contains(wanted) ? wanted : names[index]
+    }
+
+    private static func ioSummary(_ descriptor: InferenceFunctionDescriptor) -> String {
+        "inputs=\(descriptor.inputNames), outputs=\(descriptor.outputNames), states=\(descriptor.stateNames)"
     }
 
     // MARK: - KV cache
@@ -596,18 +648,41 @@ final class LLMEngine {
         var logits = NDArray(
             descriptor: logitsDescriptor.resolvingDynamicDimensions([1, n, vocabSize]))
 
-        var states = InferenceFunction.MutableViews()
-        states.insert(&keyCache, for: keyCacheName)
-        states.insert(&valueCache, for: valueCacheName)
-
         var outputViews = InferenceFunction.MutableViews()
         outputViews.insert(&logits, for: logitsName)
 
         let activeFunction = tokens.count == 1 ? decodeFunction : prefillFunction
-        _ = try await activeFunction.run(
-            inputs: [inputIdsName: inputIds, positionIdsName: positionIds],
-            states: consume states,
-            outputViews: consume outputViews)
+        switch cacheContract {
+        case .stateful:
+            var states = InferenceFunction.MutableViews()
+            states.insert(&keyCache, for: keyCacheName)
+            states.insert(&valueCache, for: valueCacheName)
+            _ = try await activeFunction.run(
+                inputs: [inputIdsName: inputIds, positionIdsName: positionIds],
+                states: consume states,
+                outputViews: consume outputViews)
+        case .explicitOutputs:
+            let keyShape = keyCacheOutputDescriptor.shape.enumerated()
+                .map { i, dim in dim < 0 ? keyCache.shape[i] : dim }
+            let valueShape = valueCacheOutputDescriptor.shape.enumerated()
+                .map { i, dim in dim < 0 ? valueCache.shape[i] : dim }
+            var nextKeyCache = NDArray(
+                descriptor: keyCacheOutputDescriptor.resolvingDynamicDimensions(keyShape))
+            var nextValueCache = NDArray(
+                descriptor: valueCacheOutputDescriptor.resolvingDynamicDimensions(valueShape))
+            outputViews.insert(&nextKeyCache, for: keyCacheName)
+            outputViews.insert(&nextValueCache, for: valueCacheName)
+            _ = try await activeFunction.run(
+                inputs: [
+                    inputIdsName: inputIds,
+                    positionIdsName: positionIds,
+                    keyCacheName: keyCache,
+                    valueCacheName: valueCache
+                ],
+                outputViews: consume outputViews)
+            keyCache = nextKeyCache
+            valueCache = nextValueCache
+        }
 
         processedTokenCount += n
         return logits

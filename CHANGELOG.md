@@ -38,9 +38,14 @@
 - Recorded the next Ornith-1.0-35B support path: CoreAI fork commit `648ad274` adds opt-in authored qwen3_5_moe quantization, and a one-layer mixed dense-int4/expert-int8 probe passes GPU fast-path smoke while full-bundle size tuning remains open.
 - Recorded the authored Ornith-1.0-35B int4+head-quant path: CoreAI fork commit `7eafd4d` quantizes the shared head, one-layer and four-layer structural bundles pass GPU fast-path smoke, and the full 40-layer export completes at 17 GB, but full runtime warmup currently fails with an MPS reshape error, so HF publication remains held.
 - Narrowed the authored Ornith-1.0-35B runtime boundary: the single-function 14-layer int4+head-quant probe exposed a prefill/decode shape-specialization gate, and dual-entrypoint exports now pass 14-layer two-token and 16-layer eight-token sequential generation without Core AI reshape/slice diagnostics; full-bundle validation remains held before HF publication.
+- Added `caix inspect --model <bundle>` to specialize exported Core AI assets and print their
+  resolved function inputs, outputs, states, scalar types, and shapes for runtime-contract
+  debugging.
 
 ### Fixed
 
+- Added explicit KV-cache input/output execution for unoptimized Core AI language exports whose
+  functions expose `keyCache`/`valueCache` as regular inputs and outputs instead of Core AI states.
 - Routed qwen3_5/qwen3_5_moe bundles with packed recurrent-state KV floors to the explicit Core AI
   sequential engine by default, because the CoreAILanguageModels fast warmup currently uses a cache
   shape too small for Ornith's 1024-position SSM prefix; `COREAI_FAST_HYBRID_ENGINE=1` can still

@@ -25,6 +25,9 @@ case "run":
 case "serve":
     serveCommand(Array(args.dropFirst(2)))
 
+case "inspect":
+    inspectCommand(Array(args.dropFirst(2)))
+
 case "bench":
     benchCommand(Array(args.dropFirst(2)))
 
@@ -49,6 +52,7 @@ func printUsage() {
         USAGE:
           coreai-pipeline stats
           coreai-pipeline run --model <bundle-dir> --prompt "..." [options]
+          coreai-pipeline inspect --model <bundle-dir>
           coreai-pipeline serve [--port 8080] [--host 127.0.0.1]
 
         serve OPTIONS:
@@ -98,6 +102,52 @@ func printUsage() {
           env COREAI_DIFFUSION_CANVAS=<N>     cap canvas length (smoke/debug; default: metadata)
         """
     print(usage)
+}
+
+// MARK: - inspect subcommand
+
+func inspectCommand(_ argv: [String]) {
+    var model: String?
+    var i = 0
+    while i < argv.count {
+        switch argv[i] {
+        case "--model", "-m":
+            i += 1
+            guard i < argv.count else {
+                FileHandle.standardError.write(Data("error: --model needs a value\n".utf8))
+                exit(2)
+            }
+            model = argv[i]
+        case "-h", "--help":
+            printUsage()
+            exit(0)
+        default:
+            FileHandle.standardError.write(Data("unknown inspect option: \(argv[i])\n".utf8))
+            exit(2)
+        }
+        i += 1
+    }
+    guard let modelPath = model else {
+        FileHandle.standardError.write(Data("error: inspect requires --model <bundle>\n".utf8))
+        exit(2)
+    }
+
+    let semaphore = DispatchSemaphore(value: 0)
+    nonisolated(unsafe) var exitCode: Int32 = 0
+    Task {
+        defer { semaphore.signal() }
+        do {
+            let description = try await CoreAIPipeline.inspectBundle(modelPath: modelPath)
+            FileHandle.standardOutput.write(Data((description + "\n").utf8))
+        } catch {
+            FileHandle.standardError.write(Data("inspect error: \(error)\n".utf8))
+            exitCode = 1
+        }
+    }
+    while semaphore.wait(timeout: .now()) == .timedOut {
+        RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02))
+    }
+    exit(exitCode)
 }
 
 func runCommand(_ argv: [String]) {

@@ -1,5 +1,9 @@
 import Foundation
 
+#if COREAI_RUNTIME
+import CoreAI
+#endif
+
 /// Native Apple Core AI inference core for exported `.aimodel` LLM bundles.
 ///
 /// Building with `COREAI_RUNTIME=1` on Xcode 27+ links the `CoreAI` system framework and
@@ -424,6 +428,92 @@ public enum CoreAIPipeline {
         return out.map { (seq: $0.0, medianMs: $0.1) }
         #else
         _ = (modelPath, seqLengths, warmup, iters)
+        throw RuntimeError.runtimeUnavailable
+        #endif
+    }
+
+    /// Describe the Core AI function IO for an exported bundle. This intentionally specializes
+    /// the on-disk assets, matching the runtime path, because descriptor shape/state information
+    /// is only reliable after specialization.
+    public static func inspectBundle(modelPath: String) async throws -> String {
+        #if COREAI_RUNTIME
+        let bundle = try ResolvedBundle.load(at: modelPath)
+        var specialization = SpecializationOptions(preferredComputeUnitKind: LLMEngine.preferredComputeUnit())
+        specialization.expectFrequentReshapes = true
+        let mainModel = try await AIModel.specialize(
+            contentsOf: bundle.aimodelURL, options: specialization,
+            cache: .default, cachePolicy: .persistent)
+        let decodeModel: AIModel?
+        if let decodeURL = bundle.decodeAimodelURL {
+            decodeModel = try await AIModel.specialize(
+                contentsOf: decodeURL, options: specialization,
+                cache: .default, cachePolicy: .persistent)
+        } else {
+            decodeModel = nil
+        }
+
+        func appendFunction(
+            role: String, name: String, model: AIModel, lines: inout [String]
+        ) throws {
+            guard let desc = model.functionDescriptor(for: name) else {
+                lines.append("[\(role)] function '\(name)' not found; have \(model.functionNames)")
+                return
+            }
+            lines.append("[\(role)] function=\(name)")
+            lines.append("  inputs=\(desc.inputNames)")
+            for input in desc.inputNames {
+                switch desc.inputDescriptor(of: input) {
+                case .ndArray(let nd):
+                    lines.append("    input \(input): ndarray scalar=\(nd.scalarType) shape=\(nd.shape)")
+                case .some(let descriptor):
+                    lines.append("    input \(input): \(String(describing: descriptor))")
+                case .none:
+                    lines.append("    input \(input): <missing>")
+                }
+            }
+            lines.append("  outputs=\(desc.outputNames)")
+            for output in desc.outputNames {
+                switch desc.outputDescriptor(of: output) {
+                case .ndArray(let nd):
+                    lines.append("    output \(output): ndarray scalar=\(nd.scalarType) shape=\(nd.shape)")
+                case .some(let descriptor):
+                    lines.append("    output \(output): \(String(describing: descriptor))")
+                case .none:
+                    lines.append("    output \(output): <missing>")
+                }
+            }
+            lines.append("  states=\(desc.stateNames)")
+            for state in desc.stateNames {
+                switch desc.stateDescriptor(of: state) {
+                case .ndArray(let nd):
+                    lines.append("    state \(state): ndarray scalar=\(nd.scalarType) shape=\(nd.shape)")
+                case .some(let descriptor):
+                    lines.append("    state \(state): \(String(describing: descriptor))")
+                case .none:
+                    lines.append("    state \(state): <missing>")
+                }
+            }
+        }
+
+        let functionMap = bundle.manifest.language?.functionMap
+        let mainName = functionMap?.name(for: "main") ?? "main"
+        let decodeName = functionMap?.name(for: "decode")
+        var lines = [
+            "bundle=\(bundle.root.path)",
+            "main_asset=\(bundle.aimodelURL.lastPathComponent)"
+        ]
+        if let decodeURL = bundle.decodeAimodelURL {
+            lines.append("decode_asset=\(decodeURL.lastPathComponent)")
+        }
+        try appendFunction(role: "main", name: mainName, model: mainModel, lines: &lines)
+        if let decodeName {
+            try appendFunction(
+                role: "decode", name: decodeName, model: decodeModel ?? mainModel,
+                lines: &lines)
+        }
+        return lines.joined(separator: "\n")
+        #else
+        _ = modelPath
         throw RuntimeError.runtimeUnavailable
         #endif
     }
