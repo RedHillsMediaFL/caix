@@ -1,0 +1,30 @@
+quantization_config:
+  execution_mode: eager
+  global_config:
+    op_input_spec: null
+    op_output_spec: null
+    op_state_spec:
+      weight:
+        dtype: int8
+        qscheme: symmetric
+        granularity:
+          type: per_channel
+          axis: 0
+  module_type_configs:
+    coreai_models.primitives.macos.sdpa.SDPA: null
+    coreai_models.primitives.macos.rope.RoPE: null
+    coreai_models.primitives.macos.rms_norm.RMSNorm: null
+    coreai_models.primitives.macos.rms_norm.RMSNormPlusOne: null
+    coreai_models.primitives.macos.rms_norm.RMSNormGated: null
+    torch.nn.modules.conv.Conv1d: null
+    coreai_models.primitives.macos.switch.SwitchLinear:
+      op_input_spec: null
+      op_output_spec: null
+      op_state_spec: null
+      module_state_spec:
+        weight:
+          dtype: int8
+          qscheme: symmetric
+          granularity:
+            type: per_channel
+            axis: 2

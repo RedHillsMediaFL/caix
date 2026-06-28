@@ -102,6 +102,7 @@ def resolve(args, support: dict | None = None) -> dict:
         hf_id = m["hf_repo"]
         model_type = m.get("model_type", "")
         compression = args.compression or m.get("compression", "4bit")
+        compression_config = args.compression_config or m.get("compression_config")
         if compression == "optional-4bit":
             compression = args.compression or "4bit"
         context = args.context or min(int(m.get("context", 4096)), args.max_context_cap)
@@ -113,17 +114,28 @@ def resolve(args, support: dict | None = None) -> dict:
             sys.exit("error: provide a registry key, or --hf-id")
         model_type = (support or {}).get("model_type", "")
         compression = args.compression or "4bit"
+        compression_config = args.compression_config
         context = args.context or args.max_context_cap
         name = args.name or hf_id.split("/")[-1].lower() + "-coreai"
         precision = args.compute_precision or ("bfloat16" if model_type in BF16_FAMILIES else "float16")
-    return {"hf_id": hf_id, "compression": compression, "context": context,
-            "name": name, "precision": precision}
+    if compression_config and not args.compression:
+        config_path = Path(compression_config).expanduser()
+        if not config_path.is_absolute():
+            config_path = PIPELINE_ROOT / config_path
+        compression = config_path.stem
+        compression_config = str(config_path)
+    return {"hf_id": hf_id, "compression": compression, "compression_config": compression_config,
+            "context": context, "name": name, "precision": precision}
 
 
 def build_cmd(r: dict, args) -> list[str]:
     cmd = ["uv", "run", "--directory", str(APPLE_ENV), "coreai.llm.export", r["hf_id"],
-           "--platform", "macOS", "--compression", r["compression"],
-           "--compute-precision", r["precision"], "--max-context-length", str(r["context"]),
+           "--platform", "macOS"]
+    if r.get("compression_config"):
+        cmd += ["--compression-config", r["compression_config"]]
+    else:
+        cmd += ["--compression", r["compression"]]
+    cmd += ["--compute-precision", r["precision"], "--max-context-length", str(r["context"]),
            "--output-dir", str(EXPORTS), "--output-name", r["name"], "--experimental", "--overwrite"]
     if args.num_layers:
         cmd += ["--num-layers", str(args.num_layers)]
@@ -178,6 +190,7 @@ def main() -> int:
     ap.add_argument("--hf-id", help="raw HuggingFace id (if not a registry key)")
     ap.add_argument("--name", help="output bundle name")
     ap.add_argument("--compression", help="override (e.g. 4bit | none)")
+    ap.add_argument("--compression-config", help="override with a coreai-opt YAML compression config")
     ap.add_argument("--compute-precision", help="override (float16 | bfloat16 | float32)")
     ap.add_argument("--context", type=int, help="override max context length")
     ap.add_argument("--max-context-cap", type=int, default=8192,

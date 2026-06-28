@@ -52,10 +52,11 @@
       "vocab": 248320, "context": 262144, "rope": "mRoPE theta1e7 partial0.25", "tie_embeddings": false,
       "attention": "3:1 linear(mamba/gated-delta+conv1d):full (interval 4)", "multimodal": "vision+video",
       "moe": {"num_experts": 256, "top_k": 8, "moe_intermediate_size": 512, "shared_expert_intermediate_size": 512},
-      "prompt_template": "chatml-qwen", "mtp": "internal-head(mtp_num_hidden_layers=1)", "compression": "4bit",
+      "prompt_template": "chatml-qwen", "mtp": "internal-head(mtp_num_hidden_layers=1)",
+      "compression": "qwen35_moe_int8", "compression_config": "models/qwen35_moe_int8.yaml",
       "min_kv_capacity": 512,
       "downloaded": true,
-      "notes": "Fully cached 35B Ornith source checkpoint; first large Ornith CAIX upload candidate. 397B has the same authored family but still needs full source download and much larger storage before conversion."
+      "notes": "Fully cached 35B Ornith source checkpoint. The generic 4-bit path exports but crashes during Core AI int4 dequant on load; use the qwen35_moe_int8 compression config. 397B has the same authored family but still needs full source download and much larger storage before conversion."
     },
     "Qwen3.6-27B": {
       "hf_repo": "Qwen/Qwen3.6-27B", "model_type": "qwen3_5",
