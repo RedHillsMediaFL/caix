@@ -52,6 +52,15 @@ def check_support(hf_id: str) -> dict:
     """Run the architecture support check in the Apple env; returns the parsed JSON dict."""
     env = {**os.environ, "HF_HOME": HF_HOME}
     try:
+        direct = subprocess.run(
+            [sys.executable, str(CHECK_SUPPORT), "--hf-id", hf_id],
+            env=env, capture_output=True, text=True, timeout=45)
+        direct_line = [l for l in direct.stdout.splitlines() if l.strip().startswith("{")]
+        if direct_line:
+            return json.loads(direct_line[-1])
+    except Exception:
+        pass
+    try:
         out = subprocess.run(
             ["uv", "run", "--directory", str(APPLE_ENV), "python", str(CHECK_SUPPORT),
              "--hf-id", hf_id],

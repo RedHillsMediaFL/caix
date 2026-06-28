@@ -14,10 +14,21 @@ Run inside the vendored Apple env so the registry import is authoritative:
 """
 from __future__ import annotations
 import argparse, json, os, sys
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 
 os.environ.setdefault("HF_HOME", "/Volumes/SSD/hf-cache")
 
 BF16_TYPES = {"gemma4", "gemma4_assistant", "diffusion_gemma", "qwen3_5", "qwen3_5_moe", "glm4"}
+STATIC_SUPPORTED_TYPES = [
+    "gemma3_text", "gemma4", "gemma4_assistant", "glm4", "gpt_oss", "mistral",
+    "mixtral", "qwen2", "qwen3", "qwen3_5", "qwen3_moe",
+]
+STATIC_MODEL_TYPE_REMAPPING = {
+    "gemma3": "gemma3_text",
+    "qwen2_5": "qwen2",
+}
 
 AUTHORING_GAPS = {
     "qwen3_5_moe": {
@@ -42,6 +53,42 @@ AUTHORING_GAPS = {
 def emit(d: dict) -> int:
     print(json.dumps(d))
     return 0
+
+
+def _hf_token() -> str | None:
+    return os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+
+
+def _download_config_stdlib(hf_id: str) -> dict:
+    endpoint = os.environ.get("HF_ENDPOINT", "https://huggingface.co").rstrip("/")
+    encoded = quote(hf_id.strip("/"), safe="/")
+    url = f"{endpoint}/{encoded}/resolve/main/config.json"
+    headers = {"user-agent": "caix-support-check"}
+    token = _hf_token()
+    if token:
+        headers["authorization"] = f"Bearer {token}"
+    with urlopen(Request(url, headers=headers), timeout=20) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _load_config(hf_id: str) -> tuple[dict | None, str | None]:
+    if os.path.isdir(hf_id) and os.path.exists(os.path.join(hf_id, "config.json")):
+        with open(os.path.join(hf_id, "config.json")) as f:
+            return json.load(f), None
+    try:
+        from huggingface_hub import hf_hub_download
+        cfg_path = hf_hub_download(hf_id, "config.json", token=_hf_token())
+        with open(cfg_path) as f:
+            return json.load(f), None
+    except Exception as hub_error:
+        try:
+            return _download_config_stdlib(hf_id), None
+        except (HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError) as std_error:
+            return None, (
+                f"could not fetch config.json ({type(hub_error).__name__}: {hub_error}; "
+                f"stdlib fallback {type(std_error).__name__}: {std_error}). "
+                "Check the repo id and access (gated repos need HF_TOKEN)."
+            )
 
 
 def _text_config(cfg: dict) -> dict:
@@ -99,26 +146,14 @@ def main() -> int:
     args = ap.parse_args()
     hf_id = args.hf_id.strip()
 
-    # 1) fetch config.json — local dir (e.g. a dequantized GGUF) or HF repo (public/gated)
-    if os.path.isdir(hf_id) and os.path.exists(os.path.join(hf_id, "config.json")):
-        cfg = json.load(open(os.path.join(hf_id, "config.json")))
-        _local = True
-    else:
-        _local = False
-    try:
-        if _local:
-            pass
-        else:
-            from huggingface_hub import hf_hub_download, HfApi
-            token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
-            cfg_path = hf_hub_download(hf_id, "config.json", token=token)
-            cfg = json.load(open(cfg_path))
-    except Exception as e:
+    # 1) fetch config.json — local dir (e.g. a dequantized GGUF) or HF repo (public/gated).
+    cfg, config_error = _load_config(hf_id)
+    if config_error:
         # No config.json — most often a GGUF-only (llama.cpp) repo, which caix can't convert
         # (it needs the original HF safetensors). Detect that and say so plainly.
         try:
             from huggingface_hub import HfApi
-            files = list(HfApi(token=token).list_repo_files(hf_id))
+            files = list(HfApi(token=_hf_token()).list_repo_files(hf_id))
             ggufs = [f for f in files if f.endswith(".gguf")]
             has_st = any(f.endswith(".safetensors") for f in files)
             if ggufs and not has_st:
@@ -128,9 +163,7 @@ def main() -> int:
                                        "architecture is verified after dequant. Click Convert to try."})
         except Exception:
             pass
-        return emit({"ok": False, "supported": False, "hf_id": hf_id,
-                     "reason": f"could not fetch config.json ({type(e).__name__}: {e}). "
-                               "Check the repo id and access (gated repos need HF_TOKEN)."})
+        return emit({"ok": False, "supported": False, "hf_id": hf_id, "reason": config_error})
 
     # 2) model_type (top-level, or nested text_config for multimodal)
     mt = cfg.get("model_type") or (cfg.get("text_config") or {}).get("model_type") or ""
@@ -141,9 +174,11 @@ def main() -> int:
         from coreai_models.models.registry import list_models, MODEL_TYPE_REMAPPING
         supported_types = list_models()
         remapped = MODEL_TYPE_REMAPPING.get(mt, mt)
+        registry_source = "coreai_models"
     except Exception as e:
-        return emit({"ok": False, "supported": False, "hf_id": hf_id, "model_type": mt,
-                     "reason": f"registry import failed: {e}"})
+        supported_types = STATIC_SUPPORTED_TYPES
+        remapped = STATIC_MODEL_TYPE_REMAPPING.get(mt, mt)
+        registry_source = f"static ({type(e).__name__}: {e})"
 
     supported = remapped in supported_types
 
@@ -155,6 +190,7 @@ def main() -> int:
         "ok": True, "supported": supported, "hf_id": hf_id,
         "model_type": mt, "coreai_type": remapped if supported else None,
         "architectures": archs, "supported_types": supported_types,
+        "registry_source": registry_source,
         "params_b": params_b,
         "suggested_compression": "4bit",
         "suggested_precision": "bfloat16" if remapped in BF16_TYPES else "float16",

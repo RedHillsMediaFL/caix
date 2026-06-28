@@ -93,6 +93,8 @@ actor JobTracker {
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe
+        let finished = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in finished.signal() }
         do {
             try process.run()
         } catch {
@@ -104,7 +106,7 @@ actor JobTracker {
                     "reason": "failed to launch check: \(error.localizedDescription)",
                 ]))
         }
-        let exited = Self.waitForExit(process, timeoutSeconds: timeoutSeconds)
+        let exited = await Self.waitForSignal(finished, timeoutSeconds: timeoutSeconds)
         if !exited {
             Self.terminate(process)
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
@@ -397,6 +399,15 @@ actor JobTracker {
             Thread.sleep(forTimeInterval: 0.05)
         }
         return !process.isRunning
+    }
+
+    private static func waitForSignal(_ semaphore: DispatchSemaphore, timeoutSeconds: TimeInterval) async -> Bool {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                let ok = semaphore.wait(timeout: .now() + timeoutSeconds) == .success
+                continuation.resume(returning: ok)
+            }
+        }
     }
 
     private static func terminate(_ process: Process) {
