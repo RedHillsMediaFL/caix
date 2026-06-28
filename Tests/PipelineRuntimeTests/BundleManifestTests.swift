@@ -47,11 +47,13 @@ final class BundleManifestTests: XCTestCase {
             name: "ornith-1.0-35b-coreai",
             hfModelId: "deepreinforce-ai/Ornith-1.0-35B",
             tokenizer: "deepreinforce-ai/Ornith-1.0-35B",
-            functionMap: #"{"main":["main"],"decode":["decode"]}"#)
+            functionMap: #"{"main":["main"],"decode":["decode"]}"#,
+            decodeAsset: "decode.aimodel")
 
         let bundle = try ResolvedBundle.load(at: root.path)
         XCTAssertEqual(bundle.manifest.language?.functionMap?.name(for: "main"), "main")
         XCTAssertEqual(bundle.manifest.language?.functionMap?.name(for: "decode"), "decode")
+        XCTAssertEqual(bundle.decodeAimodelURL?.lastPathComponent, "decode.aimodel")
     }
 
     func testStandardQwenKeepsZeroFloorWithoutRegistry() throws {
@@ -70,12 +72,13 @@ final class BundleManifestTests: XCTestCase {
         hfModelId: String,
         tokenizer: String,
         minKVCapacity: Int? = nil,
-        functionMap: String? = nil
+        functionMap: String? = nil,
+        decodeAsset: String? = nil
     ) throws -> URL {
         let root = try makeTempDir().appendingPathComponent(name, isDirectory: true)
         try makeBundle(
             at: root, name: name, hfModelId: hfModelId, tokenizer: tokenizer,
-            minKVCapacity: minKVCapacity, functionMap: functionMap)
+            minKVCapacity: minKVCapacity, functionMap: functionMap, decodeAsset: decodeAsset)
         return root
     }
 
@@ -85,23 +88,28 @@ final class BundleManifestTests: XCTestCase {
         hfModelId: String,
         tokenizer: String,
         minKVCapacity: Int? = nil,
-        functionMap: String? = nil
+        functionMap: String? = nil,
+        decodeAsset: String? = nil
     ) throws {
         let fm = FileManager.default
         try fm.createDirectory(at: root, withIntermediateDirectories: true)
         try fm.createDirectory(at: root.appendingPathComponent("model.aimodel"), withIntermediateDirectories: true)
+        if let decodeAsset {
+            try fm.createDirectory(at: root.appendingPathComponent(decodeAsset), withIntermediateDirectories: true)
+        }
         let tokDir = root.appendingPathComponent("tokenizer", isDirectory: true)
         try fm.createDirectory(at: tokDir, withIntermediateDirectories: true)
         try "{}".write(to: tokDir.appendingPathComponent("tokenizer.json"), atomically: true, encoding: .utf8)
 
         let minField = minKVCapacity.map { #","min_kv_capacity":\#($0)"# } ?? ""
         let functionMapField = functionMap.map { #","function_map":\#($0)"# } ?? ""
+        let decodeAssetField = decodeAsset.map { #","decode":"\#($0)""# } ?? ""
         let json = """
             {
               "metadata_version": "0.2",
               "kind": "llm",
               "name": "\(name)",
-              "assets": {"main": "model.aimodel"},
+              "assets": {"main": "model.aimodel"\(decodeAssetField)},
               "language": {
                 "tokenizer": "\(tokenizer)",
                 "vocab_size": 248320,

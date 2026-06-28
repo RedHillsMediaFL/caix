@@ -103,11 +103,23 @@ final class LLMEngine {
         let model = try await AIModel.specialize(
             contentsOf: bundle.aimodelURL, options: specialization,
             cache: .default, cachePolicy: .persistent)
+        let decodeModel: AIModel?
+        if let decodeAimodelURL = bundle.decodeAimodelURL,
+            bundle.manifest.language?.functionMap?.name(for: "decode") != nil
+        {
+            log("loading decode model \(decodeAimodelURL.lastPathComponent) …")
+            decodeModel = try await AIModel.specialize(
+                contentsOf: decodeAimodelURL, options: specialization,
+                cache: .default, cachePolicy: .persistent)
+        } else {
+            decodeModel = nil
+        }
         let tokenizer = try await tokenizerTask
 
         let loadSeconds = Date().timeIntervalSince(loadStart)
         let engine = try LLMEngine(
             model: model,
+            decodeModel: decodeModel,
             tokenizer: tokenizer,
             vocabSize: bundle.vocabSize,
             maxContextLength: bundle.maxContextLength,
@@ -337,6 +349,7 @@ final class LLMEngine {
 
     private init(
         model: AIModel,
+        decodeModel: AIModel?,
         tokenizer: any Tokenizer,
         vocabSize: Int,
         maxContextLength: Int,
@@ -428,7 +441,8 @@ final class LLMEngine {
         }
         self.prefillFunction = prefillFn
         if let decodeFunctionName, decodeFunctionName != mainFunctionName {
-            guard let decodeFn = try model.loadFunction(named: decodeFunctionName) else {
+            let decodeSourceModel = decodeModel ?? model
+            guard let decodeFn = try decodeSourceModel.loadFunction(named: decodeFunctionName) else {
                 throw CoreAIPipeline.RuntimeError.modelContract(
                     "could not load function '\(decodeFunctionName)'")
             }

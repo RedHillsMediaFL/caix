@@ -51,6 +51,9 @@
 - Loaded optional `language.function_map` decode entrypoints in the sequential runtime and routed
   one-token forwards through them; added opt-in `COREAI_PREFILL_CHUNK`/`COREAI_PREFILL_MODE`
   diagnostics for prefill/decode shape investigation without changing the default batched prefill.
+- Loaded optional `assets.decode` split decode `.aimodel` packages so large hybrid bundles can keep
+  prefill and one-token decode as separate Core AI assets when a combined multi-function export
+  exceeds host memory.
 - Baked `language.min_kv_capacity` into future converted qwen3_5/qwen3_5_moe bundle metadata and
   corrected the Ornith-1.0-35B registry floor to 1024.
 - Fixed server-side CoreAILanguageModels generation stalls by pumping the main runloop while `serve` waits on the HTTP server task.

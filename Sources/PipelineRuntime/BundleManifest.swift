@@ -28,6 +28,10 @@ public struct BundleManifest: Codable, Sendable {
             if byName.count == 1 { return byName.values.first }
             return byName.keys.sorted().first.flatMap { byName[$0] }
         }
+
+        public func path(for name: String) -> String? {
+            byName[name]
+        }
     }
 
     public struct Language: Codable, Sendable {
@@ -118,6 +122,8 @@ public struct ResolvedBundle: Sendable {
     public let root: URL
     /// The `.aimodel` package directory (the `AIProgram` Apple loads).
     public let aimodelURL: URL
+    /// Optional dedicated one-token decode `.aimodel` package directory.
+    public let decodeAimodelURL: URL?
     /// The HuggingFace tokenizer directory (`tokenizer/` containing `tokenizer.json`).
     public let tokenizerDir: URL
     public let manifest: BundleManifest
@@ -180,6 +186,16 @@ public struct ResolvedBundle: Sendable {
         guard fm.fileExists(atPath: aimodelURL.path) else {
             throw CoreAIPipeline.RuntimeError.invalidBundle("missing model asset \(assetRel)")
         }
+        let decodeAimodelURL: URL?
+        if let decodeRel = manifest.assets.path(for: "decode"), decodeRel != assetRel {
+            let url = root.appendingPathComponent(decodeRel)
+            guard fm.fileExists(atPath: url.path) else {
+                throw CoreAIPipeline.RuntimeError.invalidBundle("missing decode asset \(decodeRel)")
+            }
+            decodeAimodelURL = url
+        } else {
+            decodeAimodelURL = nil
+        }
 
         let tokenizerDir = root.appendingPathComponent("tokenizer")
         guard fm.fileExists(atPath: tokenizerDir.appendingPathComponent("tokenizer.json").path)
@@ -192,6 +208,7 @@ public struct ResolvedBundle: Sendable {
         return ResolvedBundle(
             root: root,
             aimodelURL: aimodelURL,
+            decodeAimodelURL: decodeAimodelURL,
             tokenizerDir: tokenizerDir,
             manifest: manifest,
             minKVCapacity: Self.resolveMinKVCapacity(root: root, manifest: manifest),
