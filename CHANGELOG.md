@@ -31,10 +31,12 @@
 - Added converter postprocessing for Qwythos chat templates so future qwen3_5 exports bake the model's no-thinking branch for OpenAI-visible content.
 - Published verified RHM Qwythos-9B-Claude-Mythos-5-1M Core AI bundle and documented it in the README model table.
 - Restored `qwythos-9b-coreai` to the OpenCode provider map after no-thinking template verification.
+- Added a registry conversion lane for the fully cached Ornith-1.0-35B qwen3_5_moe checkpoint.
 
 ### Fixed
 
 - Fixed server-side CoreAILanguageModels generation stalls by pumping the main runloop while `serve` waits on the HTTP server task.
+- Fixed `convert.py <registry-key> --check` so it resolves registry keys to their Hugging Face repo before probing support.
 - Defaulted standard language-bundle serving to the stable one-shot CoreAILanguageModels path, with the older sequential engine available through `COREAI_LEGACY_ENGINE=1`.
 - Pointed the OpenCode default model at the installed `qwen3-0.6b-coreai` bundle so `opencode run` works on the current local server while larger bundle IDs remain available in the provider map.
 - Inferred a conservative qwen3_5 hybrid KV-cache floor for converted bundles that do not yet carry `language.min_kv_capacity`, preventing under-sized cache allocation for Ornith-style bundles.

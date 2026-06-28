@@ -216,10 +216,16 @@ def main() -> int:
 
     # Architecture support gate: for raw HF ids (not registry keys), verify the model_type is
     # authored for Core AI before downloading/converting. Not-yet-authored => flag, don't convert.
-    hf_for_check = args.hf_id or (args.model if args.model and args.model not in load_registry()["models"] else None)
+    registry_models = load_registry()["models"]
+    registry_entry = registry_models.get(args.model) if args.model else None
+    hf_for_check = args.hf_id or (
+        registry_entry["hf_repo"] if args.check and registry_entry
+        else args.model if args.model and args.model not in registry_models
+        else None
+    )
     support_info = None
     if args.check or hf_for_check:
-        target = args.hf_id or args.model
+        target = hf_for_check or args.hf_id or args.model
         sup = check_support(target)
         support_info = sup
         if args.check:

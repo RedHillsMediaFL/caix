@@ -4,6 +4,7 @@
     "gemma-4-31B-it-assistant",
     "gemma-4-31B-it",
     "Qwythos-9B",
+    "ornith-1.0-35b",
     "Qwen3.6-27B",
     "diffusiongemma-26B-A4B-it",
     "diffusiongemma-26B-A4B-it-HERETIC"
@@ -42,6 +43,19 @@
       "min_kv_capacity": 512,
       "downloaded": true,
       "notes": "Non-standard op family: linear-attention/SSM state + conv1d. Convert text-only first. Highest per-param novelty risk."
+    },
+    "ornith-1.0-35b": {
+      "hf_repo": "deepreinforce-ai/Ornith-1.0-35B", "model_type": "qwen3_5_moe",
+      "op_family": "hybrid-linear-attn-moe", "role": "target",
+      "params_b": 34.38, "bf16_gb": 70.2, "shards": 16,
+      "layers": 40, "hidden": 2048, "heads": 16, "kv_heads": 2, "head_dim": 256,
+      "vocab": 248320, "context": 262144, "rope": "mRoPE theta1e7 partial0.25", "tie_embeddings": false,
+      "attention": "3:1 linear(mamba/gated-delta+conv1d):full (interval 4)", "multimodal": "vision+video",
+      "moe": {"num_experts": 256, "top_k": 8, "moe_intermediate_size": 512, "shared_expert_intermediate_size": 512},
+      "prompt_template": "chatml-qwen", "mtp": "internal-head(mtp_num_hidden_layers=1)", "compression": "4bit",
+      "min_kv_capacity": 512,
+      "downloaded": true,
+      "notes": "Fully cached 35B Ornith source checkpoint; first large Ornith CAIX upload candidate. 397B has the same authored family but still needs full source download and much larger storage before conversion."
     },
     "Qwen3.6-27B": {
       "hf_repo": "Qwen/Qwen3.6-27B", "model_type": "qwen3_5",
