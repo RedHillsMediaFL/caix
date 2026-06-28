@@ -173,11 +173,16 @@ curl http://localhost:1237/v1/chat/completions -H 'content-type: application/jso
 ### OpenCode (optional)
 
 The repo includes `opencode.json` with a local `caix` OpenAI-compatible provider pointed at
-`http://127.0.0.1:1237/v1`. Start caix first, then verify OpenCode can see the server:
+`http://127.0.0.1:1237/v1` and model IDs matching caix bundles. Copy or symlink it into
+`~/.config/opencode/opencode.json`, start caix, then verify OpenCode can see the server-backed
+models:
 
 ```bash
 opencode models caix
 ```
+
+When OpenCode sends one of those model IDs to `/v1/chat/completions`, caix hot-loads the matching
+local bundle from the exports directory.
 
 ### Reach it from your phone / other machines (optional)
 caix binds to `127.0.0.1` (local only) by design. To reach it securely from your other devices,

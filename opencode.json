@@ -9,16 +9,86 @@
         "apiKey": "caix-local"
       },
       "models": {
+        "qwen3-4b-coreai": {
+          "name": "Qwen3 4B Core AI",
+          "limit": {
+            "context": 8192,
+            "output": 2048
+          }
+        },
+        "qwen3-0.6b-coreai": {
+          "name": "Qwen3 0.6B Core AI",
+          "limit": {
+            "context": 4096,
+            "output": 2048
+          }
+        },
         "gemma-4-26b-a4b-mtp": {
           "name": "Gemma 4 26B A4B MTP",
           "limit": {
             "context": 4096,
             "output": 2048
           }
+        },
+        "Qwen3.6-27B-coreai": {
+          "name": "Qwen3.6 27B Core AI",
+          "limit": {
+            "context": 8192,
+            "output": 2048
+          }
+        },
+        "glm-4-9b-0414-coreai": {
+          "name": "GLM-4 9B 0414 Core AI",
+          "limit": {
+            "context": 8192,
+            "output": 2048
+          }
+        },
+        "glm-4-32b-0414-coreai": {
+          "name": "GLM-4 32B 0414 Core AI",
+          "limit": {
+            "context": 8192,
+            "output": 2048
+          }
+        },
+        "ornith-1.0-9b-bf16-coreai": {
+          "name": "Ornith 1.0 9B BF16 Core AI",
+          "limit": {
+            "context": 8192,
+            "output": 2048
+          }
+        },
+        "qwythos-9b-coreai": {
+          "name": "Qwythos 9B Core AI",
+          "limit": {
+            "context": 4096,
+            "output": 2048
+          }
+        },
+        "gpt-oss-20b-coreai": {
+          "name": "GPT-OSS 20B Core AI",
+          "limit": {
+            "context": 8192,
+            "output": 2048
+          }
+        },
+        "gemma-4-26b-a4b-coreai": {
+          "name": "Gemma 4 26B A4B Core AI",
+          "limit": {
+            "context": 8192,
+            "output": 2048
+          }
+        },
+        "gemma-4-31B-it-coreai": {
+          "name": "Gemma 4 31B IT Core AI",
+          "limit": {
+            "context": 8192,
+            "output": 2048
+          }
         }
       }
     }
   },
-  "model": "caix/gemma-4-26b-a4b-mtp",
-  "small_model": "caix/gemma-4-26b-a4b-mtp"
+  "model": "caix/qwen3-4b-coreai",
+  "small_model": "caix/qwen3-0.6b-coreai"
 }
