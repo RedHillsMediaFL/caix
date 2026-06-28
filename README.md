@@ -121,6 +121,7 @@ All bundles are pre-converted Core AI `.aimodel` repos, named `rhm-…-caix`.
 | [`rhm-ornith-1.0-9b-caix`](https://huggingface.co/redhillsmediafl/rhm-ornith-1.0-9b-caix) | Ornith-1.0-9B (DeepReinforce) | ~17 GB (f16) |
 | [`rhm-glm-4-9b-0414-caix`](https://huggingface.co/redhillsmediafl/rhm-glm-4-9b-0414-caix) | GLM-4-9B-0414 — dense bilingual model | ~5.0 GB |
 | [`rhm-glm-4-32b-0414-caix`](https://huggingface.co/redhillsmediafl/rhm-glm-4-32b-0414-caix) | GLM-4-32B-0414 — dense large model | ~17 GB |
+| [`rhm-mixtral-8x7b-instruct-caix`](https://huggingface.co/redhillsmediafl/rhm-mixtral-8x7b-instruct-caix) | Mixtral-8x7B-Instruct-v0.1 — sparse MoE instruction model | ~24 GB |
 | [`rhm-qwen3.6-27b-caix`](https://huggingface.co/redhillsmediafl/rhm-qwen3.6-27b-caix) | Qwen3.6-27B — large general chat | ~14 GB |
 | [`rhm-gemma-4-26b-a4b-caix`](https://huggingface.co/redhillsmediafl/rhm-gemma-4-26b-a4b-caix) | gemma-4-26B-A4B-it — MoE (~4B active) | ~13 GB |
 | [`rhm-gemma-4-31b-it-caix`](https://huggingface.co/redhillsmediafl/rhm-gemma-4-31b-it-caix) | gemma-4-31B-it — dense large chat | ~16 GB |
@@ -260,6 +261,12 @@ export CAIX_EXPORTS=$PWD/models/exports
 # check support, then convert:
 python3 python/converter/convert.py --check --hf-id Qwen/Qwen2-0.5B
 python3 python/converter/convert.py --hf-id Qwen/Qwen2-0.5B --compression 4bit --compute-precision float16
+```
+
+Only run one heavy Core AI export or CLI verification at a time. For local queues, gate each job with:
+
+```bash
+scripts/conversion-guard.sh --wait
 ```
 
 Or do it from the dashboard: paste a HF repo in **Add model → HuggingFace → Core AI**, pick
