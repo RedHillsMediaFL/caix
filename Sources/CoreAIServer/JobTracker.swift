@@ -327,7 +327,7 @@ actor JobTracker {
         }
     }
 
-    private static func annotateSupportCheck(hfRepo: String, rawJSON: String) -> String {
+    static func annotateSupportCheck(hfRepo: String, rawJSON: String) -> String {
         let data = Data(rawJSON.utf8)
         guard var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
             return rawJSON

@@ -294,11 +294,157 @@ final class ServerRuntime: Sendable {
               !body.hf_repo.trimmingCharacters(in: .whitespaces).isEmpty else {
             return JSONResponder.error("expected {\"hf_repo\": \"org/model\"}", status: .badRequest)
         }
-        let json = await jobs.runCheckSupport(
-            hfRepo: body.hf_repo, script: convertScript, workingDir: convertWorkingDir,
-            pythonExecutable: pythonExecutable)
+        let json = await supportCheckJSON(hfRepo: body.hf_repo)
         var headers = HTTPFields(); headers[.contentType] = "application/json"
         return Response(status: .ok, headers: headers, body: ResponseBody(byteBuffer: ByteBuffer(string: json)))
+    }
+
+    private func supportCheckJSON(hfRepo: String) async -> String {
+        if let raw = await Self.nativeSupportCheckJSON(hfRepo: hfRepo) {
+            return JobTracker.annotateSupportCheck(hfRepo: hfRepo, rawJSON: raw)
+        }
+        return await jobs.runCheckSupport(
+            hfRepo: hfRepo, script: convertScript, workingDir: convertWorkingDir,
+            pythonExecutable: pythonExecutable)
+    }
+
+    private static let authoredModelTypes = [
+        "gemma3_text", "gemma4", "gemma4_assistant", "glm4", "gpt_oss", "mistral",
+        "mixtral", "qwen2", "qwen3", "qwen3_5", "qwen3_moe",
+    ]
+    private static let modelTypeRemapping = ["gemma3": "gemma3_text", "qwen2_5": "qwen2"]
+    private static let bfloat16ModelTypes = [
+        "gemma4", "gemma4_assistant", "diffusion_gemma", "qwen3_5", "qwen3_5_moe", "glm4",
+    ]
+    private static let qwen35MoeRequirements = [
+        "register qwen3_5_moe and qwen3_5_moe_text AutoConfig shims before AutoConfig.from_pretrained",
+        "unwrap top-level multimodal checkpoints through text_config and model.language_model weights",
+        "reuse qwen3_5 recurrent-state packing for linear_attention layers",
+        "replace dense qwen3_5 MLP blocks with router + shared expert + top-k SwitchGLU experts",
+        "remap per-expert safetensors into SwitchGLU layout and preserve top-k/router normalization semantics",
+        "verify parity on a tiny random-weight qwen3_5_moe config, then run a structural export before full conversion",
+    ]
+
+    private static func nativeSupportCheckJSON(hfRepo: String) async -> String? {
+        do {
+            let cfg = try await fetchHFConfig(hfRepo: hfRepo)
+            let textConfig = (cfg["text_config"] as? [String: Any]) ?? cfg
+            let modelType = (cfg["model_type"] as? String)
+                ?? (textConfig["model_type"] as? String)
+                ?? ""
+            let remapped = modelTypeRemapping[modelType] ?? modelType
+            let supported = authoredModelTypes.contains(remapped)
+            let requirements = supported ? [] : authoringRequirements(for: modelType)
+            let reason = supported ? "" : authoringSummary(for: modelType)
+            let nextStep = supported ? "" : nextAuthoringStep(for: modelType)
+            let object: [String: Any] = [
+                "ok": true,
+                "supported": supported,
+                "hf_id": hfRepo,
+                "model_type": modelType,
+                "coreai_type": supported ? remapped : NSNull(),
+                "architectures": cfg["architectures"] as? [String] ?? [],
+                "supported_types": authoredModelTypes,
+                "registry_source": "server-static",
+                "params_b": roughParamsB(config: textConfig) as Any,
+                "suggested_compression": "4bit",
+                "suggested_precision": bfloat16ModelTypes.contains(remapped) ? "bfloat16" : "float16",
+                "support_status": supported ? "supported" : "needs_coreai_authoring",
+                "authoring_required": !supported,
+                "requirements": requirements,
+                "next_step": nextStep,
+                "reason": reason,
+            ]
+            return jsonString(object)
+        } catch {
+            return nil
+        }
+    }
+
+    private static func fetchHFConfig(hfRepo: String) async throws -> [String: Any] {
+        let endpoint = ProcessInfo.processInfo.environment["HF_ENDPOINT"] ?? "https://huggingface.co"
+        let encodedRepo = hfRepo.split(separator: "/").map {
+            String($0).addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? String($0)
+        }.joined(separator: "/")
+        guard let url = URL(string: endpoint.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                            + "/" + encodedRepo + "/resolve/main/config.json")
+        else { throw URLError(.badURL) }
+        var request = URLRequest(url: url)
+        request.setValue("caix-support-check", forHTTPHeaderField: "User-Agent")
+        if let token = ProcessInfo.processInfo.environment["HF_TOKEN"]
+            ?? ProcessInfo.processInfo.environment["HUGGING_FACE_HUB_TOKEN"]
+        {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw URLError(.badServerResponse)
+        }
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw URLError(.cannotParseResponse)
+        }
+        return object
+    }
+
+    private static func roughParamsB(config: [String: Any]) -> Double? {
+        guard let hidden = number(config["hidden_size"]),
+              let layers = number(config["num_hidden_layers"]),
+              let vocab = number(config["vocab_size"])
+        else { return nil }
+        let embed = 2 * vocab * hidden
+        let experts = number(config["num_experts"]) ?? 0
+        let moeHidden = number(config["moe_intermediate_size"]) ?? 0
+        let sharedHidden = number(config["shared_expert_intermediate_size"]) ?? 0
+        let params: Double
+        if experts > 0, moeHidden > 0 {
+            let expertFFN = layers * (3 * hidden * moeHidden * experts + hidden * experts)
+            let sharedFFN = sharedHidden > 0 ? layers * (3 * hidden * sharedHidden) : 0
+            let attentionish = layers * 6 * hidden * hidden
+            params = embed + expertFFN + sharedFFN + attentionish
+        } else {
+            params = 12 * layers * hidden * hidden + embed
+        }
+        let billions = params / 1_000_000_000
+        return (billions * 100).rounded() / 100
+    }
+
+    private static func number(_ any: Any?) -> Double? {
+        if let int = any as? Int { return Double(int) }
+        if let double = any as? Double { return double }
+        if let string = any as? String { return Double(string) }
+        return nil
+    }
+
+    private static func authoringRequirements(for modelType: String) -> [String] {
+        if modelType == "qwen3_5_moe" { return qwen35MoeRequirements }
+        return [
+            "identify the HF config and state-dict layout",
+            "add or remap the model_type in coreai_models.models.registry",
+            "author the macOS model class using existing Core AI primitives where possible",
+            "add parity checks against the HF reference or a minimal reference implementation",
+            "run structural export, full export, and load/generate coherence before publishing",
+        ]
+    }
+
+    private static func authoringSummary(for modelType: String) -> String {
+        if modelType == "qwen3_5_moe" {
+            return "Qwen3.5 MoE combines the qwen3_5 hybrid recurrent/full-attention decoder with qwen3_moe-style SwitchGLU experts."
+        }
+        return "Core AI does not yet have an authored macOS model for model_type '\(modelType.isEmpty ? "?" : modelType)'."
+    }
+
+    private static func nextAuthoringStep(for modelType: String) -> String {
+        if modelType == "qwen3_5_moe" {
+            return "author coreai_models.models.macos.qwen3_5_moe and register it in coreai_models.models.registry"
+        }
+        return "author the Core AI macOS model path and register the model_type"
+    }
+
+    private static func jsonString(_ object: [String: Any]) -> String? {
+        guard JSONSerialization.isValidJSONObject(object),
+              let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        else { return nil }
+        return String(data: data, encoding: .utf8)
     }
 
     /// `POST /api/convert-hf` {hf_repo, name?, compression?, compute_precision?, context?} —
@@ -309,9 +455,7 @@ final class ServerRuntime: Sendable {
             return JSONResponder.error("expected {\"hf_repo\": \"org/model\", ...settings}", status: .badRequest)
         }
         // Support gate (so we can return a clean flagged status before launching).
-        let checkJSON = await jobs.runCheckSupport(
-            hfRepo: body.hf_repo, script: convertScript, workingDir: convertWorkingDir,
-            pythonExecutable: pythonExecutable)
+        let checkJSON = await supportCheckJSON(hfRepo: body.hf_repo)
         let checkObject = (try? JSONSerialization.jsonObject(with: Data(checkJSON.utf8)) as? [String: Any])
         let supported = (checkObject?["supported"] as? Bool) ?? false
         let ggufOnly = (checkObject?["gguf_only"] as? Bool) ?? false

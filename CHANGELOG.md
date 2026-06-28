@@ -20,6 +20,7 @@
 - Published verified RHM GLM-4-9B-0414 and GLM-4-32B-0414 Core AI bundles and documented them in the README model table.
 - Added structured Core AI authoring requirements for `qwen3_5_moe` support checks, covering the larger Ornith and Qwen3.6 MoE lane.
 - Added a lightweight stdlib support-check path so the dashboard can inspect HF configs without launching the external CoreAI Python checkout.
+- Added a native server-side HF config probe for dashboard support checks so launchd does not need to spawn converter subprocesses for quick architecture inspection.
 
 ### Fixed
 
