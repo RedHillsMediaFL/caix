@@ -23,7 +23,7 @@ os.environ.setdefault("HF_HOME", "/Volumes/SSD/hf-cache")
 BF16_TYPES = {"gemma4", "gemma4_assistant", "diffusion_gemma", "qwen3_5", "qwen3_5_moe", "glm4"}
 STATIC_SUPPORTED_TYPES = [
     "gemma3_text", "gemma4", "gemma4_assistant", "glm4", "gpt_oss", "mistral",
-    "mixtral", "qwen2", "qwen3", "qwen3_5", "qwen3_moe",
+    "mixtral", "qwen2", "qwen3", "qwen3_5", "qwen3_5_moe", "qwen3_moe",
 ]
 STATIC_MODEL_TYPE_REMAPPING = {
     "gemma3": "gemma3_text",

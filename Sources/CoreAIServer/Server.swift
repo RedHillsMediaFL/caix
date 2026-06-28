@@ -310,7 +310,7 @@ final class ServerRuntime: Sendable {
 
     private static let authoredModelTypes = [
         "gemma3_text", "gemma4", "gemma4_assistant", "glm4", "gpt_oss", "mistral",
-        "mixtral", "qwen2", "qwen3", "qwen3_5", "qwen3_moe",
+        "mixtral", "qwen2", "qwen3", "qwen3_5", "qwen3_5_moe", "qwen3_moe",
     ]
     private static let modelTypeRemapping = ["gemma3": "gemma3_text", "qwen2_5": "qwen2"]
     private static let bfloat16ModelTypes = [

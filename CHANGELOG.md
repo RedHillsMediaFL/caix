@@ -21,6 +21,7 @@
 - Added structured Core AI authoring requirements for `qwen3_5_moe` support checks, covering the larger Ornith and Qwen3.6 MoE lane.
 - Added a lightweight stdlib support-check path so the dashboard can inspect HF configs without launching the external CoreAI Python checkout.
 - Added a native server-side HF config probe for dashboard support checks so launchd does not need to spawn converter subprocesses for quick architecture inspection.
+- Marked `qwen3_5_moe` as an authored conversion family after adding native Core AI support in the vendored model registry.
 
 ### Fixed
 
@@ -31,3 +32,4 @@
 - Kept dashboard model listing responsive under launchd by using bounded model-index and registry reads instead of blocking indefinitely on inaccessible export paths.
 - Bounded dashboard Hugging Face support checks so a launchd/external-volume converter hang returns JSON and writes a support log instead of wedging the API.
 - Defaulted raw HF `glm4` conversions to bfloat16 after support detection and logged not-yet-authored or failed converter attempts to `~/.caix/convert-failures.log`.
+- Accepted `CAIX_COREAI_MODELS` as either a CoreAI checkout root or its `python/` package directory.

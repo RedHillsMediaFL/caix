@@ -24,7 +24,11 @@ _apple_env_candidates = [
     PIPELINE_ROOT.parent / "coreai-models" / "python",
     Path("/Volumes/SSD/ai-dev/coreai-gemma4/vendor/coreai-models/python"),
 ]
-APPLE_ENV = next((p for p in _apple_env_candidates if p and p.exists()), _apple_env_candidates[1])
+_normalized_apple_env_candidates = [
+    p / "python" if p and (p / "python" / "pyproject.toml").exists() else p
+    for p in _apple_env_candidates
+]
+APPLE_ENV = next((p for p in _normalized_apple_env_candidates if p and p.exists()), _normalized_apple_env_candidates[1])
 EXPORTS = Path(os.environ.get("CAIX_EXPORTS", str(PIPELINE_ROOT / "exports"))).expanduser()
 HF_HOME = os.environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface"))
 TMPDIR_EXPORT = os.environ.get("CAIX_TMPDIR", str(PIPELINE_ROOT.parent / "coreai-tmp"))

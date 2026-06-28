@@ -224,7 +224,7 @@ scripts/refresh-export-index.sh /Volumes/SSD/ai-dev/coreai-pipeline/exports \
 ```
 - **Greedy tool-calling:** the MTP/speculative path is greedy, so small models may not reliably emit
   tool calls. Use a qwen-family model for tool-heavy chats.
-- **Authored architectures** (for conversion): gemma3/gemma4, qwen2/qwen3/qwen3_moe/qwen3_5,
+- **Authored architectures** (for conversion): gemma3/gemma4, qwen2/qwen3/qwen3_moe/qwen3_5/qwen3_5_moe,
   glm4, mistral, mixtral, gpt_oss. New model types are flagged with their required Core AI
   authoring steps in the UI and support logs.
 - **Diffusion models** are on the roadmap, not in this beta.
