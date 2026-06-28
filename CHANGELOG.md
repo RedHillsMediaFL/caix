@@ -27,6 +27,7 @@
 - Added `COREAI_PERSISTENT_FAST_ENGINE=1` as an opt-in for the experimental kept-hot CoreAILanguageModels server engine.
 - Added `scripts/conversion-guard.sh` so local conversion queues can avoid overlapping `convert.py`, raw `coreai.llm.export`, and CLI verification jobs.
 - Added `mixtral-8x7b-instruct-coreai` to the OpenCode provider map.
+- Removed `qwythos-9b-coreai` from the OpenCode provider map until its qwen3_5 reasoning-only output is fixed.
 
 ### Fixed
 

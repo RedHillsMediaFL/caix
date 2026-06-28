@@ -58,13 +58,6 @@
             "output": 2048
           }
         },
-        "qwythos-9b-coreai": {
-          "name": "Qwythos 9B Core AI",
-          "limit": {
-            "context": 4096,
-            "output": 2048
-          }
-        },
         "gpt-oss-20b-coreai": {
           "name": "GPT-OSS 20B Core AI",
           "limit": {
