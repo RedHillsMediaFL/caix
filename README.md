@@ -24,6 +24,27 @@ model verifies in one pass — same output, faster) for supported model pairs.
 
 ---
 
+## Performance
+
+caix runs models on **Apple's own Core AI runtime** (Neural Engine + GPU). On **Qwen3-4B** (4-bit,
+Apple silicon 64 GB, `temp=0`, 200-token streaming decode, one engine at a time on an idle machine):
+
+| engine | decode tok/s |
+|---|---:|
+| mlx | 121.7 |
+| **caix** | **111.9** |
+| llama.cpp | 90.8 |
+| ollama | 56.5 |
+
+caix is the **2nd-fastest engine** — within ~8% of mlx and well ahead of llama.cpp and ollama — while
+being a thin native layer over Core AI. On the **gpt-oss-20b** MoE, mlx leads (caix 67.9). Each engine
+uses its own standard ~4-bit quant; numbers vary by Mac, so re-run on your own hardware.
+
+> These are engine-native throughput numbers on `main`. A faster **API-server** path (routing the
+> server through the pipelined Core AI engine) is in progress for the next beta.
+
+---
+
 ## What you need (requirements)
 
 | | |
