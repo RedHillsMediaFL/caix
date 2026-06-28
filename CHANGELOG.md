@@ -33,6 +33,7 @@
 - Restored `qwythos-9b-coreai` to the OpenCode provider map after no-thinking template verification.
 - Added a registry conversion lane for the fully cached Ornith-1.0-35B qwen3_5_moe checkpoint.
 - Added a qwen3_5_moe-safe int8 compression YAML and `convert.py --compression-config` passthrough for the Ornith-1.0-35B lane after the generic int4 export crashed during Core AI dequantization.
+- Recorded the Ornith-1.0-35B runtime block: int8 conversion completes, but the 32 GB bundle does not pass live smoke on the 64 GB host, so HF publication remains blocked.
 
 ### Fixed
 
