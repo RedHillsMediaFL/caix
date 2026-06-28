@@ -245,8 +245,10 @@ scripts/refresh-export-index.sh /Volumes/SSD/ai-dev/coreai-pipeline/exports \
 - **Authored architectures** (for conversion): gemma3/gemma4, qwen2/qwen3/qwen3_moe/qwen3_5/qwen3_5_moe,
   glm4, mistral, mixtral, gpt_oss. New model types are flagged with their required Core AI
   authoring steps in the UI and support logs.
-- **Ornith frontier lane:** `ornith-1.0-35b` is registered for local conversion; the 397B variant
-  uses the same authored `qwen3_5_moe` path but requires its full 122-shard source download first.
+- **Ornith frontier lane:** `ornith-1.0-35b` is registered for local conversion. The authored int4
+  path now exports a 17 GB full bundle, but full runtime warmup is still quarantined behind an MPS
+  reshape failure; it will not be published to HF until live smoke passes. The 397B variant uses the
+  same authored `qwen3_5_moe` path but requires its full 122-shard source download first.
 - **Diffusion models** are on the roadmap, not in this beta.
 
 ---
