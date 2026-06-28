@@ -23,9 +23,13 @@
 - Added a lightweight stdlib support-check path so the dashboard can inspect HF configs without launching the external CoreAI Python checkout.
 - Added a native server-side HF config probe for dashboard support checks so launchd does not need to spawn converter subprocesses for quick architecture inspection.
 - Marked `qwen3_5_moe` as an authored conversion family after adding native Core AI support in the vendored model registry.
+- Added `COREAI_PERSISTENT_FAST_ENGINE=1` as an opt-in for the experimental kept-hot CoreAILanguageModels server engine.
 
 ### Fixed
 
+- Fixed server-side CoreAILanguageModels generation stalls by pumping the main runloop while `serve` waits on the HTTP server task.
+- Defaulted standard language-bundle serving to the stable one-shot CoreAILanguageModels path, with the older sequential engine available through `COREAI_LEGACY_ENGINE=1`.
+- Pointed the OpenCode default model at the installed `qwen3-0.6b-coreai` bundle so `opencode run` works on the current local server while larger bundle IDs remain available in the provider map.
 - Inferred a conservative qwen3_5 hybrid KV-cache floor for converted bundles that do not yet carry `language.min_kv_capacity`, preventing under-sized cache allocation for Ornith-style bundles.
 - Inferred EAGLE target hidden size from Core AI model descriptors at load time, so larger targets can override the 26B default without source changes.
 - Updated diffusion denoiser tests to match the official entropy-bound sampler behavior already implemented in the runtime.

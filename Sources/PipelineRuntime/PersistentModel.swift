@@ -23,16 +23,20 @@ public final class PersistentModel {
     public let loadSeconds: Double
 
     #if COREAI_RUNTIME
-    private let engine: LLMEngine
+    private let generateImpl: PipelinedLanguageHandle.Generate
 
-    private init(engine: LLMEngine, bundle: ResolvedBundle) {
-        self.engine = engine
+    private init(
+        bundle: ResolvedBundle,
+        loadSeconds: Double,
+        generate: @escaping PipelinedLanguageHandle.Generate
+    ) {
+        self.generateImpl = generate
         self.name = bundle.name
         self.bundlePath = bundle.root.path
         self.vocabSize = bundle.vocabSize
         self.maxContextLength = bundle.maxContextLength
         self.bundleByteSize = Self.directorySize(bundle.aimodelURL)
-        self.loadSeconds = engine.loadSeconds
+        self.loadSeconds = loadSeconds
     }
     #else
     // Unreachable in the standalone build: `load` throws `.runtimeUnavailable` before any
@@ -51,8 +55,43 @@ public final class PersistentModel {
     public static func load(bundlePath: String, verbose: Bool = false) async throws -> PersistentModel {
         #if COREAI_RUNTIME
         let bundle = try ResolvedBundle.load(at: bundlePath)
+        if ProcessInfo.processInfo.environment["COREAI_LEGACY_ENGINE"] == nil,
+           ProcessInfo.processInfo.environment["COREAI_PERSISTENT_FAST_ENGINE"] != nil,
+           let fast = try await PipelinedLLM.loadPersistent(bundlePath: bundlePath, verbose: verbose)
+        {
+            return PersistentModel(bundle: bundle, loadSeconds: fast.loadSeconds, generate: fast.generate)
+        }
+        if ProcessInfo.processInfo.environment["COREAI_LEGACY_ENGINE"] == nil {
+            return PersistentModel(
+                bundle: bundle,
+                loadSeconds: 0,
+                generate: { messages, options, tools, onToken in
+                    if let fast = try await PipelinedLLM.runIfLanguageMessages(
+                        modelPath: bundlePath,
+                        messages: messages,
+                        tools: tools,
+                        options: options,
+                        onToken: onToken)
+                    {
+                        return fast
+                    }
+                    let engine = try await LLMEngine.load(bundle: bundle, verbose: options.verbose)
+                    let promptTokens = try engine.encodePrompt(
+                        messages: messages, tools: tools, applyChatTemplate: options.applyChatTemplate)
+                    return try await engine.generate(
+                        promptTokens: promptTokens, options: options, onToken: onToken)
+                })
+        }
         let engine = try await LLMEngine.load(bundle: bundle, verbose: verbose)
-        return PersistentModel(engine: engine, bundle: bundle)
+        return PersistentModel(
+            bundle: bundle,
+            loadSeconds: engine.loadSeconds,
+            generate: { messages, options, tools, onToken in
+                let promptTokens = try engine.encodePrompt(
+                    messages: messages, tools: tools, applyChatTemplate: options.applyChatTemplate)
+                return try await engine.generate(
+                    promptTokens: promptTokens, options: options, onToken: onToken)
+            })
         #else
         _ = (bundlePath, verbose)
         throw CoreAIPipeline.RuntimeError.runtimeUnavailable
@@ -71,10 +110,7 @@ public final class PersistentModel {
         onToken: ((String) -> Void)? = nil
     ) async throws -> CoreAIPipeline.Result {
         #if COREAI_RUNTIME
-        let promptTokens = try engine.encodePrompt(
-            messages: messages, tools: tools, applyChatTemplate: options.applyChatTemplate)
-        return try await engine.generate(
-            promptTokens: promptTokens, options: options, onToken: onToken)
+        return try await generateImpl(messages, options, tools, onToken)
         #else
         _ = (messages, options, tools, onToken)
         throw CoreAIPipeline.RuntimeError.runtimeUnavailable

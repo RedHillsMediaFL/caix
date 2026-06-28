@@ -529,6 +529,8 @@ func serveCommand(_ argv: [String]) {
             exitCode = 1
         }
     }
-    semaphore.wait()
+    while semaphore.wait(timeout: .now()) == .timedOut {
+        RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02))
+    }
     exit(exitCode)
 }

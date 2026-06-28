@@ -355,12 +355,21 @@ public actor ModelManager {
     /// Load (or hot-swap to) the bundle `name`. Idempotent; de-duplicates concurrent loads.
     @discardableResult
     func load(_ name: String) async throws -> ModelHandle {
+        let verbose = self.verbose
+        func log(_ message: @autoclosure () -> String) {
+            if verbose {
+                FileHandle.standardError.write(Data("[server] \(message())\n".utf8))
+            }
+        }
         if let h = handles[name] { return h }
-        if let task = loadTasks[name] { return try await task.value }
+        if let task = loadTasks[name] {
+            log("joining in-flight load for \(name)")
+            return try await task.value
+        }
 
         let path = bundlePath(for: name)
-        let verbose = self.verbose
         let eagle = eagleConfig
+        log("load requested for \(name) at \(path)")
         if eagle?.name != name {
             var isDir = ObjCBool(false)
             guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir),
@@ -369,10 +378,16 @@ public actor ModelManager {
                 throw CoreAIPipeline.RuntimeError.bundleNotFound(path)
             }
         }
-        let task = Task<ModelHandle, Error> {
+        let task = Task.detached(priority: .userInitiated) {
+            if verbose {
+                FileHandle.standardError.write(Data("[server] load task started for \(name)\n".utf8))
+            }
             // EAGLE MTP model: build the speculative engine from its target+draft[+unrolled] bundles.
             if let cfg = eagle, cfg.name == name {
                 #if COREAI_RUNTIME
+                if verbose {
+                    FileHandle.standardError.write(Data("[server] loading EAGLE bundle \(name)\n".utf8))
+                }
                 let engine = try await EagleEngine.load(
                     targetURL: URL(fileURLWithPath: cfg.targetPath),
                     draftURL: URL(fileURLWithPath: cfg.draftPath),
@@ -387,6 +402,9 @@ public actor ModelManager {
             }
             if Self.isEagleBundle(at: URL(fileURLWithPath: path, isDirectory: true)) {
                 #if COREAI_RUNTIME
+                if verbose {
+                    FileHandle.standardError.write(Data("[server] loading EAGLE package \(name)\n".utf8))
+                }
                 let root = URL(fileURLWithPath: path, isDirectory: true)
                 let engine = try await EagleEngine.load(
                     targetURL: root.appendingPathComponent("eagle_target.aimodel", isDirectory: true),
@@ -401,10 +419,16 @@ public actor ModelManager {
                 #endif
             }
             if Self.isClassicSpeculativeBundle(at: URL(fileURLWithPath: path, isDirectory: true)) {
+                if verbose {
+                    FileHandle.standardError.write(Data("[server] loading speculative bundle \(name)\n".utf8))
+                }
                 let model = try await PersistentSpeculativeModel.load(
                     bundlePath: path, draftTokens: 4, verbose: verbose)
                 return ModelHandle(speculative: model, name: name)
             } else {
+                if verbose {
+                    FileHandle.standardError.write(Data("[server] loading persistent bundle \(name)\n".utf8))
+                }
                 let model = try await PersistentModel.load(bundlePath: path, verbose: verbose)
                 return ModelHandle(model: model)
             }

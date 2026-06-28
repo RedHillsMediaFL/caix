@@ -173,16 +173,23 @@ curl http://localhost:1237/v1/chat/completions -H 'content-type: application/jso
 ### OpenCode (optional)
 
 The repo includes `opencode.json` with a local `caix` OpenAI-compatible provider pointed at
-`http://127.0.0.1:1237/v1` and model IDs matching caix bundles. Copy or symlink it into
-`~/.config/opencode/opencode.json`, start caix, then verify OpenCode can see the server-backed
-models:
+`http://127.0.0.1:1237/v1` and known RHM/caix model IDs. Copy or symlink it into
+`~/.config/opencode/opencode.json`, start caix, then verify OpenCode can see the provider:
 
 ```bash
 opencode models caix
 ```
 
-When OpenCode sends one of those model IDs to `/v1/chat/completions`, caix hot-loads the matching
-local bundle from the exports directory.
+OpenCode reads the static provider map; the live server list is the source of truth for installed
+bundles:
+
+```bash
+curl http://127.0.0.1:1237/v1/models
+```
+
+When OpenCode sends an installed model ID to `/v1/chat/completions`, caix hot-loads the matching
+local bundle from the exports directory. If the ID is not installed yet, use the dashboard's RHM
+installer or `hf download` to add the converted bundle first.
 
 ### Reach it from your phone / other machines (optional)
 caix binds to `127.0.0.1` (local only) by design. To reach it securely from your other devices,
@@ -217,6 +224,9 @@ gives you a private HTTPS URL on your tailnet (no ports opened to the internet).
 - **First request after starting/loading a model is slow** — Core AI compiles the model on first use
   (~30–60 s for a 13 GB model). The chat view shows a "loading model…" spinner. Subsequent requests
   are fast.
+- **Server fast path:** standard language bundles use Apple's CoreAILanguageModels one-shot
+  generation path by default. Set `COREAI_PERSISTENT_FAST_ENGINE=1` to test the experimental
+  kept-hot fast engine, or `COREAI_LEGACY_ENGINE=1` only when debugging the older sequential path.
 - **Background services & external volumes:** if you run caix from a `launchd` agent (auto-start),
   Apple's loader needs file-access permission and can't read **external/USB volumes** without it.
   Simplest: keep the binary + models on the internal disk, or run `./caix serve` from your normal

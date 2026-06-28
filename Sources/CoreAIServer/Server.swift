@@ -676,6 +676,11 @@ final class ServerRuntime: Sendable {
     }
 
     private func openAIChatHandler(_ request: Request, _ context: BasicRequestContext) async throws -> Response {
+        func log(_ message: @autoclosure () -> String) {
+            if verbose {
+                FileHandle.standardError.write(Data("[openai] \(message())\n".utf8))
+            }
+        }
         let req: OpenAIChatRequest
         do {
             req = try await Self.decode(OpenAIChatRequest.self, request)
@@ -684,17 +689,21 @@ final class ServerRuntime: Sendable {
         }
         let gen = req.toGeneration()
         let modelName = await resolveModelName(gen.model)
+        log("request model=\(gen.model) resolved=\(modelName) messages=\(gen.messages.count) maxTokens=\(gen.maxTokens)")
         let handle: ModelHandle
         do {
             handle = try await manager.handle(for: modelName)
+            log("handle ready for \(modelName)")
         } catch {
             return JSONResponder.error("could not load model '\(modelName)': \(error)", status: .serviceUnavailable)
         }
 
         let messages = Self.messagePayload(gen.messages)
-        let options = Self.options(from: gen)
+        var options = Self.options(from: gen)
+        options.verbose = verbose
         let tools = gen.toolSpecs
         let format = await manager.outputFormat(for: modelName)
+        log("output format \(format.family.rawValue) for \(modelName)")
         let id = "chatcmpl-" + Self.shortID()
         let created = Int(Date().timeIntervalSince1970)
 
@@ -705,7 +714,9 @@ final class ServerRuntime: Sendable {
         }
 
         do {
+            log("generation start for \(modelName)")
             let result = try await handle.generate(messages: messages, options: options, tools: tools)
+            log("generation done for \(modelName): \(result.generatedTokenCount) tokens")
             // Normalize the raw base-format output into reasoning_content + content + tool_calls.
             let norm = StreamingNormalizer.normalizeComplete(result.text, format: format)
             let message = OpenAIResponseMessage(

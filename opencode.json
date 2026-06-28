@@ -89,6 +89,6 @@
       }
     }
   },
-  "model": "caix/qwen3-4b-coreai",
+  "model": "caix/qwen3-0.6b-coreai",
   "small_model": "caix/qwen3-0.6b-coreai"
 }
