@@ -37,6 +37,7 @@
 
 - Fixed server-side CoreAILanguageModels generation stalls by pumping the main runloop while `serve` waits on the HTTP server task.
 - Fixed `convert.py <registry-key> --check` so it resolves registry keys to their Hugging Face repo before probing support.
+- Generalized converter chat-template postprocessing so Qwen3.5 hybrid/MoE exports with `enable_thinking` branches start OpenAI output in visible content.
 - Defaulted standard language-bundle serving to the stable one-shot CoreAILanguageModels path, with the older sequential engine available through `COREAI_LEGACY_ENGINE=1`.
 - Pointed the OpenCode default model at the installed `qwen3-0.6b-coreai` bundle so `opencode run` works on the current local server while larger bundle IDs remain available in the provider map.
 - Inferred a conservative qwen3_5 hybrid KV-cache floor for converted bundles that do not yet carry `language.min_kv_capacity`, preventing under-sized cache allocation for Ornith-style bundles.

@@ -82,13 +82,13 @@ def check_support(hf_id: str) -> dict:
 BF16_FAMILIES = ("gemma4", "gemma4_assistant", "diffusion_gemma", "qwen3_5", "qwen3_5_moe", "glm4")
 
 
-QWYTHOS_THINKING_BRANCH = """{%- if enable_thinking is defined and enable_thinking is false %}
+NO_THINK_KWARG_BRANCH = """{%- if enable_thinking is defined and enable_thinking is false %}
         {{- '<think>\\n\\n</think>\\n\\n' }}
     {%- else %}
         {{- '<think>\\n' }}
     {%- endif %}"""
 
-QWYTHOS_NO_THINK_BRANCH = "{{- '<think>\\n\\n</think>\\n\\n' }}"
+NO_THINK_GENERATION_PROMPT = "{{- '<think>\\n\\n</think>\\n\\n' }}"
 
 
 def load_registry() -> dict:
@@ -149,14 +149,12 @@ def patch_chat_templates(bundle: Path, hf_id: str) -> list[str]:
     """Apply CAIX runtime compatibility patches to exported tokenizer templates.
 
     Apple's CoreAILanguageModels tokenizer API currently lets us pass messages/tools, but not
-    arbitrary chat-template kwargs. Qwythos exposes the right no-thinking path behind
-    `enable_thinking=false`; without that kwarg its generation prompt dangles an open `<think>`,
-    which makes OpenAI clients receive reasoning_content with empty visible content.
+    arbitrary chat-template kwargs. Several Qwen3.5 hybrid/MoE templates expose the right
+    no-thinking path behind `enable_thinking=false`; without that kwarg their generation prompt
+    dangles an open `<think>`, which makes OpenAI clients receive reasoning_content with empty
+    visible content.
     """
     patched: list[str] = []
-    if "Qwythos-9B-Claude-Mythos-5-1M" not in hf_id:
-        return patched
-
     tok_dir = bundle / "tokenizer"
     candidates = [tok_dir / "chat_template.jinja"]
     cfg = tok_dir / "tokenizer_config.json"
@@ -167,9 +165,9 @@ def patch_chat_templates(bundle: Path, hf_id: str) -> list[str]:
         if not path.exists():
             continue
         text = path.read_text()
-        if QWYTHOS_THINKING_BRANCH not in text:
+        if NO_THINK_KWARG_BRANCH not in text:
             continue
-        path.write_text(text.replace(QWYTHOS_THINKING_BRANCH, QWYTHOS_NO_THINK_BRANCH))
+        path.write_text(text.replace(NO_THINK_KWARG_BRANCH, NO_THINK_GENERATION_PROMPT))
         patched.append(str(path.relative_to(bundle)))
     return patched
 
