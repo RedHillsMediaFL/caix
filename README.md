@@ -122,6 +122,7 @@ All bundles are pre-converted Core AI `.aimodel` repos, named `rhm-…-caix`.
 | [`rhm-qwythos-9b-caix`](https://huggingface.co/redhillsmediafl/rhm-qwythos-9b-caix) | Qwythos-9B-Claude-Mythos-5-1M — qwen3_5 hybrid with visible-content template patch | ~4.7 GB |
 | [`rhm-glm-4-9b-0414-caix`](https://huggingface.co/redhillsmediafl/rhm-glm-4-9b-0414-caix) | GLM-4-9B-0414 — dense bilingual model | ~5.0 GB |
 | [`rhm-glm-4-32b-0414-caix`](https://huggingface.co/redhillsmediafl/rhm-glm-4-32b-0414-caix) | GLM-4-32B-0414 — dense large model | ~17 GB |
+| [`rhm-gpt-oss-20b-caix`](https://huggingface.co/redhillsmediafl/rhm-gpt-oss-20b-caix) | OpenAI gpt-oss-20b — verified 4-bit Core AI bundle | ~10 GB |
 | [`rhm-mixtral-8x7b-instruct-caix`](https://huggingface.co/redhillsmediafl/rhm-mixtral-8x7b-instruct-caix) | Mixtral-8x7B-Instruct-v0.1 — sparse MoE instruction model | ~24 GB |
 | [`rhm-qwen3.6-27b-caix`](https://huggingface.co/redhillsmediafl/rhm-qwen3.6-27b-caix) | Qwen3.6-27B — large general chat | ~14 GB |
 | [`rhm-gemma-4-26b-a4b-caix`](https://huggingface.co/redhillsmediafl/rhm-gemma-4-26b-a4b-caix) | gemma-4-26B-A4B-it — MoE (~4B active) | ~13 GB |
