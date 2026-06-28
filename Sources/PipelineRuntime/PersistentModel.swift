@@ -55,18 +55,22 @@ public final class PersistentModel {
     public static func load(bundlePath: String, verbose: Bool = false) async throws -> PersistentModel {
         #if COREAI_RUNTIME
         let bundle = try ResolvedBundle.load(at: bundlePath)
-        if ProcessInfo.processInfo.environment["COREAI_LEGACY_ENGINE"] == nil,
-           ProcessInfo.processInfo.environment["COREAI_PERSISTENT_FAST_ENGINE"] != nil,
+        let env = ProcessInfo.processInfo.environment
+        let fastHybridAllowed = env["COREAI_FAST_HYBRID_ENGINE"] != nil
+        let fastCompatible = bundle.minKVCapacity == 0 || fastHybridAllowed
+        if env["COREAI_LEGACY_ENGINE"] == nil,
+           env["COREAI_PERSISTENT_FAST_ENGINE"] != nil,
+           fastCompatible,
            let fast = try await PipelinedLLM.loadPersistent(bundlePath: bundlePath, verbose: verbose)
         {
             return PersistentModel(bundle: bundle, loadSeconds: fast.loadSeconds, generate: fast.generate)
         }
-        if ProcessInfo.processInfo.environment["COREAI_LEGACY_ENGINE"] == nil {
+        if env["COREAI_LEGACY_ENGINE"] == nil {
             return PersistentModel(
                 bundle: bundle,
                 loadSeconds: 0,
                 generate: { messages, options, tools, onToken in
-                    if let fast = try await PipelinedLLM.runIfLanguageMessages(
+                    if fastCompatible, let fast = try await PipelinedLLM.runIfLanguageMessages(
                         modelPath: bundlePath,
                         messages: messages,
                         tools: tools,

@@ -230,6 +230,9 @@ gives you a private HTTPS URL on your tailnet (no ports opened to the internet).
 - **Server fast path:** standard language bundles use Apple's CoreAILanguageModels one-shot
   generation path by default. Set `COREAI_PERSISTENT_FAST_ENGINE=1` to test the experimental
   kept-hot fast engine, or `COREAI_LEGACY_ENGINE=1` only when debugging the older sequential path.
+  Hybrid qwen3_5/qwen3_5_moe bundles with packed recurrent state route to the explicit Core AI
+  sequential engine unless `COREAI_FAST_HYBRID_ENGINE=1` is set, because the fast warmup cache shape
+  is currently too small for those fixed state prefixes.
 - **Background services & external volumes:** if you run caix from a `launchd` agent (auto-start),
   Apple's loader needs file-access permission and can't read **external/USB volumes** without it.
   Simplest: keep the binary + models on the internal disk, or run `./caix serve` from your normal

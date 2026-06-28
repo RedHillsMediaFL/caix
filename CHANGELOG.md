@@ -40,6 +40,12 @@
 
 ### Fixed
 
+- Routed qwen3_5/qwen3_5_moe bundles with packed recurrent-state KV floors to the explicit Core AI
+  sequential engine by default, because the CoreAILanguageModels fast warmup currently uses a cache
+  shape too small for Ornith's 1024-position SSM prefix; `COREAI_FAST_HYBRID_ENGINE=1` can still
+  opt into the experimental fast path.
+- Baked `language.min_kv_capacity` into future converted qwen3_5/qwen3_5_moe bundle metadata and
+  corrected the Ornith-1.0-35B registry floor to 1024.
 - Fixed server-side CoreAILanguageModels generation stalls by pumping the main runloop while `serve` waits on the HTTP server task.
 - Fixed `convert.py <registry-key> --check` so it resolves registry keys to their Hugging Face repo before probing support.
 - Generalized converter chat-template postprocessing so Qwen3.5 hybrid/MoE exports with `enable_thinking` branches start OpenAI output in visible content.

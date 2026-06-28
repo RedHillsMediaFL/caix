@@ -283,6 +283,28 @@ public enum CoreAIPipeline {
 
     // MARK: - Entry point
 
+    #if COREAI_RUNTIME
+    /// Apple's CoreAILanguageModels fast engine currently warms language bundles with a fixed
+    /// cache shape that is too small for qwen3_5-style recurrent-state packing. Keep those bundles
+    /// on the explicit sequential engine unless the caller opts into the experimental fast path.
+    private static func shouldTryFastLanguagePath(modelPath: String, verbose: Bool) -> Bool {
+        let env = ProcessInfo.processInfo.environment
+        guard env["COREAI_LEGACY_ENGINE"] == nil else { return false }
+        if env["COREAI_FAST_HYBRID_ENGINE"] != nil { return true }
+        guard let bundle = try? ResolvedBundle.load(at: modelPath) else { return true }
+        if bundle.minKVCapacity > 0 {
+            if verbose {
+                FileHandle.standardError.write(
+                    Data(
+                        "[fast] skipping CoreAILanguageModels path: bundle requires KV floor \(bundle.minKVCapacity)\n"
+                            .utf8))
+            }
+            return false
+        }
+        return true
+    }
+    #endif
+
     /// Load `modelPath` (an exported `.aimodel` bundle directory), tokenize `prompt`, run
     /// prefill + decode natively, and return the generated text. Decoded text deltas are
     /// streamed to `onToken` as they are produced.
@@ -298,7 +320,7 @@ public enum CoreAIPipeline {
         // engine). Returns nil for diffusion / non-language bundles, which fall through to
         // `LLMEngine` (diffusion denoise + the legacy sequential decode). `COREAI_LEGACY_ENGINE=1`
         // forces the old path (e.g. when logits / topP / speculative parity are needed).
-        if ProcessInfo.processInfo.environment["COREAI_LEGACY_ENGINE"] == nil {
+        if shouldTryFastLanguagePath(modelPath: modelPath, verbose: options.verbose) {
             if let fast = try await PipelinedLLM.runIfLanguage(
                 modelPath: modelPath, prompt: prompt, options: options, onToken: onToken) {
                 return fast

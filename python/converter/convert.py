@@ -184,6 +184,48 @@ def patch_chat_templates(bundle: Path, hf_id: str) -> list[str]:
     return patched
 
 
+def infer_min_kv_capacity(hf_id: str, registry_entry: dict | None, support: dict | None) -> int | None:
+    """Return the fixed KV-cache floor required by hybrid qwen3_5 recurrent-state packing."""
+    if registry_entry:
+        value = registry_entry.get("min_kv_capacity")
+        if isinstance(value, (int, float)) and value > 0:
+            return int(value)
+
+    model_type = (support or {}).get("model_type") or (registry_entry or {}).get("model_type") or ""
+    name = hf_id.lower()
+    if "ornith" in name or model_type == "qwen3_5_moe":
+        return 1024
+    if "qwen3.6-27b" in name:
+        return 768
+    if model_type == "qwen3_5" or "qwythos" in name or "qwen3_5" in name or "qwen3.5" in name:
+        return 512
+    return None
+
+
+def patch_min_kv_capacity(
+    bundle: Path,
+    hf_id: str,
+    registry_entry: dict | None,
+    support: dict | None,
+) -> int | None:
+    """Bake a hybrid model's required KV-cache floor into root metadata.json."""
+    min_kv = infer_min_kv_capacity(hf_id, registry_entry, support)
+    if not min_kv:
+        return None
+    meta_path = bundle / "metadata.json"
+    if not meta_path.exists():
+        return None
+    meta = json.loads(meta_path.read_text())
+    language = meta.setdefault("language", {})
+    if not isinstance(language, dict):
+        return None
+    if language.get("min_kv_capacity") == min_kv:
+        return min_kv
+    language["min_kv_capacity"] = min_kv
+    meta_path.write_text(json.dumps(meta, indent=2) + "\n")
+    return min_kv
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Convert a model to Core AI .aimodel")
     ap.add_argument("model", nargs="?", help="registry key (see models/registry.json)")
@@ -281,6 +323,12 @@ def main() -> int:
                 print(f"  patched chat template(s) for OpenAI-visible output: {', '.join(patched)}")
         except Exception as e:
             print(f"  note: could not patch chat template: {e}")
+        try:
+            min_kv = patch_min_kv_capacity(bundle, r["hf_id"], registry_entry, support_info)
+            if min_kv:
+                print(f"  baked language.min_kv_capacity={min_kv}")
+        except Exception as e:
+            print(f"  note: could not patch min_kv_capacity metadata: {e}")
     if not args.dry_run:
         print(f"  result: {'OK ' + str(bundle) if ok else 'FAILED (no .aimodel/main.mlirb)'}  exit={rc}")
         if not ok:

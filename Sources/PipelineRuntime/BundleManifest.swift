@@ -105,7 +105,7 @@ public struct ResolvedBundle: Sendable {
     public let tokenizerDir: URL
     public let manifest: BundleManifest
     /// Minimum KV-cache capacity (tokens) this model requires, 0 when unconstrained. Hybrid
-    /// `qwen3_5` models need >= `ssm_pos` (512) positions to hold their packed recurrent state.
+    /// `qwen3_5` models need >= `ssm_pos` positions to hold their packed recurrent state.
     /// Resolved from the bundle metadata (`language.min_kv_capacity`) or, failing that, the
     /// `models/registry.json` entry matching the bundle's `source.hf_model_id`.
     public let minKVCapacity: Int
@@ -262,7 +262,7 @@ public struct ResolvedBundle: Sendable {
     /// 1. an explicit `language.min_kv_capacity` baked into the bundle, else
     /// 2. the `min_kv_capacity` of the `models/registry.json` entry whose `hf_repo` matches the
     ///    bundle's `source.hf_model_id`, else
-    /// 3. a built-in default (512) for hybrid `qwen3_5` registry entries that predate the field,
+    /// 3. a built-in default for hybrid `qwen3_5` registry entries that predate the field,
     ///    else 0 (no floor — standard attention models).
     static func resolveMinKVCapacity(root: URL, manifest: BundleManifest) -> Int {
         if let explicit = manifest.language?.minKVCapacity, explicit > 0 { return explicit }
@@ -271,8 +271,9 @@ public struct ResolvedBundle: Sendable {
         {
             if let m = entry["min_kv_capacity"] as? Int, m > 0 { return m }
             if let m = entry["min_kv_capacity"] as? Double, m > 0 { return Int(m) }
-            // qwen3_5 hybrids pack a recurrent state into a fixed 512-position KV prefix.
+            // qwen3_5 hybrids pack a recurrent state into a fixed KV prefix.
             if (entry["model_type"] as? String) == "qwen3_5" { return 512 }
+            if (entry["model_type"] as? String) == "qwen3_5_moe" { return 1024 }
         }
         if let inferred = inferHybridMinKVCapacity(manifest: manifest), inferred > 0 {
             return inferred
@@ -291,6 +292,7 @@ public struct ResolvedBundle: Sendable {
             manifest.language?.tokenizer,
         ].compactMap { $0?.lowercased() }.joined(separator: " ")
 
+        if haystack.contains("ornith") { return 1024 }
         if haystack.contains("qwen3.6-27b") { return 768 }
         if haystack.contains("qwen3_5") || haystack.contains("qwen3.5")
             || haystack.contains("qwythos") || haystack.contains("ornith")
