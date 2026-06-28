@@ -26,10 +26,10 @@ model verifies in one pass — same output, faster) for supported model pairs.
 
 ## Performance
 
-What local-model people care about: speed, size, runtime, and whether inference stays on the Mac.
-caix runs on Apple's Core AI runtime and serves models through OpenAI/Anthropic-compatible APIs.
+Fast local inference on Apple silicon. OpenAI/Anthropic APIs. Dashboard and chat. No cloud inference.
+caix runs on Apple's Core AI runtime.
 
-**Qwen3-4B**, ~4-bit, 200-token streaming decode, `temp=0`, Apple silicon 64 GB:
+**Qwen3-4B**, ~4-bit, Apple silicon 64 GB:
 
 | engine | decode tok/s |
 |---|---:|
@@ -43,8 +43,8 @@ Bottom line: caix does **111.9 tok/s**. mlx is a little faster. caix beats llama
 **gpt-oss-20b** MoE: caix does **67.9 tok/s**. mlx leads at **87.0 tok/s**; llama.cpp is **81.5
 tok/s**; ollama is **55.0 tok/s**.
 
-Numbers vary by Mac and model. These are current `main` numbers, not unreleased server-optimization
-claims.
+Use these as practical speed numbers, not promises. They are current `main` results on one 64 GB
+Apple silicon Mac, with no unreleased server-optimization claims.
 
 ---
 
