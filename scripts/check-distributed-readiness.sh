@@ -59,6 +59,35 @@ evidence_value() {
   ' "$file"
 }
 
+check_repo_evidence_path() {
+  local label="$1"
+  local field="$2"
+  local value="$3"
+  local file="$4"
+
+  if [[ -z "$value" ]]; then
+    missing "$label evidence $field is missing: $file"
+    return 1
+  fi
+
+  if [[ "$value" == /* || "$value" == *://* ||
+        "$value" == "." || "$value" == ".." ||
+        "$value" == ../* || "$value" == */../* || "$value" == */.. ]]; then
+    missing "$label evidence $field must be a repo-relative tracked path: $value"
+    return 1
+  fi
+
+  if [[ ! -e "$REPO_DIR/$value" ]]; then
+    missing "$label evidence $field path is missing: $value"
+    return 1
+  fi
+
+  if ! git -C "$REPO_DIR" ls-files --error-unmatch -- "$value" >/dev/null 2>&1; then
+    missing "$label evidence $field path is not tracked: $value"
+    return 1
+  fi
+}
+
 check_token_match_evidence() {
   local file="$1"
   local label="$2"
@@ -91,6 +120,8 @@ check_token_match_evidence() {
     missing "$label evidence manifest is missing: $file"
   elif [[ ! "$caix_commit" =~ ^[0-9a-f]{40}$ ]]; then
     missing "$label evidence caix_commit must be a 40-character SHA: $file"
+  elif ! git -C "$REPO_DIR" cat-file -e "$caix_commit^{commit}" 2>/dev/null; then
+    missing "$label evidence caix_commit is not present in this repository: $caix_commit"
   elif [[ ! "$prompts" =~ ^[1-9][0-9]*$ ]]; then
     missing "$label evidence prompts must be a positive integer: $file"
   elif [[ "$max_tokens" != "128" ]]; then
@@ -101,6 +132,10 @@ check_token_match_evidence() {
     missing "$label evidence token_match must be true: $file"
   elif [[ -z "$raw_log" ]]; then
     missing "$label evidence raw_log is missing: $file"
+  elif ! check_repo_evidence_path "$label" manifest "$manifest" "$file"; then
+    return
+  elif ! check_repo_evidence_path "$label" raw_log "$raw_log" "$file"; then
+    return
   else
     ready "$label staged Qwen3-0.6B evidence is structured"
   fi

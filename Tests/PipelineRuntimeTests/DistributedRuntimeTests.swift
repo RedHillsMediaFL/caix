@@ -397,6 +397,41 @@ final class DistributedRuntimeTests: XCTestCase {
         }
     }
 
+    func testStageHandleContextRequiresExistingAssetURL() throws {
+        let baseURL = try makeTemporaryManifestBaseURL()
+        let stageURL = baseURL.appendingPathComponent("stages/00-embed.aimodel")
+        try FileManager.default.createDirectory(
+            at: stageURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: baseURL) }
+
+        let manifest = try DistributedStageManifest.decode(
+            from: Data(stageManifestJSON(modelKey: "model", includeTotalLayerCount: true).utf8),
+            baseURL: baseURL)
+        let stage = manifest.stages[0]
+        let context = try XCTUnwrap(makeContext(manifest: manifest, stage: stage))
+
+        XCTAssertEqual(try context.requireExistingAssetURL().path, stageURL.standardizedFileURL.path)
+    }
+
+    func testStageHandleContextRejectsMissingAssetURL() throws {
+        let baseURL = try makeTemporaryManifestBaseURL()
+        defer { try? FileManager.default.removeItem(at: baseURL) }
+
+        let manifest = try DistributedStageManifest.decode(
+            from: Data(stageManifestJSON(modelKey: "model", includeTotalLayerCount: true).utf8),
+            baseURL: baseURL)
+        let stage = manifest.stages[0]
+        let context = try XCTUnwrap(makeContext(manifest: manifest, stage: stage))
+        let expectedPath = baseURL.appendingPathComponent("stages/00-embed.aimodel")
+            .standardizedFileURL.path
+
+        XCTAssertThrowsError(try context.requireExistingAssetURL()) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .missingStageAsset(stageID: "embed", path: expectedPath))
+        }
+    }
+
     func testSameMachinePipelineRejectsMissingManifestHandle() throws {
         let manifest = try DistributedStageManifest.decode(
             from: Data(stageManifestJSON(modelKey: "model", includeTotalLayerCount: true).utf8),
@@ -502,6 +537,22 @@ final class DistributedRuntimeTests: XCTestCase {
     ) -> DistributedStageDescriptor {
         DistributedStageDescriptor(
             id: id, role: role, layerRange: range, assetName: assetName, workerID: workerID)
+    }
+
+    private func makeContext(
+        manifest: DistributedStageManifest,
+        stage: DistributedStageManifestStage
+    ) -> DistributedStageHandleFactoryContext? {
+        guard let descriptor = manifest.runtimePlan.stage(id: stage.id) else { return nil }
+        return DistributedStageHandleFactoryContext(
+            stage: stage, manifest: manifest, descriptor: descriptor)
+    }
+
+    private func makeTemporaryManifestBaseURL() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("caix-distributed-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
     }
 
     private func stageManifestJSON(modelKey: String?, includeTotalLayerCount: Bool) -> String {

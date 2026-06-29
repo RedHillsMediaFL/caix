@@ -13,6 +13,8 @@
   loopback, Brew install, `cluster join`, and `serve --cluster` are ready.
 - Added structured distributed evidence checks so same-machine and loopback token-match files
   cannot be placeholders and must carry raw-log and manifest fields.
+- Tightened distributed evidence checks to require committed repo-relative manifest/raw-log paths
+  and a `caix_commit` present in the local repository.
 - Added a shared distributed stage-manifest loader so runtime code and `caix cluster plan` validate
   the same staged model contract.
 - Added staged hidden-state boundary tensor metadata to the distributed manifest contract.
@@ -20,6 +22,7 @@
 - Added manifest-backed construction for the same-machine distributed pipeline harness.
 - Added a manifest stage-handle factory path for future Core AI staged execution.
 - Added stage-handle factory context with resolved stage asset URL checks.
+- Added a stage-handle factory guard for missing resolved stage assets before Core AI stage load.
 - Added the cluster-plan contract check to publication gates.
 - Added fail-closed `caix cluster join` and `caix serve --cluster` CLI stubs for Brew surface tests.
 - Expanded the Homebrew formula test to cover distributed plan/join help and `serve --cluster`.

@@ -1053,6 +1053,15 @@ public struct DistributedStageHandleFactoryContext: Hashable, Sendable {
         }
         return resolvedAssetURL
     }
+
+    public func requireExistingAssetURL(fileManager: FileManager = .default) throws -> URL {
+        let url = try requireResolvedAssetURL()
+        guard fileManager.fileExists(atPath: url.path) else {
+            throw DistributedStageExecutionError.missingStageAsset(
+                stageID: stage.id, path: url.path)
+        }
+        return url
+    }
 }
 
 public protocol DistributedStageHandleFactory {
@@ -1067,6 +1076,7 @@ public enum DistributedStageExecutionError: Error, Equatable, Sendable, CustomSt
     case duplicateStageHandle(String)
     case missingStageHandle(String)
     case missingStageAssetPath(String)
+    case missingStageAsset(stageID: String, path: String)
     case invalidForwardInput(String)
     case invalidStageOutput(String)
 
@@ -1082,6 +1092,8 @@ public enum DistributedStageExecutionError: Error, Equatable, Sendable, CustomSt
             return "Missing stage handle: \(id)"
         case .missingStageAssetPath(let id):
             return "Missing stage asset path: \(id)"
+        case .missingStageAsset(let stageID, let path):
+            return "Missing stage asset for \(stageID): \(path)"
         case .invalidForwardInput(let message):
             return "Invalid distributed forward input: \(message)"
         case .invalidStageOutput(let message):
