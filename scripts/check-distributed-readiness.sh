@@ -16,6 +16,8 @@ caix_binary="${caix_bin:-}"
 brew_caix_binary=""
 evidence_dir="$REPO_DIR/docs/distributed-evidence"
 not_ready=0
+plan_err="$(mktemp "${TMPDIR:-/tmp}/caix-distributed-plan.XXXXXX")"
+trap 'rm -f "$plan_err"' EXIT
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -171,7 +173,7 @@ else
   if json="$("$caix_binary" cluster plan \
       --manifest "$REPO_DIR/docs/examples/cluster-stage-manifest.json" \
       --workers main=4,mini=2 \
-      --json 2>/tmp/caix-distributed-plan.err)"; then
+      --json 2>"$plan_err")"; then
     if CLUSTER_PLAN_JSON="$json" python3 - <<'PY'
 import json
 import os
@@ -205,7 +207,7 @@ PY
       missing "cluster plan JSON did not match the distributed runtime contract"
     fi
   else
-    missing "cluster plan failed: $(tr '\n' ' ' </tmp/caix-distributed-plan.err | sed 's/[[:space:]]*$//')"
+    missing "cluster plan failed: $(tr '\n' ' ' <"$plan_err" | sed 's/[[:space:]]*$//')"
   fi
 
   if "$caix_binary" cluster join --help >/dev/null 2>&1; then
