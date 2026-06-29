@@ -3,75 +3,108 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/benchmark-model.sh --model <bundle-dir> --name <name> [options]
+Usage: scripts/benchmark-eagle.sh --package <mtp-bundle-dir> --name <name> [options]
 
 Options:
   --prompt <text>       Prompt text.
   --prompt-file <path>  Prompt file. Overrides --prompt.
   --max-tokens <n>      Max generated tokens. Default: 128.
-  --temperature <n>     Temperature. Default: 0.
   --warmup <n>          Warmup runs. Default: 1.
   --runs <n>            Measured runs. Default: 3.
   --raw                 Skip chat template.
-  --draft <dir>         Draft bundle for classic speculative decoding.
-  --draft-tokens <n>    Draft tokens proposed per step. Default: 4.
-  --repo <id>           Hugging Face repo id for this bundle.
-  --repo-revision <sha> Exact model repo commit for this bundle.
+  --repo <id>           Hugging Face repo id for this package.
+  --repo-revision <sha> Exact model repo commit for this package.
   --out <dir>           Output root. Default: benchmarks/raw.
+  --draft-tokens <n>    Draft tokens proposed per step. Default: 4.
+  --target-only         Run the package target path without draft acceptance.
+  --draft-unrolled <dir>
+                         Optional unrolled EAGLE draft .aimodel directory.
+  --vocab <n>           EAGLE vocabulary size. Default: 262144.
+  --backbone <n>        EAGLE hidden size. Default: 2816.
+  --sliding-window <n>  EAGLE sliding window. Default: 1024.
+  --max-context <n>     EAGLE max context. Default: 4096.
   --force               Ignore an existing stale benchmark lock.
 
 Writes raw stdout/stderr and summary.tsv. Does not publish numbers.
 USAGE
 }
 
-MODEL=""
+PACKAGE=""
 NAME=""
 PROMPT="Write one factual sentence about local inference on Apple silicon."
 PROMPT_FILE=""
 MAX_TOKENS=128
-TEMPERATURE=0
 WARMUP=1
 RUNS=3
 RAW=0
-DRAFT=""
-DRAFT_TOKENS=4
 REPO=""
 REPO_REVISION="unknown"
 OUT_ROOT="benchmarks/raw"
+DRAFT_TOKENS=4
+TARGET_ONLY=0
+DRAFT_UNROLLED=""
+VOCAB=262144
+BACKBONE=2816
+SLIDING_WINDOW=1024
+MAX_CONTEXT=4096
 FORCE=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --model) MODEL="${2:?}"; shift 2 ;;
+    --package|--model) PACKAGE="${2:?}"; shift 2 ;;
     --name) NAME="${2:?}"; shift 2 ;;
     --prompt) PROMPT="${2:?}"; shift 2 ;;
     --prompt-file) PROMPT_FILE="${2:?}"; shift 2 ;;
     --max-tokens) MAX_TOKENS="${2:?}"; shift 2 ;;
-    --temperature) TEMPERATURE="${2:?}"; shift 2 ;;
     --warmup) WARMUP="${2:?}"; shift 2 ;;
     --runs) RUNS="${2:?}"; shift 2 ;;
     --raw) RAW=1; shift ;;
-    --draft) DRAFT="${2:?}"; shift 2 ;;
-    --draft-tokens) DRAFT_TOKENS="${2:?}"; shift 2 ;;
     --repo) REPO="${2:?}"; shift 2 ;;
     --repo-revision) REPO_REVISION="${2:?}"; shift 2 ;;
     --out) OUT_ROOT="${2:?}"; shift 2 ;;
+    --draft-tokens) DRAFT_TOKENS="${2:?}"; shift 2 ;;
+    --target-only) TARGET_ONLY=1; shift ;;
+    --draft-unrolled) DRAFT_UNROLLED="${2:?}"; shift 2 ;;
+    --vocab|--eagle-vocab) VOCAB="${2:?}"; shift 2 ;;
+    --backbone|--hidden-size|--eagle-backbone|--eagle-hidden-size) BACKBONE="${2:?}"; shift 2 ;;
+    --sliding-window|--eagle-sliding-window) SLIDING_WINDOW="${2:?}"; shift 2 ;;
+    --max-context|--eagle-max-context) MAX_CONTEXT="${2:?}"; shift 2 ;;
     --force) FORCE=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
 
-[[ -n "$MODEL" ]] || { echo "error: --model is required" >&2; exit 2; }
+[[ -n "$PACKAGE" ]] || { echo "error: --package is required" >&2; exit 2; }
 [[ -n "$NAME" ]] || { echo "error: --name is required" >&2; exit 2; }
-[[ -d "$MODEL" ]] || { echo "error: model directory not found: $MODEL" >&2; exit 2; }
-if [[ -n "$DRAFT" ]]; then
-  [[ -d "$DRAFT" ]] || { echo "error: draft directory not found: $DRAFT" >&2; exit 2; }
-fi
+[[ -d "$PACKAGE" ]] || { echo "error: package directory not found: $PACKAGE" >&2; exit 2; }
 [[ "$MAX_TOKENS" =~ ^[0-9]+$ ]] || { echo "error: --max-tokens must be an integer" >&2; exit 2; }
 [[ "$WARMUP" =~ ^[0-9]+$ ]] || { echo "error: --warmup must be an integer" >&2; exit 2; }
 [[ "$RUNS" =~ ^[1-9][0-9]*$ ]] || { echo "error: --runs must be a positive integer" >&2; exit 2; }
 [[ "$DRAFT_TOKENS" =~ ^[1-9][0-9]*$ ]] || { echo "error: --draft-tokens must be a positive integer" >&2; exit 2; }
+[[ "$VOCAB" =~ ^[1-9][0-9]*$ ]] || { echo "error: --vocab must be a positive integer" >&2; exit 2; }
+[[ "$BACKBONE" =~ ^[1-9][0-9]*$ ]] || { echo "error: --backbone must be a positive integer" >&2; exit 2; }
+[[ "$SLIDING_WINDOW" =~ ^[1-9][0-9]*$ ]] || { echo "error: --sliding-window must be a positive integer" >&2; exit 2; }
+[[ "$MAX_CONTEXT" =~ ^[1-9][0-9]*$ ]] || { echo "error: --max-context must be a positive integer" >&2; exit 2; }
+
+TARGET="$PACKAGE/eagle_target.aimodel"
+DRAFT="$PACKAGE/eagle_draft.aimodel"
+TOKENIZER="$PACKAGE/tokenizer"
+[[ -d "$TARGET" ]] || { echo "error: EAGLE target not found: $TARGET" >&2; exit 2; }
+[[ -d "$DRAFT" ]] || { echo "error: EAGLE draft not found: $DRAFT" >&2; exit 2; }
+[[ -d "$TOKENIZER" ]] || { echo "error: tokenizer directory not found: $TOKENIZER" >&2; exit 2; }
+
+if [[ -z "$DRAFT_UNROLLED" ]]; then
+  for candidate in "$PACKAGE/eagle_draft_unrolled_k${DRAFT_TOKENS}.aimodel" "$PACKAGE/eagle_draft_unrolled.aimodel"; do
+    if [[ -d "$candidate" ]]; then
+      DRAFT_UNROLLED="$candidate"
+      break
+    fi
+  done
+elif [[ ! -d "$DRAFT_UNROLLED" ]]; then
+  echo "error: draft-unrolled directory not found: $DRAFT_UNROLLED" >&2
+  exit 2
+fi
 
 if [[ -n "$PROMPT_FILE" ]]; then
   [[ -f "$PROMPT_FILE" ]] || { echo "error: prompt file not found: $PROMPT_FILE" >&2; exit 2; }
@@ -100,25 +133,30 @@ fi
 
 STAMP="$(date '+%Y%m%d-%H%M%S')"
 SAFE_NAME="$(printf '%s' "$NAME" | tr -cs 'A-Za-z0-9._-' '-')"
-OUT_DIR="$OUT_ROOT/$STAMP-$SAFE_NAME"
+MODE_LABEL="eagle-mtp"
+[[ "$TARGET_ONLY" == "1" ]] && MODE_LABEL="eagle-target-only"
+OUT_DIR="$OUT_ROOT/$STAMP-$SAFE_NAME-$MODE_LABEL"
 mkdir -p "$OUT_DIR"
 
 FREE_GIB="$(df -g /Volumes/SSD 2>/dev/null | awk 'NR==2 {print $4}')"
 {
   echo "pid=$$"
-  echo "task=benchmark $NAME"
+  echo "task=benchmark $NAME $MODE_LABEL"
   echo "est_peak_disk_gib=1"
   echo "free_gib_at_acquire=${FREE_GIB:-unknown}"
   echo "stop_floor_gib=$DISK_FLOOR_GIB"
-  echo "owner=benchmark-model.sh"
+  echo "owner=benchmark-eagle.sh"
   echo "started=$(date '+%Y-%m-%d %H:%M %Z')"
 } > "$LOCK"
 trap 'rm -f "$LOCK"' EXIT
 
 {
   echo "name=$NAME"
-  echo "model=$MODEL"
+  echo "model=$PACKAGE"
+  echo "target=$TARGET"
   echo "draft=$DRAFT"
+  echo "draft_unrolled=$DRAFT_UNROLLED"
+  echo "tokenizer=$TOKENIZER"
   echo "repo=$REPO"
   echo "repo_revision=$REPO_REVISION"
   echo "caix_bin=$CAIX_BIN"
@@ -127,12 +165,17 @@ trap 'rm -f "$LOCK"' EXIT
   echo "machine=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || true)"
   echo "memory_bytes=$(sysctl -n hw.memsize 2>/dev/null || true)"
   echo "os=$(sw_vers -productVersion 2>/dev/null || true) ($(sw_vers -buildVersion 2>/dev/null || true))"
+  echo "benchmark_mode=$MODE_LABEL"
   echo "max_tokens=$MAX_TOKENS"
-  echo "temperature=$TEMPERATURE"
+  echo "temperature=0"
   echo "warmup=$WARMUP"
   echo "runs=$RUNS"
   echo "raw=$RAW"
   echo "draft_tokens=$DRAFT_TOKENS"
+  echo "vocab=$VOCAB"
+  echo "backbone=$BACKBONE"
+  echo "sliding_window=$SLIDING_WINDOW"
+  echo "max_context=$MAX_CONTEXT"
   printf 'prompt=%s\n' "$PROMPT"
 } > "$OUT_DIR/metadata.txt"
 
@@ -143,17 +186,29 @@ run_one() {
   local idx="$2"
   local stdout_file="$OUT_DIR/${phase}-${idx}.stdout.txt"
   local stderr_file="$OUT_DIR/${phase}-${idx}.stderr.txt"
-  local args=(run --model "$MODEL" --prompt "$PROMPT" --max-tokens "$MAX_TOKENS" --temperature "$TEMPERATURE" --verbose)
-  [[ -n "$DRAFT" ]] && args+=(--draft "$DRAFT" --draft-tokens "$DRAFT_TOKENS")
+  local args=(eagle
+    --target "$TARGET"
+    --draft "$DRAFT"
+    --tokenizer "$TOKENIZER"
+    --prompt "$PROMPT"
+    --max-tokens "$MAX_TOKENS"
+    --draft-tokens "$DRAFT_TOKENS"
+    --vocab "$VOCAB"
+    --backbone "$BACKBONE"
+    --sliding-window "$SLIDING_WINDOW"
+    --max-context "$MAX_CONTEXT")
   [[ "$RAW" == "1" ]] && args+=(--raw)
+  [[ "$TARGET_ONLY" == "1" ]] && args+=(--target-only)
+  [[ -n "$DRAFT_UNROLLED" ]] && args+=(--draft-unrolled "$DRAFT_UNROLLED")
+
   local status="ok"
   if ! "$CAIX_BIN" "${args[@]}" >"$stdout_file" 2>"$stderr_file"; then
     status="fail"
   fi
   local summary
-  summary="$(grep -E '\[coreai\].*generated.*load=.*prefill=.*decode=.*tok/s' "$stderr_file" | tail -1 || true)"
+  summary="$(grep -E '\[coreai\] eagle: .*generated.*load=.*prefill=.*decode=.*tok/s' "$stderr_file" | tail -1 || true)"
   local parsed
-  parsed="$(printf '%s\n' "$summary" | sed -E 's/.* ([0-9]+) generated,.*load=([0-9.]+)s prefill=([0-9.]+)s decode=([0-9.]+)s \(([0-9.]+) tok\/s\).*/\1\t\2\t\3\t\4\t\5/' || true)"
+  parsed="$(printf '%s\n' "$summary" | sed -E 's/.* [0-9]+ prompt, ([0-9]+) generated,.*load=([0-9.]+)s prefill=([0-9.]+)s decode=([0-9.]+)s \(([0-9.]+) tok\/s\).*/\1\t\2\t\3\t\4\t\5/' || true)"
   if [[ -z "$parsed" || "$parsed" == "$summary" ]]; then
     parsed=$'-\t-\t-\t-\t-'
   fi

@@ -182,8 +182,8 @@ These are pre-converted Core AI `.aimodel` repos, named `rhm-...-caix`.
 | [`rhm-gemma-4-26b-a4b-draft-caix`](https://huggingface.co/redhillsmediafl/rhm-gemma-4-26b-a4b-draft-caix) | draft half of the 26B-A4B MTP pair |
 | [`rhm-gemma-4-31b-it-draft-caix`](https://huggingface.co/redhillsmediafl/rhm-gemma-4-31b-it-draft-caix) | draft half of the 31B-it MTP pair |
 
-An MTP repo is a two-model system: target plus draft. See its model card for exact `--eagle-*`
-flags.
+An MTP repo is a two-model system: target plus draft. See its model card for exact speculative or
+EAGLE flags.
 
 External verification and benchmark submissions: [docs/TESTING.md](docs/TESTING.md).
 Current tester request sheet: [docs/TESTER_REQUESTS.md](docs/TESTER_REQUESTS.md).
@@ -312,10 +312,12 @@ Conversion wraps Apple's `coreai.llm.export` and needs Apple's `coreai-models` P
 [`uv`](https://github.com/astral-sh/uv):
 
 ```bash
-# point caix at your coreai-models python dir + (optionally) caches:
+# point caix at your coreai-models python dir and keep conversion IO on the SSD:
 export CAIX_COREAI_MODELS=/path/to/coreai-models/python
-export HF_HOME=~/.cache/huggingface
-export CAIX_EXPORTS=$PWD/models/exports
+export HF_HOME=${HF_HOME:-/Volumes/SSD/hf-cache}
+export CAIX_TMPDIR=${CAIX_TMPDIR:-/Volumes/SSD/coreai-tmp}
+export CAIX_EXPORTS=${CAIX_EXPORTS:-$PWD/models/exports}
+scripts/check-disk-pressure.sh --path /Volumes/SSD --floor-gib 500
 
 # check support, then convert:
 python3 python/converter/convert.py --check --hf-id Qwen/Qwen2-0.5B
@@ -360,6 +362,8 @@ confirms the architecture after dequant.
 | | |
 |---|---|
 | Models | `models/exports/<name>/` (override with `CAIX_EXPORTS` or `--exports`) |
+| HF cache | `$HF_HOME`; converter default is `<checkout-parent>/hf-cache` |
+| Converter tmp | `$CAIX_TMPDIR`; converter default is `<checkout-parent>/coreai-tmp` |
 | Export index | optional JSON from `scripts/refresh-export-index.sh` (set `CAIX_EXPORT_INDEX`) |
 | Web UI | `web/` (served at `/` and `/chat`) |
 | Usage stats | `~/.caix/usage.json` (override with `--stats-file`) — survives restarts |

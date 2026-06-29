@@ -29,6 +29,10 @@
   Face.
 - Added a Hugging Face collection guard that checks public family collections cover the manifest and
   keep notes free of speed/fluff wording.
+- Added a Hugging Face model-card guard that checks live manifest README files without downloading
+  model payloads.
+- Added classic speculative and EAGLE/MTP benchmark runner support so target+draft packages can
+  produce raw benchmark logs instead of staying manual-only.
 - Added a reusable disk-pressure guard and wired benchmark runners to fail before writing logs when
   the checked volume is below the configured free-space floor.
 - Added a disk preflight for dashboard RHM bundle downloads before launching `hf download`.
@@ -39,6 +43,8 @@
 - Added `caix catalog` for metadata-backed Hugging Face caix repo discovery.
 - Added exact Hub revisions to `caix catalog` install commands when the metadata includes a SHA.
 - Pinned dashboard RHM downloads to the discovered Hub revision and defaulted direct bundles to the metadata bundle name.
+- Defaulted converter and support-check HF cache placement to the checkout parent volume to reduce
+  boot-disk writes during HF conversions.
 - Added explicit text-only errors for OpenAI/Anthropic requests that include multimodal content blocks.
 - Added server-side discovery for installable `redhillsmediafl/*-caix` Hugging Face model repos.
 - Added `POST /api/rhm-download` to install already-converted RHM Core AI bundles into the local exports directory.

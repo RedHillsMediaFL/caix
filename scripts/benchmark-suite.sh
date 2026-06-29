@@ -10,7 +10,7 @@ Options:
   --revisions <path>    Optional TSV: repo<TAB>revision.
   --exports <dir>       Local bundle root. Default: models/exports.
   --out <dir>           Output root. Default: benchmarks/raw.
-  --prompt <text>       Prompt text for every decode run.
+  --prompt <text>       Prompt text for every run.
   --prompt-file <path>  Prompt file. Overrides --prompt.
   --repo-revision <sha> Exact model repo commit to record for every measured row. Default: unknown.
   --max-tokens <n>      Max generated tokens. Default: 128.
@@ -22,6 +22,9 @@ Options:
 
 Every manifest row is recorded as measured, planned, or skipped with a reason.
 This script does not download models and does not publish numbers.
+Rows with benchmark_mode=speculative use scripts/benchmark-model.sh with <bundle>/draft.
+Rows with benchmark_mode=eagle use scripts/benchmark-eagle.sh against package layouts that contain
+eagle_target.aimodel, eagle_draft.aimodel, and tokenizer/.
 USAGE
 }
 
@@ -101,7 +104,7 @@ heavy_task_guard() {
     return 2
   fi
   if ps -axo command \
-    | grep -E 'coreai\.llm\.export|convert\.py|hf (download|upload)|\.build/(debug|release)/caix run|(^|/)(caix|coreai-pipeline) run|(^|/)swift (build|test)|swift-package|swiftc|swift-frontend|xctest' \
+    | grep -E 'coreai\.llm\.export|convert\.py|hf (download|upload)|\.build/(debug|release)/caix (run|eagle)|(^|/)(caix|coreai-pipeline) (run|eagle)|(^|/)swift (build|test)|swift-package|swiftc|swift-frontend|xctest' \
     | grep -v grep >/dev/null; then
     echo "error: another heavy build, conversion, upload, verification, or benchmark is active" >&2
     return 2
@@ -153,11 +156,23 @@ while IFS=$'\t' read -r repo local_dir kind mode status notes; do
     reason="$status"
     [[ -n "${notes:-}" ]] && reason="$reason: $notes"
     skipped=$((skipped + 1))
-  elif [[ "$mode" != "decode" ]]; then
+  elif [[ "$mode" != "decode" && "$mode" != "speculative" && "$mode" != "eagle" ]]; then
     reason="unsupported benchmark mode: $mode"
     skipped=$((skipped + 1))
   elif [[ ! -d "$bundle" ]]; then
     reason="missing local bundle"
+    skipped=$((skipped + 1))
+  elif [[ "$mode" == "speculative" && ! -d "$bundle/draft" ]]; then
+    reason="missing draft bundle"
+    skipped=$((skipped + 1))
+  elif [[ "$mode" == "eagle" && ! -d "$bundle/eagle_target.aimodel" ]]; then
+    reason="missing EAGLE target package"
+    skipped=$((skipped + 1))
+  elif [[ "$mode" == "eagle" && ! -d "$bundle/eagle_draft.aimodel" ]]; then
+    reason="missing EAGLE draft package"
+    skipped=$((skipped + 1))
+  elif [[ "$mode" == "eagle" && ! -d "$bundle/tokenizer" ]]; then
+    reason="missing EAGLE tokenizer"
     skipped=$((skipped + 1))
   elif [[ "$DRY_RUN" == "1" ]]; then
     row_status="planned"
@@ -166,18 +181,33 @@ while IFS=$'\t' read -r repo local_dir kind mode status notes; do
   else
     heavy_task_guard
     revision="$(revision_for_repo "$repo")"
-    cmd=("$SCRIPT_DIR/benchmark-model.sh"
-      --model "$bundle"
-      --name "$local_dir"
-      --repo "$repo"
-      --repo-revision "$REPO_REVISION"
-      --prompt "$PROMPT"
-      --max-tokens "$MAX_TOKENS"
-      --temperature "$TEMPERATURE"
-      --warmup "$WARMUP"
-      --runs "$RUNS"
-      --out "$OUT_ROOT")
-    [[ -n "$revision" ]] && cmd+=(--repo-revision "$revision")
+    row_revision="$REPO_REVISION"
+    [[ -n "$revision" ]] && row_revision="$revision"
+    if [[ "$mode" == "eagle" ]]; then
+      cmd=("$SCRIPT_DIR/benchmark-eagle.sh"
+        --package "$bundle"
+        --name "$local_dir"
+        --repo "$repo"
+        --repo-revision "$row_revision"
+        --prompt "$PROMPT"
+        --max-tokens "$MAX_TOKENS"
+        --warmup "$WARMUP"
+        --runs "$RUNS"
+        --out "$OUT_ROOT")
+    else
+      cmd=("$SCRIPT_DIR/benchmark-model.sh"
+        --model "$bundle"
+        --name "$local_dir"
+        --repo "$repo"
+        --repo-revision "$row_revision"
+        --prompt "$PROMPT"
+        --max-tokens "$MAX_TOKENS"
+        --temperature "$TEMPERATURE"
+        --warmup "$WARMUP"
+        --runs "$RUNS"
+        --out "$OUT_ROOT")
+      [[ "$mode" == "speculative" ]] && cmd+=(--draft "$bundle/draft" --draft-tokens 4)
+    fi
     [[ "$RAW" == "1" ]] && cmd+=(--raw)
 
     if output="$("${cmd[@]}")"; then

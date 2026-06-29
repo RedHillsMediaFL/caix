@@ -6,7 +6,7 @@ Revision source: `benchmarks/revisions.tsv`.
 No speed claims without raw logs. Use the exact revision in the table. Keep prompts, token budget,
 temperature, streaming mode, warmup count, measured run count, and chat-template mode unchanged.
 
-## Ready Decode Requests
+## Ready Benchmark Requests
 
 | repo | revision | local dir | request | notes |
 |---|---|---|---|---|
@@ -28,14 +28,14 @@ temperature, streaming mode, warmup count, measured run count, and chat-template
 | `redhillsmediafl/rhm-qwen3.6-27b-caix` | `436642eef9fb9fb49f53cafc2d32c0f25a0b175a` | `qwen3.6-27b-coreai` | load, generation, benchmark | cataloged |
 | `redhillsmediafl/rhm-gemma-4-26b-a4b-caix` | `fede95233c003d99e6db4da433add133ba9458d6` | `gemma-4-26b-a4b-coreai` | load, generation, benchmark | cataloged |
 | `redhillsmediafl/rhm-gemma-4-31b-it-caix` | `de8554bf1b4c5b26d3bf9eb40cac2b22303eb0e4` | `gemma-4-31b-it-coreai` | load, generation, benchmark | cataloged |
+| `redhillsmediafl/rhm-gemma-4-26b-a4b-mtp-caix` | `738d83b5b0f6b0b21627d40fd0e31b7212b2a28d` | `gemma-4-26b-a4b-mtp-coreai` | EAGLE MTP load, generation, benchmark | benchmark MTP package; compare against standalone target row |
+| `redhillsmediafl/rhm-gemma-4-31b-it-mtp-caix` | `0c68d17473cdc0fee45e4d27540d50897f81334a` | `gemma-4-31b-it-mtp-coreai` | EAGLE MTP load, generation, benchmark | benchmark MTP package; compare against standalone target row |
+| `redhillsmediafl/rhm-qwen3-4b-mtp-caix` | `88663e66fc0364f003ce3c96c5220a6a6d45506e` | `qwen3-4b-mtp-coreai` | classic speculative load, generation, benchmark | benchmark classic target+draft package; compare against standalone target row |
 
 ## Manual Or Component Requests
 
 | repo | revision | local dir | request | notes |
 |---|---|---|---|---|
-| `redhillsmediafl/rhm-gemma-4-26b-a4b-mtp-caix` | `738d83b5b0f6b0b21627d40fd0e31b7212b2a28d` | `gemma-4-26b-a4b-mtp-coreai` | manual target plus draft | requires paired target/draft command |
-| `redhillsmediafl/rhm-gemma-4-31b-it-mtp-caix` | `0c68d17473cdc0fee45e4d27540d50897f81334a` | `gemma-4-31b-it-mtp-coreai` | manual target plus draft | requires paired target/draft command |
-| `redhillsmediafl/rhm-qwen3-4b-mtp-caix` | `88663e66fc0364f003ce3c96c5220a6a6d45506e` | `qwen3-4b-mtp-coreai` | manual target plus draft | requires paired target/draft command |
 | `redhillsmediafl/rhm-gemma-4-26b-a4b-draft-caix` | `d190359eaaaab2e8ce63d86ed41ed9433e555899` | `gemma-4-26b-a4b-draft-coreai` | component; do not test alone | draft component; benchmark with matching target |
 | `redhillsmediafl/rhm-gemma-4-31b-it-draft-caix` | `776b4befe3dc5c945b160dec2b6cdcfafb62840c` | `gemma-4-31b-it-draft-coreai` | component; do not test alone | draft component; benchmark with matching target |
 
@@ -85,6 +85,36 @@ scripts/benchmark-model.sh \
   --prompt "Write one factual sentence about local inference on Apple silicon." \
   --max-tokens 128 \
   --temperature 0 \
+  --warmup 1 \
+  --runs 3
+```
+
+For classic speculative rows, add the draft bundle:
+
+```bash
+scripts/benchmark-model.sh \
+  --model "models/exports/$NAME" \
+  --draft "models/exports/$NAME/draft" \
+  --name "$NAME" \
+  --repo "$REPO" \
+  --repo-revision "$REVISION" \
+  --prompt "Write one factual sentence about local inference on Apple silicon." \
+  --max-tokens 128 \
+  --temperature 0 \
+  --warmup 1 \
+  --runs 3
+```
+
+For EAGLE MTP rows, benchmark the package:
+
+```bash
+scripts/benchmark-eagle.sh \
+  --package "models/exports/$NAME" \
+  --name "$NAME" \
+  --repo "$REPO" \
+  --repo-revision "$REVISION" \
+  --prompt "Write one factual sentence about local inference on Apple silicon." \
+  --max-tokens 128 \
   --warmup 1 \
   --runs 3
 ```

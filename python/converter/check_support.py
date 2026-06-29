@@ -14,11 +14,13 @@ Run inside the vendored Apple env so the registry import is authoritative:
 """
 from __future__ import annotations
 import argparse, json, os, sys
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-os.environ.setdefault("HF_HOME", "/Volumes/SSD/hf-cache")
+PIPELINE_ROOT = Path(__file__).resolve().parents[2]
+os.environ.setdefault("HF_HOME", str(PIPELINE_ROOT.parent / "hf-cache"))
 
 BF16_TYPES = {"gemma4", "gemma4_assistant", "diffusion_gemma", "qwen3_5", "qwen3_5_moe", "glm4"}
 STATIC_SUPPORTED_TYPES = [

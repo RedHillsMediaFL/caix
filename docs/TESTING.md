@@ -23,7 +23,7 @@ scripts/generate-tester-requests.sh \
 Draft repos are components. Test them only with the matching target repo and the command documented
 on the model card.
 
-MTP repos are target-plus-draft packages. Report target-only and MTP results separately.
+MTP repos are target-plus-draft packages. Report target-only and MTP/speculative results separately.
 
 ## Record the Exact Revision
 
@@ -108,6 +108,40 @@ scripts/benchmark-model.sh \
   --runs 3
 ```
 
+For an installed classic speculative package with a `draft/` bundle, use the normal runner with
+`--draft`:
+
+```bash
+scripts/benchmark-model.sh \
+  --model "models/exports/$NAME" \
+  --draft "models/exports/$NAME/draft" \
+  --name "$NAME" \
+  --repo "$REPO" \
+  --repo-revision "$REVISION" \
+  --prompt "Write one factual sentence about local inference on Apple silicon." \
+  --max-tokens 128 \
+  --temperature 0 \
+  --warmup 1 \
+  --runs 3
+```
+
+For an installed EAGLE/MTP package with `eagle_target.aimodel` and `eagle_draft.aimodel`, use the
+EAGLE runner:
+
+```bash
+scripts/benchmark-eagle.sh \
+  --package "models/exports/$NAME" \
+  --name "$NAME" \
+  --repo "$REPO" \
+  --repo-revision "$REVISION" \
+  --prompt "Write one factual sentence about local inference on Apple silicon." \
+  --max-tokens 128 \
+  --warmup 1 \
+  --runs 3
+```
+
+Use the standalone target row for target-only numbers. Keep target+draft package rows separate.
+
 Keep the full output directory from `benchmarks/raw/`. Do not copy only the final number.
 
 For a suite run, write or collect a TSV with exact revisions:
@@ -151,6 +185,11 @@ scripts/check-public-copy.sh README.md docs web Formula
 ```
 
 For a model card draft, pass its `README.md` path to the same script.
+For live RHM cards, run:
+
+```bash
+scripts/check-hf-model-cards.sh
+```
 
 ## Cleanup
 

@@ -30,7 +30,7 @@ _normalized_apple_env_candidates = [
 ]
 APPLE_ENV = next((p for p in _normalized_apple_env_candidates if p and p.exists()), _normalized_apple_env_candidates[1])
 EXPORTS = Path(os.environ.get("CAIX_EXPORTS", str(PIPELINE_ROOT / "exports"))).expanduser()
-HF_HOME = os.environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface"))
+HF_HOME = os.environ.get("HF_HOME", str(PIPELINE_ROOT.parent / "hf-cache"))
 TMPDIR_EXPORT = os.environ.get("CAIX_TMPDIR", str(PIPELINE_ROOT.parent / "coreai-tmp"))
 CHECK_SUPPORT = Path(__file__).resolve().parent / "check_support.py"
 GGUF_DEQUANT = Path(__file__).resolve().parent / "gguf_dequant.py"

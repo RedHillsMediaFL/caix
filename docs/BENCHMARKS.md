@@ -52,9 +52,14 @@ scripts/benchmark-suite.sh \
 ```
 
 The suite reads `benchmarks/MANIFEST.tsv`, does not download models, and writes one row per repo to
-`benchmarks/raw/<timestamp>-suite/summary.tsv`. Installed standalone bundles are measured with the
-same decode settings. Missing bundles, draft-only repos, and MTP repos without a paired command are
-recorded as skipped with the reason.
+`benchmarks/raw/<timestamp>-suite/summary.tsv`. Installed standalone bundles use
+`scripts/benchmark-model.sh`. Classic speculative packages use `scripts/benchmark-model.sh` with
+`<bundle>/draft`. EAGLE/MTP packages use `scripts/benchmark-eagle.sh` against
+`eagle_target.aimodel`, `eagle_draft.aimodel`, and `tokenizer/`. Missing bundles, missing draft
+bundles, and draft-only repos are recorded as skipped with the reason.
+
+Standalone target rows and target+draft package rows are separate rows. Report target-only and
+speculative/MTP numbers separately; do not average them.
 
 Run `scripts/check-benchmark-coverage.sh` before assigning tests or collecting revisions. It compares
 the manifest with live `redhillsmediafl/rhm-*-caix` Hub metadata and fails if a converted repo is
@@ -63,6 +68,9 @@ missing from benchmark coverage.
 Run `scripts/check-hf-collections.sh` after changing the manifest or Hugging Face collections. It
 fails if a manifest repo is missing from the public family collections or if a collection note uses
 speed/fluff wording.
+
+Run `scripts/check-hf-model-cards.sh` before uploading card edits. It fetches only live
+`README.md` files for manifest repos and applies the public-copy guard.
 
 Create `benchmarks/revisions.tsv` before a publishable run:
 

@@ -56,7 +56,7 @@ Revision source: \`$revisions_label\`.
 No speed claims without raw logs. Use the exact revision in the table. Keep prompts, token budget,
 temperature, streaming mode, warmup count, measured run count, and chat-template mode unchanged.
 
-## Ready Decode Requests
+## Ready Benchmark Requests
 
 | repo | revision | local dir | request | notes |
 |---|---|---|---|---|
@@ -82,9 +82,12 @@ EOF
       return (repo in revision) ? revision[repo] : "<record-before-testing>"
     }
     $1 == "" || $1 == "repo" || $1 ~ /^#/ { next }
-    $4 == "decode" && $5 == "eligible" {
-      printf "| `%s` | `%s` | `%s` | load, generation, benchmark | %s |\n",
-        cell($1), sha($1), cell($2), cell($6)
+    ($4 == "decode" || $4 == "speculative" || $4 == "eagle") && $5 == "eligible" {
+      request = "load, generation, benchmark"
+      if ($4 == "speculative") request = "classic speculative load, generation, benchmark"
+      if ($4 == "eagle") request = "EAGLE MTP load, generation, benchmark"
+      printf "| `%s` | `%s` | `%s` | %s | %s |\n",
+        cell($1), sha($1), cell($2), request, cell($6)
     }
   ' "$MANIFEST"
 
@@ -116,7 +119,7 @@ EOF
       return (repo in revision) ? revision[repo] : "<record-before-testing>"
     }
     $1 == "" || $1 == "repo" || $1 ~ /^#/ { next }
-    !($4 == "decode" && $5 == "eligible") {
+    !(($4 == "decode" || $4 == "speculative" || $4 == "eagle") && $5 == "eligible") {
       request = ($3 == "draft") ? "component; do not test alone" : "manual target plus draft"
       printf "| `%s` | `%s` | `%s` | %s | %s |\n",
         cell($1), sha($1), cell($2), request, cell($6)
@@ -171,6 +174,36 @@ scripts/benchmark-model.sh \
   --prompt "Write one factual sentence about local inference on Apple silicon." \
   --max-tokens 128 \
   --temperature 0 \
+  --warmup 1 \
+  --runs 3
+```
+
+For classic speculative rows, add the draft bundle:
+
+```bash
+scripts/benchmark-model.sh \
+  --model "models/exports/$NAME" \
+  --draft "models/exports/$NAME/draft" \
+  --name "$NAME" \
+  --repo "$REPO" \
+  --repo-revision "$REVISION" \
+  --prompt "Write one factual sentence about local inference on Apple silicon." \
+  --max-tokens 128 \
+  --temperature 0 \
+  --warmup 1 \
+  --runs 3
+```
+
+For EAGLE MTP rows, benchmark the package:
+
+```bash
+scripts/benchmark-eagle.sh \
+  --package "models/exports/$NAME" \
+  --name "$NAME" \
+  --repo "$REPO" \
+  --repo-revision "$REVISION" \
+  --prompt "Write one factual sentence about local inference on Apple silicon." \
+  --max-tokens 128 \
   --warmup 1 \
   --runs 3
 ```
