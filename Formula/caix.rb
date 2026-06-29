@@ -66,5 +66,6 @@ class Caix < Formula
   test do
     assert_match(/^caix /, shell_output("#{bin}/caix --version"))
     system bin/"caix", "doctor", "--no-fail"
+    system bin/"caix", "cluster", "plan", "--help"
   end
 end

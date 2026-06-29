@@ -111,7 +111,10 @@ else
 fi
 
 if [[ -n "$brew_caix_binary" ]]; then
-  if "$SCRIPT_DIR/check-brew-distributed.sh" --caix "$brew_caix_binary" >/dev/null; then
+  if "$SCRIPT_DIR/check-brew-distributed.sh" \
+      --caix "$brew_caix_binary" \
+      --ready \
+      --manifest "$REPO_DIR/docs/examples/cluster-stage-manifest.json" >/dev/null; then
     ready "Brew-installed caix distributed surface passes"
   else
     missing "Brew-installed caix distributed surface failed"

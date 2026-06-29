@@ -32,12 +32,12 @@ Do not ask for MacBook Thunderbolt testing yet. The gate is:
 
 After those pass, test one MacBook stage over Thunderbolt Bridge. Until then, keep testing local.
 Before the Thunderbolt test, install caix through Brew on the test machine and run
-`scripts/check-brew-distributed.sh`.
+`scripts/check-publication-gates.sh --distributed --brew-caix "$(command -v caix)"`.
 
 Use the readiness gate before asking for hardware:
 
 ```bash
-scripts/check-distributed-readiness.sh --brew-caix "$(command -v caix)"
+scripts/check-publication-gates.sh --distributed --brew-caix "$(command -v caix)"
 ```
 
 It must print `distributed is ready for Thunderbolt testing`. If it prints `not ready`, keep work

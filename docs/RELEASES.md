@@ -33,13 +33,12 @@ Every version bump must update all of these in the same commit:
 
 `scripts/check-version-sync.sh` enforces that match.
 
-Distributed inference releases need a Brew install check before cross-Mac testing:
+Distributed releases must pass the Brew-installed readiness gate before cross-Mac testing:
 
 ```bash
 brew tap RedHillsMediaFL/caix
 brew reinstall caix
-scripts/check-brew-distributed.sh
-scripts/check-distributed-readiness.sh --brew-caix "$(command -v caix)"
+scripts/check-publication-gates.sh --distributed --brew-caix "$(command -v caix)"
 ```
 
 Use that installed binary for Thunderbolt tests, not a loose debug build.
