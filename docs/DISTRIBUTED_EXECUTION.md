@@ -1,8 +1,9 @@
 # Distributed Execution (v0 architecture)
 
-Status: design. No staged *runtime* exists yet. A typed plan/validation layer and a dry-run
-planner command already landed in the tree (see §0). This document defines the execution
-contract those pieces are heading toward, and the exact first milestone.
+Status: design plus in-process harness. A typed plan/validation layer, dry-run planner command,
+and same-machine fake-stage coordinator already landed in the tree (see §0). Core AI stage
+execution and cross-process transport are not implemented yet. This document defines the
+execution contract those pieces are heading toward, and the exact first milestone.
 
 Goal (from `docs/ROADMAP.md`): run a model that does not fit on one Mac by splitting Core AI
 execution into stage shards across Macs. Pipeline parallelism only. No tensor parallelism, no
@@ -34,15 +35,20 @@ This is blunt on purpose. Where the current code cannot do something, it says so
     exactly one `final_norm_head` last, one-or-more `transformer_layers` between, contiguous
     gap-free layer coverage `0 ..< total_layer_count`, unique stage/worker ids, and
     adjacency-only packet routing (`destination == source + 1`).
+  - `DistributedHiddenStatePacket`, `DistributedStageHandle`, and
+    `DistributedSameMachinePipeline` — an in-process coordinator harness tested with fake
+    stages. It validates stage order, packet routes, payload byte counts, and final-token
+    handoff without loading Core AI models.
 - A dry-run planner CLI (`Sources/PipelineCLI/Cluster.swift`, wired in `main.swift`):
   `caix cluster plan --manifest … | --model …` with greedy worker assignment. Manifest schema
   `caix.cluster.stage_manifest.v0` documented in `docs/CLUSTER.md`. JSON output includes a
   `runtime_plan` validated with `DistributedStagePlan`. It does not load Core AI models, start
   workers, or move tensors.
 
-**Gap:** there is no execution path. Nothing produces a per-stage `.aimodel`, nothing emits an
-intermediate hidden state from a graph or feeds one back in, and there is no cross-process
-forward. v0 is mostly net-new runtime; the monolithic path stays as the oracle.
+**Gap:** there is no Core AI stage execution path. Nothing produces a per-stage `.aimodel`,
+nothing emits an intermediate hidden state from a graph or feeds one back in, and there is no
+cross-process forward. The same-machine harness is ready for real `StageHandle`s once the
+exporter and Core AI stage wrapper exist; the monolithic path stays as the oracle.
 
 ---
 
@@ -304,8 +310,8 @@ secret in argv.
 ## 9. First milestone: same-machine staged Qwen3-0.6B equivalence
 
 The only milestone that matters right now. It isolates the **staging math** from transport:
-everything runs in one process, hidden states pass as in-memory `NDArray`s — no serialization,
-no sockets.
+everything runs in one process, hidden states pass through `DistributedHiddenStatePacket`s
+in memory — no sockets.
 
 ### 9.1 Prerequisite (define, do not start)
 
@@ -321,14 +327,17 @@ is blocked on that exporter and says so.
 
 ### 9.2 Runtime to build
 
-`StagedEngine` in `Sources/PipelineRuntime`:
-- Loads N `StageHandle`s from a stage manifest (each handle = `LLMEngine` specialized to one
+`DistributedSameMachinePipeline` now validates ordered stage handles and stage-to-stage packet
+handoff with fake stages. The remaining runtime work is a concrete Core AI `StageHandle` and a
+thin `StagedEngine` wrapper:
+
+- Load N handles from a stage manifest (each handle = `LLMEngine` specialized to one
   stage bundle, reusing `AIModel.specialize` with the persistent compile cache,
   `LLMEngine.swift:106-123`).
 - `generate(promptTokens:options:)` reuses the monolithic loop (`LLMEngine.generate`) but
-  replaces the single `step` with: `embeddings` forward → relay hidden `NDArray` → … →
-  `final_norm_head` forward → sample. Coordinator-owned `position_ids`, stop logic, and
-  capacity math are unchanged.
+  replaces the single `step` with: `embeddings` forward → relay hidden packet → … →
+  `final_norm_head` forward → sample. Coordinator-owned `position_ids`, stop logic, and capacity
+  math are unchanged.
 - Greedy only for this milestone.
 
 ### 9.3 Equivalence procedure

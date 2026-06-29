@@ -127,6 +127,79 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertEqual(decoded, plan)
     }
 
+    func testSameMachinePipelineForwardsThroughOrderedStageHandles() async throws {
+        let plan = makePlan()
+        let handles = makeFakeHandles(for: plan)
+        let pipeline = try DistributedSameMachinePipeline(plan: plan, stages: handles)
+
+        try await pipeline.allocate(requestID: "req-1", kvCapacity: 16)
+        let output = try await pipeline.forward(
+            requestID: "req-1",
+            stepIndex: 0,
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 3),
+            tokenIDs: [1, 2, 3])
+
+        XCTAssertEqual(output.stageID, "final")
+        XCTAssertEqual(output.stepIndex, 0)
+        XCTAssertEqual(output.tokenID, 42)
+        XCTAssertNil(output.hiddenState)
+        XCTAssertEqual(handles.map(\.allocatedRequests), [["req-1"], ["req-1"], ["req-1"], ["req-1"]])
+        XCTAssertEqual(handles[0].inputs.first?.tokenIDs, [1, 2, 3])
+        XCTAssertNil(handles[0].inputs.first?.hiddenState)
+        XCTAssertEqual(handles[1].inputs.first?.hiddenState?.metadata.sourceStageID, "embed")
+        XCTAssertEqual(handles[2].inputs.first?.hiddenState?.metadata.sourceStageID, "layers-0-16")
+        XCTAssertEqual(handles[3].inputs.first?.hiddenState?.metadata.sourceStageID, "layers-16-32")
+    }
+
+    func testSameMachinePipelineRejectsOutOfOrderHandles() throws {
+        let plan = makePlan()
+        var handles = makeFakeHandles(for: plan)
+        handles.swapAt(1, 2)
+
+        XCTAssertThrowsError(try DistributedSameMachinePipeline(plan: plan, stages: handles)) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .stageDescriptorMismatch(expected: "layers-0-16", actual: "layers-16-32"))
+        }
+    }
+
+    func testSameMachinePipelineRejectsBadPacketRoute() async throws {
+        let plan = makePlan()
+        let handles = makeFakeHandles(for: plan, badFirstRoute: true)
+        let pipeline = try DistributedSameMachinePipeline(plan: plan, stages: handles)
+        try await pipeline.allocate(requestID: "req-1", kvCapacity: 16)
+
+        await XCTAssertThrowsErrorAsync(
+            try await pipeline.forward(
+                requestID: "req-1",
+                stepIndex: 0,
+                positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+                tokenIDs: [7])
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedRuntimeValidationError,
+                .packetRouteMismatch(sourceStageID: "embed", destinationStageID: "final"))
+        }
+    }
+
+    func testSameMachinePipelineRejectsEmptyForwardRequestID() async throws {
+        let plan = makePlan()
+        let handles = makeFakeHandles(for: plan)
+        let pipeline = try DistributedSameMachinePipeline(plan: plan, stages: handles)
+
+        await XCTAssertThrowsErrorAsync(
+            try await pipeline.forward(
+                requestID: " ",
+                stepIndex: 0,
+                positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+                tokenIDs: [7])
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidForwardInput("request_id is empty"))
+        }
+    }
+
     private func makePlan(
         stages: [DistributedStageDescriptor]? = nil,
         workers: [DistributedWorkerEndpoint]? = nil
@@ -162,5 +235,97 @@ final class DistributedRuntimeTests: XCTestCase {
     ) -> DistributedStageDescriptor {
         DistributedStageDescriptor(
             id: id, role: role, layerRange: range, assetName: assetName, workerID: workerID)
+    }
+
+    private func makeFakeHandles(
+        for plan: DistributedStagePlan,
+        badFirstRoute: Bool = false
+    ) -> [FakeDistributedStageHandle] {
+        plan.stages.enumerated().map { index, descriptor in
+            let nextID = plan.stages.indices.contains(index + 1) ? plan.stages[index + 1].id : nil
+            let output: (DistributedStageForwardInput) throws -> DistributedStageForwardOutput = { input in
+                if descriptor.role == .finalNormHead {
+                    return DistributedStageForwardOutput(
+                        stageID: descriptor.id, stepIndex: input.stepIndex, tokenID: 42)
+                }
+                let destination = badFirstRoute && descriptor.id == "embed" ? "final" : nextID!
+                let packet = try self.hiddenPacket(
+                    requestID: input.requestID,
+                    source: descriptor.id,
+                    destination: destination,
+                    positionRange: input.positionRange,
+                    stepIndex: input.stepIndex,
+                    fill: UInt8(index + 1))
+                return DistributedStageForwardOutput(
+                    stageID: descriptor.id, stepIndex: input.stepIndex, hiddenState: packet)
+            }
+            return FakeDistributedStageHandle(descriptor: descriptor, output: output)
+        }
+    }
+
+    private func hiddenPacket(
+        requestID: String,
+        source: String,
+        destination: String,
+        positionRange: DistributedSequenceRange,
+        stepIndex: Int,
+        fill: UInt8
+    ) throws -> DistributedHiddenStatePacket {
+        let shape = [1, positionRange.count, 2]
+        let byteCount = shape.reduce(DistributedTensorScalarType.float16.byteWidth, *)
+        return try DistributedHiddenStatePacket(
+            metadata: DistributedHiddenStatePacketMetadata(
+                requestID: requestID,
+                sourceStageID: source,
+                destinationStageID: destination,
+                positionRange: positionRange,
+                shape: shape,
+                scalarType: .float16,
+                byteCount: byteCount,
+                stepIndex: stepIndex),
+            payload: Array(repeating: fill, count: byteCount))
+    }
+}
+
+private final class FakeDistributedStageHandle: DistributedStageHandle {
+    let descriptor: DistributedStageDescriptor
+    var allocatedRequests: [String] = []
+    var inputs: [DistributedStageForwardInput] = []
+    private let output: (DistributedStageForwardInput) throws -> DistributedStageForwardOutput
+
+    init(
+        descriptor: DistributedStageDescriptor,
+        output: @escaping (DistributedStageForwardInput) throws -> DistributedStageForwardOutput
+    ) {
+        self.descriptor = descriptor
+        self.output = output
+    }
+
+    func allocate(_ allocation: DistributedStageAllocation) async throws {
+        allocatedRequests.append(allocation.requestID)
+    }
+
+    func forward(_ input: DistributedStageForwardInput) async throws -> DistributedStageForwardOutput {
+        inputs.append(input)
+        return try output(input)
+    }
+
+    func reset(requestID: String) async throws {}
+
+    func free(requestID: String) async {}
+}
+
+private func XCTAssertThrowsErrorAsync<T>(
+    _ expression: @autoclosure () async throws -> T,
+    _ message: @autoclosure () -> String = "",
+    file: StaticString = #filePath,
+    line: UInt = #line,
+    _ errorHandler: (_ error: Error) -> Void = { _ in }
+) async {
+    do {
+        _ = try await expression()
+        XCTFail(message(), file: file, line: line)
+    } catch {
+        errorHandler(error)
     }
 }

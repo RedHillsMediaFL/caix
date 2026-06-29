@@ -226,6 +226,22 @@ public struct DistributedHiddenStatePacketMetadata: Codable, Hashable, Sendable 
     }
 }
 
+/// Activation packet with the raw hidden-state payload.
+public struct DistributedHiddenStatePacket: Hashable, Sendable {
+    public let metadata: DistributedHiddenStatePacketMetadata
+    public let payload: [UInt8]
+
+    public init(metadata: DistributedHiddenStatePacketMetadata, payload: [UInt8]) throws {
+        self.metadata = metadata
+        self.payload = payload
+        try DistributedRuntimeValidation.validate(packet: metadata)
+        guard payload.count == metadata.byteCount else {
+            throw DistributedRuntimeValidationError.invalidPacket(
+                "payload byte count does not match metadata byte_count")
+        }
+    }
+}
+
 /// Static plan for local or remote stage execution.
 public struct DistributedStagePlan: Codable, Hashable, Sendable {
     public let modelName: String
@@ -269,6 +285,241 @@ public struct DistributedStagePlan: Codable, Hashable, Sendable {
 
     public func validate(hiddenStatePacket packet: DistributedHiddenStatePacketMetadata) throws {
         try DistributedRuntimeValidation.validate(packet: packet, in: self)
+    }
+}
+
+public struct DistributedStageAllocation: Hashable, Sendable {
+    public let requestID: String
+    public let kvCapacity: Int
+
+    public init(requestID: String, kvCapacity: Int) {
+        self.requestID = requestID
+        self.kvCapacity = kvCapacity
+    }
+}
+
+public struct DistributedStageForwardInput: Hashable, Sendable {
+    public let requestID: String
+    public let stepIndex: Int
+    public let positionRange: DistributedSequenceRange
+    public let tokenIDs: [Int32]
+    public let hiddenState: DistributedHiddenStatePacket?
+
+    public init(
+        requestID: String,
+        stepIndex: Int,
+        positionRange: DistributedSequenceRange,
+        tokenIDs: [Int32] = [],
+        hiddenState: DistributedHiddenStatePacket? = nil
+    ) {
+        self.requestID = requestID
+        self.stepIndex = stepIndex
+        self.positionRange = positionRange
+        self.tokenIDs = tokenIDs
+        self.hiddenState = hiddenState
+    }
+}
+
+public struct DistributedStageForwardOutput: Hashable, Sendable {
+    public let stageID: String
+    public let stepIndex: Int
+    public let hiddenState: DistributedHiddenStatePacket?
+    public let tokenID: Int32?
+
+    public init(
+        stageID: String,
+        stepIndex: Int,
+        hiddenState: DistributedHiddenStatePacket? = nil,
+        tokenID: Int32? = nil
+    ) {
+        self.stageID = stageID
+        self.stepIndex = stepIndex
+        self.hiddenState = hiddenState
+        self.tokenID = tokenID
+    }
+}
+
+public protocol DistributedStageHandle: AnyObject {
+    var descriptor: DistributedStageDescriptor { get }
+
+    func allocate(_ allocation: DistributedStageAllocation) async throws
+    func forward(_ input: DistributedStageForwardInput) async throws -> DistributedStageForwardOutput
+    func reset(requestID: String) async throws
+    func free(requestID: String) async
+}
+
+public enum DistributedStageExecutionError: Error, Equatable, Sendable, CustomStringConvertible {
+    case stageCountMismatch(expected: Int, actual: Int)
+    case stageDescriptorMismatch(expected: String, actual: String)
+    case duplicateStageHandle(String)
+    case invalidForwardInput(String)
+    case invalidStageOutput(String)
+
+    public var description: String {
+        switch self {
+        case .stageCountMismatch(let expected, let actual):
+            return "Stage handle count mismatch: expected \(expected), got \(actual)"
+        case .stageDescriptorMismatch(let expected, let actual):
+            return "Stage handle descriptor mismatch: expected \(expected), got \(actual)"
+        case .duplicateStageHandle(let id):
+            return "Duplicate stage handle: \(id)"
+        case .invalidForwardInput(let message):
+            return "Invalid distributed forward input: \(message)"
+        case .invalidStageOutput(let message):
+            return "Invalid distributed stage output: \(message)"
+        }
+    }
+}
+
+/// In-process coordinator for one staged forward. This is the same-machine milestone harness;
+/// concrete handles can be fake test stages now and Core AI stage handles later.
+public final class DistributedSameMachinePipeline {
+    public let plan: DistributedStagePlan
+    private let stages: [DistributedStageHandle]
+
+    public init(plan: DistributedStagePlan, stages: [DistributedStageHandle]) throws {
+        try plan.validate()
+        guard plan.stages.count == stages.count else {
+            throw DistributedStageExecutionError.stageCountMismatch(
+                expected: plan.stages.count, actual: stages.count)
+        }
+
+        var seen = Set<String>()
+        for (expected, handle) in zip(plan.stages, stages) {
+            guard seen.insert(handle.descriptor.id).inserted else {
+                throw DistributedStageExecutionError.duplicateStageHandle(handle.descriptor.id)
+            }
+            guard handle.descriptor == expected else {
+                throw DistributedStageExecutionError.stageDescriptorMismatch(
+                    expected: expected.id, actual: handle.descriptor.id)
+            }
+        }
+
+        self.plan = plan
+        self.stages = stages
+    }
+
+    public func allocate(requestID: String, kvCapacity: Int) async throws {
+        guard !requestID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw DistributedStageExecutionError.invalidForwardInput("request_id is empty")
+        }
+        guard kvCapacity > 0 else {
+            throw DistributedStageExecutionError.invalidForwardInput("kv_capacity must be positive")
+        }
+        let allocation = DistributedStageAllocation(requestID: requestID, kvCapacity: kvCapacity)
+        for stage in stages {
+            try await stage.allocate(allocation)
+        }
+    }
+
+    public func forward(
+        requestID: String,
+        stepIndex: Int,
+        positionRange: DistributedSequenceRange,
+        tokenIDs: [Int32]
+    ) async throws -> DistributedStageForwardOutput {
+        guard !requestID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw DistributedStageExecutionError.invalidForwardInput("request_id is empty")
+        }
+        guard !tokenIDs.isEmpty else {
+            throw DistributedStageExecutionError.invalidForwardInput("token_ids must be non-empty")
+        }
+        guard tokenIDs.count == positionRange.count else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "token_ids count must match position_range")
+        }
+        guard stepIndex >= 0 else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "step_index must be non-negative")
+        }
+
+        var hiddenState: DistributedHiddenStatePacket?
+        var tokenID: Int32?
+
+        for (index, stage) in stages.enumerated() {
+            let input = DistributedStageForwardInput(
+                requestID: requestID,
+                stepIndex: stepIndex,
+                positionRange: positionRange,
+                tokenIDs: index == 0 ? tokenIDs : [],
+                hiddenState: hiddenState)
+            let output = try await stage.forward(input)
+            try validate(output: output, from: stage, at: index, stepIndex: stepIndex)
+            hiddenState = output.hiddenState
+            tokenID = output.tokenID
+        }
+
+        guard tokenID != nil else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "final stage did not return a token id")
+        }
+        return DistributedStageForwardOutput(
+            stageID: stages.last!.descriptor.id,
+            stepIndex: stepIndex,
+            hiddenState: hiddenState,
+            tokenID: tokenID)
+    }
+
+    public func reset(requestID: String) async throws {
+        for stage in stages {
+            try await stage.reset(requestID: requestID)
+        }
+    }
+
+    public func free(requestID: String) async {
+        for stage in stages {
+            await stage.free(requestID: requestID)
+        }
+    }
+
+    private func validate(
+        output: DistributedStageForwardOutput,
+        from stage: DistributedStageHandle,
+        at index: Int,
+        stepIndex: Int
+    ) throws {
+        guard output.stageID == stage.descriptor.id else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "output stage_id \(output.stageID) does not match handle \(stage.descriptor.id)")
+        }
+        guard output.stepIndex == stepIndex else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "output step_index does not match request")
+        }
+
+        let isFinal = index == stages.count - 1
+        if isFinal {
+            guard output.hiddenState == nil else {
+                throw DistributedStageExecutionError.invalidStageOutput(
+                    "final stage must not return a hidden state")
+            }
+            guard output.tokenID != nil else {
+                throw DistributedStageExecutionError.invalidStageOutput(
+                    "final stage must return a token id")
+            }
+        } else {
+            guard let packet = output.hiddenState else {
+                throw DistributedStageExecutionError.invalidStageOutput(
+                    "non-final stage must return a hidden state")
+            }
+            try plan.validate(hiddenStatePacket: packet.metadata)
+            guard packet.metadata.sourceStageID == stage.descriptor.id else {
+                throw DistributedStageExecutionError.invalidStageOutput(
+                    "hidden state source_stage_id does not match producing stage")
+            }
+            guard packet.metadata.destinationStageID == stages[index + 1].descriptor.id else {
+                throw DistributedStageExecutionError.invalidStageOutput(
+                    "hidden state destination_stage_id does not match next stage")
+            }
+            guard packet.payload.count == packet.metadata.byteCount else {
+                throw DistributedStageExecutionError.invalidStageOutput(
+                    "hidden state payload byte count does not match metadata")
+            }
+            guard output.tokenID == nil else {
+                throw DistributedStageExecutionError.invalidStageOutput(
+                    "non-final stage must not return a token id")
+            }
+        }
     }
 }
 
