@@ -24,18 +24,14 @@ for each package.
 
 ---
 
-## Support the work
+## Testing help
 
-caix is **free and open, with no paywall — and it stays that way.** Every model bundle and feature is
-free to use.
+caix is free and open, with no paywall. Converted model coverage depends on raw logs from real
+machines.
 
-If caix is useful to you, you can optionally **fund the local-model work** — model conversions,
-testing, benchmark time, and hosting — and get merch for it:
-
-- **[redhillsmediafl.com/open-source](https://redhillsmediafl.com/open-source)** — sticker packs plus "model run" and "tester pool" support tiers.
-- **[redhillsmediafl.com/shop](https://redhillsmediafl.com/shop)** — prints and product packs.
-
-Support is entirely optional and never gates a feature.
+Use [docs/TESTER_REQUESTS.md](docs/TESTER_REQUESTS.md) for current test requests. Keep the model
+repo revision, prompt, token budget, temperature, warmup count, measured run count, and chat-template
+mode unchanged. Send the raw benchmark directory.
 
 ---
 
