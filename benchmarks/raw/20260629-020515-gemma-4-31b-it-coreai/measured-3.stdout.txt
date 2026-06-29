@@ -1,0 +1,7 @@
+The future of local inference is a shift from **"Cloud-First"** to **"Edge-First"** intelligence. We are moving toward a world where the Large Language Model (LLM) is not a destination (a website you visit), but a layer of the operating system.
+
+Here is how the landscape is evolving across hardware, software, and architecture:
+
+### 1. The Hardware Revolution: "AI PCs" and NPUs
+For years, local inference relied on the GPU (VRAM). We are now entering the era of the **NPU (Neural Processing Unit)**.
+*   **Dedicated Silicon
