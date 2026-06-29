@@ -72,6 +72,7 @@ enum PipelinedLLM {
         let loadSeconds = Date().timeIntervalSince(loadStart)
         dbg("persistent engine + tokenizer ready")
 
+        var warmedSamplingKeys: Set<String> = ["greedy"]
         let generate: PipelinedLanguageHandle.Generate = { messages, options, tools, onToken in
             func requestDbg(_ s: String) {
                 if options.verbose {
@@ -79,6 +80,7 @@ enum PipelinedLLM {
                 }
             }
 
+            let samplingKey = Self.samplingWarmupKey(options)
             let sampling: SamplingConfiguration =
                 options.temperature <= 0
                 ? .greedy
@@ -101,9 +103,10 @@ enum PipelinedLLM {
                 promptTokenCount = tokenizer.encode(text: text).count
             }
 
-            if options.temperature > 0 {
+            if !warmedSamplingKeys.contains(samplingKey) {
                 requestDbg("warming up engine ...")
                 try await engine.warmup(queryLength: 0, sampling: sampling)
+                warmedSamplingKeys.insert(samplingKey)
                 requestDbg("warmup done; generating \(options.maxTokens) tokens ...")
             } else {
                 requestDbg("generating \(options.maxTokens) tokens ...")
@@ -128,6 +131,11 @@ enum PipelinedLLM {
             maxContextLength: bundle.maxContextLength,
             loadSeconds: loadSeconds,
             generate: generate)
+    }
+
+    private static func samplingWarmupKey(_ options: CoreAIPipeline.Options) -> String {
+        let topK = options.topK.map(String.init) ?? "nil"
+        return options.temperature <= 0 ? "greedy" : "temperature=\(options.temperature);topK=\(topK)"
     }
 
     /// Generate via Apple's pipelined engine if `modelPath` is a language bundle. Returns `nil`
