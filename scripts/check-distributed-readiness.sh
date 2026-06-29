@@ -47,6 +47,62 @@ missing() {
   not_ready=1
 }
 
+evidence_value() {
+  local key="$1"
+  local file="$2"
+  awk -v key="$key" '
+    index($0, key "=") == 1 {
+      sub("^[^=]*=", "")
+      print
+      exit
+    }
+  ' "$file"
+}
+
+check_token_match_evidence() {
+  local file="$1"
+  local label="$2"
+  local expected_mode="$3"
+
+  if [[ ! -s "$file" ]]; then
+    missing "$label token-match evidence is missing: $file"
+    return
+  fi
+
+  local result mode model manifest caix_commit prompts max_tokens temperature token_match
+  result="$(evidence_value result "$file")"
+  mode="$(evidence_value mode "$file")"
+  model="$(evidence_value model "$file")"
+  manifest="$(evidence_value manifest "$file")"
+  caix_commit="$(evidence_value caix_commit "$file")"
+  prompts="$(evidence_value prompts "$file")"
+  max_tokens="$(evidence_value max_tokens "$file")"
+  temperature="$(evidence_value temperature "$file")"
+  token_match="$(evidence_value token_match "$file")"
+
+  if [[ "$result" != "pass" ]]; then
+    missing "$label evidence result must be pass: $file"
+  elif [[ "$mode" != "$expected_mode" ]]; then
+    missing "$label evidence mode must be $expected_mode: $file"
+  elif [[ "$model" != "qwen3-0.6b-coreai" ]]; then
+    missing "$label evidence model must be qwen3-0.6b-coreai: $file"
+  elif [[ -z "$manifest" ]]; then
+    missing "$label evidence manifest is missing: $file"
+  elif [[ ! "$caix_commit" =~ ^[0-9a-f]{40}$ ]]; then
+    missing "$label evidence caix_commit must be a 40-character SHA: $file"
+  elif [[ ! "$prompts" =~ ^[1-9][0-9]*$ ]]; then
+    missing "$label evidence prompts must be a positive integer: $file"
+  elif [[ "$max_tokens" != "128" ]]; then
+    missing "$label evidence max_tokens must be 128: $file"
+  elif [[ "$temperature" != "0" ]]; then
+    missing "$label evidence temperature must be 0: $file"
+  elif [[ "$token_match" != "true" ]]; then
+    missing "$label evidence token_match must be true: $file"
+  else
+    ready "$label staged Qwen3-0.6B evidence is structured"
+  fi
+}
+
 if [[ -z "$caix_binary" || ! -x "$caix_binary" ]]; then
   missing "caix binary not found; pass --caix"
 else
@@ -98,17 +154,8 @@ fi
 same_machine_evidence="$evidence_dir/same-machine-qwen3-0.6b-token-match.txt"
 loopback_evidence="$evidence_dir/loopback-qwen3-0.6b-token-match.txt"
 
-if [[ -s "$same_machine_evidence" ]]; then
-  ready "same-machine staged Qwen3-0.6B evidence exists"
-else
-  missing "same-machine staged Qwen3-0.6B token-match evidence is missing: $same_machine_evidence"
-fi
-
-if [[ -s "$loopback_evidence" ]]; then
-  ready "loopback staged Qwen3-0.6B evidence exists"
-else
-  missing "loopback staged Qwen3-0.6B token-match evidence is missing: $loopback_evidence"
-fi
+check_token_match_evidence "$same_machine_evidence" "same-machine" "same-machine"
+check_token_match_evidence "$loopback_evidence" "loopback" "loopback"
 
 if [[ -n "$brew_caix_binary" ]]; then
   if "$SCRIPT_DIR/check-brew-distributed.sh" \

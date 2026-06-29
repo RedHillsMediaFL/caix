@@ -11,6 +11,8 @@
 - Added a Brew distributed-surface check for future Thunderbolt inference tests.
 - Added a distributed readiness gate so Thunderbolt testing stays blocked until same-machine,
   loopback, Brew install, `cluster join`, and `serve --cluster` are ready.
+- Added structured distributed evidence checks so same-machine and loopback token-match files
+  cannot be placeholders.
 - Added fail-closed `caix cluster join` and `caix serve --cluster` CLI stubs for Brew surface tests.
 - Expanded the Homebrew formula test to cover distributed plan/join help and `serve --cluster`.
 - Added a same-machine distributed stage-handle harness with fake-stage tests.
