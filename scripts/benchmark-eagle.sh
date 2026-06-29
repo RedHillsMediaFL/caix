@@ -12,8 +12,8 @@ Options:
   --warmup <n>          Warmup runs. Default: 1.
   --runs <n>            Measured runs. Default: 3.
   --raw                 Skip chat template.
-  --repo <id>           Hugging Face repo id for this package.
-  --repo-revision <sha> Exact model repo commit for this package.
+  --repo <id>           Hugging Face repo id for this package. Required.
+  --repo-revision <sha> Exact model repo commit for this package. Required.
   --out <dir>           Output root. Default: benchmarks/raw.
   --draft-tokens <n>    Draft tokens proposed per step. Default: 4.
   --target-only         Run the package target path without draft acceptance.
@@ -86,6 +86,11 @@ done
 [[ "$BACKBONE" =~ ^[1-9][0-9]*$ ]] || { echo "error: --backbone must be a positive integer" >&2; exit 2; }
 [[ "$SLIDING_WINDOW" =~ ^[1-9][0-9]*$ ]] || { echo "error: --sliding-window must be a positive integer" >&2; exit 2; }
 [[ "$MAX_CONTEXT" =~ ^[1-9][0-9]*$ ]] || { echo "error: --max-context must be a positive integer" >&2; exit 2; }
+[[ -n "$REPO" ]] || { echo "error: --repo is required for benchmark evidence" >&2; exit 2; }
+[[ "$REPO_REVISION" =~ ^[0-9a-f]{40}$ ]] || {
+  echo "error: --repo-revision must be a 40-character commit SHA" >&2
+  exit 2
+}
 
 TARGET="$PACKAGE/eagle_target.aimodel"
 DRAFT="$PACKAGE/eagle_draft.aimodel"

@@ -15,8 +15,8 @@ Options:
   --raw                 Skip chat template.
   --draft <dir>         Draft bundle for classic speculative decoding.
   --draft-tokens <n>    Draft tokens proposed per step. Default: 4.
-  --repo <id>           Hugging Face repo id for this bundle.
-  --repo-revision <sha> Exact model repo commit for this bundle.
+  --repo <id>           Hugging Face repo id for this bundle. Required.
+  --repo-revision <sha> Exact model repo commit for this bundle. Required.
   --out <dir>           Output root. Default: benchmarks/raw.
   --force               Ignore an existing stale benchmark lock.
 
@@ -72,6 +72,11 @@ fi
 [[ "$WARMUP" =~ ^[0-9]+$ ]] || { echo "error: --warmup must be an integer" >&2; exit 2; }
 [[ "$RUNS" =~ ^[1-9][0-9]*$ ]] || { echo "error: --runs must be a positive integer" >&2; exit 2; }
 [[ "$DRAFT_TOKENS" =~ ^[1-9][0-9]*$ ]] || { echo "error: --draft-tokens must be a positive integer" >&2; exit 2; }
+[[ -n "$REPO" ]] || { echo "error: --repo is required for benchmark evidence" >&2; exit 2; }
+[[ "$REPO_REVISION" =~ ^[0-9a-f]{40}$ ]] || {
+  echo "error: --repo-revision must be a 40-character commit SHA" >&2
+  exit 2
+}
 
 if [[ -n "$PROMPT_FILE" ]]; then
   [[ -f "$PROMPT_FILE" ]] || { echo "error: prompt file not found: $PROMPT_FILE" >&2; exit 2; }

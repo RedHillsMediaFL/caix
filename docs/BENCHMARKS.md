@@ -31,7 +31,8 @@ scripts/benchmark-model.sh \
 
 Output goes under `benchmarks/raw/<timestamp>-<name>/`. That path is ignored by default so bulk
 local logs do not get committed by accident. Keep or publish raw run folders deliberately when adding
-public numbers.
+public numbers. The direct model and EAGLE runners require both `--repo` and a 40-character
+`--repo-revision`; use `caix run` for local ad hoc checks that are not benchmark evidence.
 
 ## Suite Run
 
