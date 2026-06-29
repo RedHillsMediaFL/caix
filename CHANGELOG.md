@@ -50,6 +50,8 @@
 - Added a remote distributed stage handle for coordinator-to-worker frame round trips.
 - Tightened remote distributed stage handles so worker `ERROR` frames preserve code/detail and
   reject mismatched request or stage envelopes.
+- Converted distributed loopback worker execution failures into validated `ERROR` frames so the
+  in-process transport matches the socket contract.
 - Added same-machine pipeline guards for invalid position ranges and reset request IDs.
 - Added the cluster-plan contract check to publication gates.
 - Added fail-closed `caix cluster join` and `caix serve --cluster` CLI stubs for Brew surface tests.

@@ -1101,6 +1101,84 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertEqual(handle.inputs.first?.positionIDs, [0, 1, 2])
     }
 
+    func testLoopbackWorkerTransportReturnsErrorFrameForWorkerRejection() async throws {
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 2], scalarType: .float16))
+        let handle = makeFakeHandles(for: plan)[2]
+        let executor = try DistributedWorkerFrameExecutor(plan: plan, handle: handle)
+        let loopback = DistributedLoopbackWorkerTransport(
+            executor: executor,
+            requestChunkSize: 4,
+            responseChunkSize: 3)
+        let packet = try hiddenPacket(
+            requestID: "req-1",
+            source: "layers-0-16",
+            destination: "layers-16-32",
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+            stepIndex: 0,
+            fill: 9)
+
+        let maybeResponse = try await loopback.roundTrip(DistributedWorkerWireFrame(
+            message: .forward(DistributedStageForwardFrame(
+                stageID: "layers-16-32",
+                requestID: "req-1",
+                stepIndex: 0,
+                positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+                positionIDs: [0],
+                hiddenState: packet.metadata)),
+            payload: packet.payload))
+        let response = try XCTUnwrap(maybeResponse)
+
+        XCTAssertNoThrow(try response.validate(against: plan))
+        guard case .error(let error) = response.message else {
+            return XCTFail("expected error frame")
+        }
+        XCTAssertEqual(error.code, "invalid_forward_input")
+        XCTAssertEqual(error.detail, "request_id req-1 is not allocated")
+        XCTAssertEqual(error.requestID, "req-1")
+        XCTAssertEqual(error.stageID, "layers-16-32")
+        XCTAssertTrue(response.payload.isEmpty)
+        XCTAssertTrue(handle.inputs.isEmpty)
+    }
+
+    func testRemoteStageHandleSurfacesLoopbackWorkerErrorFrame() async throws {
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 2], scalarType: .float16))
+        let handle = makeFakeHandles(for: plan)[2]
+        let executor = try DistributedWorkerFrameExecutor(plan: plan, handle: handle)
+        let loopback = DistributedLoopbackWorkerTransport(executor: executor)
+        let remote = try DistributedRemoteStageHandle(
+            plan: plan,
+            descriptor: handle.descriptor
+        ) { request in
+            try await loopback.roundTrip(request)
+        }
+        let packet = try hiddenPacket(
+            requestID: "req-1",
+            source: "layers-0-16",
+            destination: "layers-16-32",
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+            stepIndex: 0,
+            fill: 9)
+
+        await XCTAssertThrowsErrorAsync(
+            try await remote.forward(DistributedStageForwardInput(
+                requestID: "req-1",
+                stepIndex: 0,
+                positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+                positionIDs: [0],
+                hiddenState: packet))
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidControlFrame(
+                    "forward worker error invalid_forward_input: request_id req-1 is not allocated"))
+        }
+        XCTAssertTrue(handle.inputs.isEmpty)
+    }
+
     func testRemoteStageHandleRejectsMissingForwardResponse() async throws {
         let plan = makePlan(
             boundaryTensor: DistributedBoundaryTensorSpec(

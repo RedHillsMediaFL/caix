@@ -1903,11 +1903,64 @@ public final class DistributedWorkerFrameExecutor {
         }
     }
 
+    public func processForTransport(
+        _ wireFrame: DistributedWorkerWireFrame
+    ) async throws -> DistributedWorkerWireFrame? {
+        do {
+            return try await process(wireFrame)
+        } catch {
+            let response = DistributedWorkerWireFrame(message: .error(
+                DistributedWorkerErrorFrame(
+                    code: errorCode(error),
+                    detail: errorDetail(error),
+                    requestID: wireFrame.message.nonEmptyRequestID,
+                    stageID: handle.descriptor.id)))
+            try response.validate(against: plan)
+            return response
+        }
+    }
+
     private func ensureTarget(stageID: String?) throws {
         guard let stageID else { return }
         guard stageID == handle.descriptor.id else {
             throw DistributedStageExecutionError.invalidControlFrame(
                 "frame stage_id \(stageID) does not match worker stage \(handle.descriptor.id)")
+        }
+    }
+
+    private func errorCode(_ error: Error) -> String {
+        guard let executionError = error as? DistributedStageExecutionError else {
+            return "worker_error"
+        }
+        switch executionError {
+        case .invalidWorkerHello:
+            return "invalid_worker_hello"
+        case .invalidControlFrame:
+            return "invalid_control_frame"
+        case .invalidWireFrame:
+            return "invalid_wire_frame"
+        case .invalidForwardInput:
+            return "invalid_forward_input"
+        case .invalidStageOutput:
+            return "invalid_stage_output"
+        default:
+            return "worker_error"
+        }
+    }
+
+    private func errorDetail(_ error: Error) -> String {
+        guard let executionError = error as? DistributedStageExecutionError else {
+            return String(describing: error)
+        }
+        switch executionError {
+        case .invalidWorkerHello(let message),
+            .invalidControlFrame(let message),
+            .invalidWireFrame(let message),
+            .invalidForwardInput(let message),
+            .invalidStageOutput(let message):
+            return message
+        default:
+            return executionError.description
         }
     }
 }
@@ -1970,7 +2023,7 @@ public final class DistributedLoopbackWorkerTransport {
                 "loopback request must contain exactly one frame")
         }
 
-        guard let response = try await executor.process(requestFrame) else {
+        guard let response = try await executor.processForTransport(requestFrame) else {
             return nil
         }
         let responseFrames = try decodeStream(
@@ -2024,6 +2077,30 @@ extension DistributedWorkerMessage {
         case .error:
             return "error"
         }
+    }
+
+    fileprivate var nonEmptyRequestID: String? {
+        let requestID: String?
+        switch self {
+        case .allocate(let allocation):
+            requestID = allocation.requestID
+        case .forward(let frame):
+            requestID = frame.requestID
+        case .forwardResult(let frame):
+            requestID = frame.requestID
+        case .reset(let control), .free(let control):
+            requestID = control.requestID
+        case .error(let frame):
+            requestID = frame.requestID
+        case .hello, .helloAck:
+            requestID = nil
+        }
+        guard let requestID,
+            !requestID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            return nil
+        }
+        return requestID
     }
 }
 
