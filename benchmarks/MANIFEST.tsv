@@ -18,7 +18,7 @@ redhillsmediafl/rhm-qwen3.6-27b-caix	qwen3.6-27b-coreai	standalone	decode	eligib
 redhillsmediafl/rhm-gemma-4-26b-a4b-caix	gemma-4-26b-a4b-coreai	standalone	decode	eligible	cataloged
 redhillsmediafl/rhm-gemma-4-31b-it-caix	gemma-4-31b-it-coreai	standalone	decode	eligible	cataloged
 redhillsmediafl/rhm-gemma-4-26b-a4b-mtp-caix	gemma-4-26b-a4b-mtp-coreai	mtp	eagle-mtp	eligible	benchmark MTP package; compare against standalone target row
-redhillsmediafl/rhm-gemma-4-31b-it-mtp-caix	gemma-4-31b-it-mtp-coreai	mtp	eagle-mtp	eligible	benchmark MTP package; compare against standalone target row
+redhillsmediafl/rhm-gemma-4-31b-it-mtp-caix	gemma-4-31b-it-mtp-coreai	mtp	eagle-mtp	blocked_runtime	draft graph is standard two-input assistant; rebuild package with dependent EAGLE draft
 redhillsmediafl/rhm-qwen3-4b-mtp-caix	qwen3-4b-mtp-coreai	mtp	speculative	eligible	benchmark classic target+draft package; compare against standalone target row
 redhillsmediafl/rhm-gemma-4-26b-a4b-draft-caix	gemma-4-26b-a4b-draft-coreai	draft	manual	component_only	draft component; benchmark with matching target
 redhillsmediafl/rhm-gemma-4-31b-it-draft-caix	gemma-4-31b-it-draft-coreai	draft	manual	component_only	draft component; benchmark with matching target

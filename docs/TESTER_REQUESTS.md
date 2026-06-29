@@ -11,7 +11,6 @@ temperature, streaming mode, warmup count, measured run count, and chat-template
 
 | repo | revision | local dir | request | notes |
 |---|---|---|---|---|
-| `redhillsmediafl/rhm-gemma-4-31b-it-mtp-caix` | `0c68d17473cdc0fee45e4d27540d50897f81334a` | `gemma-4-31b-it-mtp-coreai` | EAGLE MTP load, generation, benchmark | benchmark MTP package; compare against standalone target row |
 
 ## Existing Raw Evidence
 
@@ -42,6 +41,7 @@ temperature, streaming mode, warmup count, measured run count, and chat-template
 
 | repo | revision | local dir | request | notes |
 |---|---|---|---|---|
+| `redhillsmediafl/rhm-gemma-4-31b-it-mtp-caix` | `0c68d17473cdc0fee45e4d27540d50897f81334a` | `gemma-4-31b-it-mtp-coreai` | blocked; do not test | draft graph is standard two-input assistant; rebuild package with dependent EAGLE draft |
 | `redhillsmediafl/rhm-gemma-4-26b-a4b-draft-caix` | `d190359eaaaab2e8ce63d86ed41ed9433e555899` | `gemma-4-26b-a4b-draft-coreai` | component; do not test alone | draft component; benchmark with matching target |
 | `redhillsmediafl/rhm-gemma-4-31b-it-draft-caix` | `776b4befe3dc5c945b160dec2b6cdcfafb62840c` | `gemma-4-31b-it-draft-coreai` | component; do not test alone | draft component; benchmark with matching target |
 

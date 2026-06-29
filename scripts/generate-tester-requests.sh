@@ -277,7 +277,9 @@ EOF
     }
     $1 == "" || $1 == "repo" || $1 ~ /^#/ { next }
     !(ready_mode($4) && $5 == "eligible") {
-      request = ($3 == "draft") ? "component; do not test alone" : "manual target plus draft"
+      if ($5 ~ /^blocked_/) request = "blocked; do not test"
+      else if ($3 == "draft") request = "component; do not test alone"
+      else request = "manual target plus draft"
       printf "| `%s` | `%s` | `%s` | %s | %s |\n",
         cell($1), sha($1), cell($2), request, cell($6)
     }

@@ -275,6 +275,15 @@ final class EagleDraftEngine {
     private let function: InferenceFunction
     private let inDesc: [String: NDArrayDescriptor]
     private let outDesc: [String: NDArrayDescriptor]
+    private let tokenInputName: String
+    private let hiddenInputName: String
+    private let positionInputName: String
+    private let kFullInputName: String
+    private let vFullInputName: String
+    private let kSlidingInputName: String
+    private let vSlidingInputName: String
+    private let logitsOutputName: String
+    private let nextHiddenOutputName: String
     let vocabSize: Int
     let hiddenSize: Int
 
@@ -288,9 +297,38 @@ final class EagleDraftEngine {
         for n in d.outputNames { if case .ndArray(let x) = d.outputDescriptor(of: n) { outs[n] = x } }
         self.inDesc = ins
         self.outDesc = outs
+        func pick(
+            _ descriptors: [String: NDArrayDescriptor],
+            _ candidates: [String],
+            role: String
+        ) throws -> (String, NDArrayDescriptor) {
+            for name in candidates {
+                if let descriptor = descriptors[name] { return (name, descriptor) }
+            }
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "eagle draft: missing \(role); have \(descriptors.keys.sorted())")
+        }
+        let tokenInput = try pick(ins, ["token_id", "input_ids"], role: "token input")
+        let hiddenInput = try pick(ins, ["hidden"], role: "hidden input")
+        let positionInput = try pick(ins, ["position_ids", "position_id"], role: "position input")
+        let kFullInput = try pick(ins, ["k_full"], role: "full-key input")
+        let vFullInput = try pick(ins, ["v_full"], role: "full-value input")
+        let kSlidingInput = try pick(ins, ["k_sliding"], role: "sliding-key input")
+        let vSlidingInput = try pick(ins, ["v_sliding"], role: "sliding-value input")
+        let logitsOutput = try pick(outs, ["logits"], role: "logits output")
+        let nextHiddenOutput = try pick(outs, ["next_hidden", "hidden"], role: "next-hidden output")
+        self.tokenInputName = tokenInput.0
+        self.hiddenInputName = hiddenInput.0
+        self.positionInputName = positionInput.0
+        self.kFullInputName = kFullInput.0
+        self.vFullInputName = vFullInput.0
+        self.kSlidingInputName = kSlidingInput.0
+        self.vSlidingInputName = vSlidingInput.0
+        self.logitsOutputName = logitsOutput.0
+        self.nextHiddenOutputName = nextHiddenOutput.0
         self.vocabSize = vocabSize
-        let inputHidden = EagleND.positiveTrailingDimension(ins["hidden"])
-        let outputHidden = EagleND.positiveTrailingDimension(outs["next_hidden"])
+        let inputHidden = EagleND.positiveTrailingDimension(hiddenInput.1)
+        let outputHidden = EagleND.positiveTrailingDimension(nextHiddenOutput.1)
         if let inputHidden, let outputHidden, inputHidden != outputHidden {
             throw CoreAIPipeline.RuntimeError.modelContract(
                 "eagle draft: hidden input/output mismatch \(inputHidden) != \(outputHidden)")
@@ -317,21 +355,23 @@ final class EagleDraftEngine {
     /// the predicted next backbone hidden (for the next micro-step).
     func step(token: Int32, hidden: NDArray, position: Int32,
               kFull: NDArray, vFull: NDArray, kSliding: NDArray, vSliding: NDArray) async throws -> Out {
-        var tokenId = NDArray(descriptor: inDesc["token_id"]!.resolvingDynamicDimensions([1, 1]))
+        var tokenId = NDArray(descriptor: inDesc[tokenInputName]!.resolvingDynamicDimensions([1, 1]))
         EagleND.fillI32(&tokenId, [token])
-        var pos = NDArray(descriptor: inDesc["position_ids"]!.resolvingDynamicDimensions([1, 1]))
+        var pos = NDArray(descriptor: inDesc[positionInputName]!.resolvingDynamicDimensions([1, 1]))
         EagleND.fillI32(&pos, [position])
-        var h = hidden, kf = kFull, vf = vFull, ks = kSliding, vs = vSliding
-        var logits = NDArray(descriptor: outDesc["logits"]!.resolvingDynamicDimensions([1, 1, vocabSize]))
+        let h = hidden, kf = kFull, vf = vFull, ks = kSliding, vs = vSliding
+        var logits = NDArray(descriptor: outDesc[logitsOutputName]!.resolvingDynamicDimensions([1, 1, vocabSize]))
         var nextHidden = NDArray(
-            descriptor: outDesc["next_hidden"]!.resolvingDynamicDimensions([1, 1, hiddenSize]))
+            descriptor: outDesc[nextHiddenOutputName]!.resolvingDynamicDimensions([1, 1, hiddenSize]))
         var ov = InferenceFunction.MutableViews()
-        ov.insert(&logits, for: "logits")
-        ov.insert(&nextHidden, for: "next_hidden")
-        var noStates = InferenceFunction.MutableViews()
+        ov.insert(&logits, for: logitsOutputName)
+        ov.insert(&nextHidden, for: nextHiddenOutputName)
+        let noStates = InferenceFunction.MutableViews()
         _ = try await function.run(
-            inputs: ["token_id": tokenId, "hidden": h, "position_ids": pos,
-                     "k_full": kf, "v_full": vf, "k_sliding": ks, "v_sliding": vs],
+            inputs: [
+                tokenInputName: tokenId, hiddenInputName: h, positionInputName: pos,
+                kFullInputName: kf, vFullInputName: vf, kSlidingInputName: ks, vSlidingInputName: vs
+            ],
             states: consume noStates, outputViews: consume ov)
         let row = logits.view(as: Float16.self).withUnsafePointer { ptr, _, st in
             let cs = st[st.count - 1]
@@ -390,11 +430,11 @@ final class EagleDraftUnrolledEngine {
         EagleND.fillI32(&tokenId, [token])
         var pos = NDArray(descriptor: inDesc["position_ids"]!.resolvingDynamicDimensions([1, 1]))
         EagleND.fillI32(&pos, [position])
-        var h = hidden, kf = kFull, vf = vFull, ks = kSliding, vs = vSliding
+        let h = hidden, kf = kFull, vf = vFull, ks = kSliding, vs = vSliding
         var tokens = NDArray(descriptor: outDesc.resolvingDynamicDimensions([1, numSteps]))
         var ov = InferenceFunction.MutableViews()
         ov.insert(&tokens, for: outputName)
-        var noStates = InferenceFunction.MutableViews()
+        let noStates = InferenceFunction.MutableViews()
         _ = try await function.run(
             inputs: ["token_id": tokenId, "hidden": h, "position_ids": pos,
                      "k_full": kf, "v_full": vf, "k_sliding": ks, "v_sliding": vs],
