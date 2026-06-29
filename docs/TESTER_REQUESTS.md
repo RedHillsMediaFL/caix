@@ -11,7 +11,6 @@ temperature, streaming mode, warmup count, measured run count, and chat-template
 
 | repo | revision | local dir | request | notes |
 |---|---|---|---|---|
-| `redhillsmediafl/rhm-gemma-4-26b-a4b-mtp-caix` | `98793a039e2a548f04668acb4c254f57ff16f145` | `gemma-4-26b-a4b-mtp-coreai` | EAGLE MTP load, generation, benchmark | benchmark MTP package; compare against standalone target row |
 | `redhillsmediafl/rhm-gemma-4-31b-it-mtp-caix` | `0c68d17473cdc0fee45e4d27540d50897f81334a` | `gemma-4-31b-it-mtp-coreai` | EAGLE MTP load, generation, benchmark | benchmark MTP package; compare against standalone target row |
 
 ## Existing Raw Evidence
@@ -36,6 +35,7 @@ temperature, streaming mode, warmup count, measured run count, and chat-template
 | `redhillsmediafl/rhm-qwen3.6-27b-caix` | `436642eef9fb9fb49f53cafc2d32c0f25a0b175a` | `qwen3.6-27b-coreai` | `decode` | 3 | `benchmarks/raw/20260629-004612-qwen3.6-27b-coreai` |
 | `redhillsmediafl/rhm-gemma-4-26b-a4b-caix` | `fede95233c003d99e6db4da433add133ba9458d6` | `gemma-4-26b-a4b-coreai` | `decode` | 3 | `benchmarks/raw/20260629-014239-gemma-4-26b-a4b-coreai` |
 | `redhillsmediafl/rhm-gemma-4-31b-it-caix` | `de8554bf1b4c5b26d3bf9eb40cac2b22303eb0e4` | `gemma-4-31b-it-coreai` | `decode` | 3 | `benchmarks/raw/20260629-020515-gemma-4-31b-it-coreai` |
+| `redhillsmediafl/rhm-gemma-4-26b-a4b-mtp-caix` | `98793a039e2a548f04668acb4c254f57ff16f145` | `gemma-4-26b-a4b-mtp-coreai` | `eagle-mtp` | 3 | `benchmarks/raw/20260629-050957-gemma-4-26b-a4b-mtp-coreai-eagle-mtp` |
 | `redhillsmediafl/rhm-qwen3-4b-mtp-caix` | `4190150f7a47b113d36ea679c4541d95a21ce3f6` | `qwen3-4b-mtp-coreai` | `speculative` | 3 | `benchmarks/raw/20260629-045620-qwen3-4b-mtp-coreai` |
 
 ## Manual Or Component Requests
