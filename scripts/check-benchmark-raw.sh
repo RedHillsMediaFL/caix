@@ -10,9 +10,9 @@ Options:
   --raw-dir <path>  Raw benchmark root. Default: benchmarks/raw.
 
 Does not run models, download payloads, or contact Hugging Face.
-Fails when committed suite/model raw logs are missing metadata, have failed measured rows, lack a
-pinned model repo revision, drift between suite and model settings, or produce non-identical measured
-stdout for a deterministic run.
+Fails when committed suite/model raw logs are missing metadata, new or changed raw dirs have dirty
+run-start git status, measured rows fail, pinned model repo revisions are missing, suite/model
+settings drift, or deterministic measured stdout differs.
 USAGE
 }
 
@@ -50,6 +50,27 @@ canonical_benchmark_mode() {
   esac
 }
 
+repo_relative_path() {
+  local path="$1"
+  local abs
+  abs="$(cd "$path" && pwd)"
+  case "$abs/" in
+    "$REPO_DIR"/*)
+      printf '%s\n' "${abs#$REPO_DIR/}"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+raw_dir_has_git_changes() {
+  local raw_dir="$1"
+  local rel
+  rel="$(repo_relative_path "$raw_dir")" || return 0
+  [[ -n "$(git -C "$REPO_DIR" status --porcelain -- "$rel")" ]]
+}
+
 summary_count() {
   local file="$1"
   local expr="$2"
@@ -78,6 +99,15 @@ check_model_dir() {
   if [[ ! "$repo_revision" =~ ^[0-9a-f]{40}$ ]]; then
     echo "error: missing pinned repo revision for $repo: $repo_revision" >&2
     return 1
+  fi
+
+  if raw_dir_has_git_changes "$output"; then
+    local git_status
+    git_status="$(metadata_value git_status "$output/metadata.txt")"
+    if [[ "$git_status" != "0 dirty entries" ]]; then
+      echo "error: dirty run-start git status for $repo: $git_status" >&2
+      return 1
+    fi
   fi
 
   local runs measured failed
@@ -155,6 +185,14 @@ while IFS= read -r suite; do
     echo "error: invalid suite counts in $suite/metadata.txt" >&2
     exit 1
   }
+
+  if raw_dir_has_git_changes "$suite"; then
+    suite_git_status="$(metadata_value git_status "$suite/metadata.txt")"
+    if [[ "$suite_git_status" != "0 dirty entries" ]]; then
+      echo "error: dirty run-start git status in suite $suite: $suite_git_status" >&2
+      exit 1
+    fi
+  fi
 
   read -r rows measured_rows skipped_rows failed_rows < <(
     awk -F '\t' '
