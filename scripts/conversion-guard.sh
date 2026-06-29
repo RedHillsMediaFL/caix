@@ -73,8 +73,9 @@ active_jobs() {
     /python\/converter\/convert\.py/ && !/--convert-script/ { print; next }
     /coreai\.llm\.export/ { print; next }
     /hf (download|upload|upload-large-folder)/ { print; next }
+    /(^|[[:space:]\/])huggingface-cli (download|upload|upload-large-folder)/ { print; next }
     /(^|[[:space:]\/])git-lfs([[:space:]]|$)/ { print; next }
-    /(^|[[:space:]\/])git lfs (fetch|pull|push|checkout|prune|migrate|upload|download)/ { print; next }
+    /(^|[[:space:]\/])git([[:space:]]+[^[:space:]]+){0,8}[[:space:]]+lfs[[:space:]]+(fetch|pull|push|checkout|prune|migrate|upload|download)/ { print; next }
     /\.build\/(debug|release)\/caix (run|eagle)/ { print; next }
     /(^|\/)(caix|coreai-pipeline) (run|eagle)/ { print; next }
     /(^|\/)swift (build|test)|swift-package|swiftc|swift-frontend|xctest/ { print; next }

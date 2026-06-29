@@ -67,15 +67,15 @@ if ! grep -F "idle" "$tmpdir/ignore-lock.txt" >/dev/null; then
   exit 1
 fi
 
-fake_table=$'123 1 00:01 0.0 0.1 /opt/homebrew/bin/git-lfs upload large-file\n124 1 00:01 0.0 0.1 /usr/bin/git lfs push origin main'
+fake_table=$'123 1 00:01 0.0 0.1 /opt/homebrew/bin/git-lfs upload large-file\n124 1 00:01 0.0 0.1 /usr/bin/git lfs push origin main\n125 1 00:01 0.0 0.1 /usr/bin/git -C /tmp/repo lfs pull\n126 1 00:01 0.0 0.1 huggingface-cli upload repo path'
 if env caix_heavy_task_lock="$tmpdir/no-lock" caix_test_process_table="$fake_table" \
     "$SCRIPT_DIR/conversion-guard.sh" >"$tmpdir/lfs.txt" 2>&1; then
-  echo "error: conversion-guard ignored git-lfs activity" >&2
+  echo "error: conversion-guard ignored LFS/HF transfer activity" >&2
   exit 1
 fi
-for expected in "git-lfs upload" "git lfs push"; do
+for expected in "git-lfs upload" "git lfs push" "git -C /tmp/repo lfs pull" "huggingface-cli upload"; do
   if ! grep -F -- "$expected" "$tmpdir/lfs.txt" >/dev/null; then
-    echo "error: conversion-guard did not report LFS activity: $expected" >&2
+    echo "error: conversion-guard did not report LFS/HF transfer activity: $expected" >&2
     exit 1
   fi
 done

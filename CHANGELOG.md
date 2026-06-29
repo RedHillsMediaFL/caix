@@ -58,7 +58,8 @@
   detection stays in one place.
 - Redacted sensitive-looking values from `scripts/conversion-guard.sh` process reports before text
   or JSON output.
-- Added `git-lfs` and direct `git lfs` transfer detection to the shared heavy-job guard.
+- Added `git-lfs`, wrapped `git lfs`, and legacy `huggingface-cli` transfer detection to the
+  shared heavy-job guard.
 - Added same-machine pipeline guards for invalid position ranges and reset request IDs.
 - Added the cluster-plan contract check to publication gates.
 - Added fail-closed `caix cluster join` and `caix serve --cluster` CLI stubs for Brew surface tests.
