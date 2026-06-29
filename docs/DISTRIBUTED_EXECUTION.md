@@ -61,7 +61,8 @@ This is blunt on purpose. Where the current code cannot do something, it says so
     duplicate stage claims, and reports missing startup stages before execution.
   - `DistributedLoopbackWorkerTransport` runs worker handshakes and requests through the same
     frame encoder, stream decoder, executor, and response path in-process. It is the socket
-    contract before there is a socket. Worker execution failures are encoded as `ERROR` frames.
+    contract before there is a socket. Worker execution failures are encoded as `ERROR` frames,
+    with distributed validation failures tagged as `runtime_validation`.
   - `DistributedRemoteStageHandle` wraps a worker frame round trip so the coordinator can mix local
     and remote stages through the same `DistributedStageHandle` interface. Worker `ERROR` frames
     preserve their code/detail and must match the active request and remote stage before the

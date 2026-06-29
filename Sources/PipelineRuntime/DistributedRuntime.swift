@@ -1929,6 +1929,9 @@ public final class DistributedWorkerFrameExecutor {
     }
 
     private func errorCode(_ error: Error) -> String {
+        if error is DistributedRuntimeValidationError {
+            return "runtime_validation"
+        }
         guard let executionError = error as? DistributedStageExecutionError else {
             return "worker_error"
         }
@@ -1949,6 +1952,9 @@ public final class DistributedWorkerFrameExecutor {
     }
 
     private func errorDetail(_ error: Error) -> String {
+        if let validationError = error as? DistributedRuntimeValidationError {
+            return validationError.description
+        }
         guard let executionError = error as? DistributedStageExecutionError else {
             return String(describing: error)
         }

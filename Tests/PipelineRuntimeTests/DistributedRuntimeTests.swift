@@ -1142,6 +1142,41 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertTrue(handle.inputs.isEmpty)
     }
 
+    func testLoopbackWorkerTransportReturnsRuntimeValidationErrorFrame() async throws {
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 2], scalarType: .float16))
+        let handle = makeFakeHandles(for: plan, badFirstRoute: true)[0]
+        let executor = try DistributedWorkerFrameExecutor(plan: plan, handle: handle)
+        let loopback = DistributedLoopbackWorkerTransport(executor: executor)
+
+        let allocateResponse = try await loopback.roundTrip(DistributedWorkerWireFrame(
+            message: .allocate(DistributedStageAllocation(requestID: "req-1", kvCapacity: 8))))
+        XCTAssertNil(allocateResponse)
+        let maybeResponse = try await loopback.roundTrip(DistributedWorkerWireFrame(
+            message: .forward(DistributedStageForwardFrame(
+                stageID: "embed",
+                requestID: "req-1",
+                stepIndex: 0,
+                positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+                positionIDs: [0],
+                tokenIDs: [7]))))
+        let response = try XCTUnwrap(maybeResponse)
+
+        XCTAssertNoThrow(try response.validate(against: plan))
+        guard case .error(let error) = response.message else {
+            return XCTFail("expected error frame")
+        }
+        XCTAssertEqual(error.code, "runtime_validation")
+        XCTAssertEqual(
+            error.detail,
+            "Hidden-state packet route is not adjacent: embed -> final")
+        XCTAssertEqual(error.requestID, "req-1")
+        XCTAssertEqual(error.stageID, "embed")
+        XCTAssertTrue(response.payload.isEmpty)
+        XCTAssertEqual(handle.inputs.count, 1)
+    }
+
     func testRemoteStageHandleSurfacesLoopbackWorkerErrorFrame() async throws {
         let plan = makePlan(
             boundaryTensor: DistributedBoundaryTensorSpec(

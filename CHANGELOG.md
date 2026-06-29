@@ -52,6 +52,8 @@
   reject mismatched request or stage envelopes.
 - Converted distributed loopback worker execution failures into validated `ERROR` frames so the
   in-process transport matches the socket contract.
+- Tagged distributed runtime validation failures as `runtime_validation` worker `ERROR` frames
+  instead of generic worker errors.
 - Added same-machine pipeline guards for invalid position ranges and reset request IDs.
 - Added the cluster-plan contract check to publication gates.
 - Added fail-closed `caix cluster join` and `caix serve --cluster` CLI stubs for Brew surface tests.
