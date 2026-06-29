@@ -187,15 +187,10 @@ eagle_backbone_for_bundle() {
 }
 
 heavy_task_guard() {
-  local lock="$LOCK"
-  if [[ -e "$lock" && "$FORCE" != "1" ]]; then
-    echo "error: heavy-task lock exists: $lock" >&2
-    return 2
-  fi
-  if ps -axo command \
-    | grep -E 'coreai\.llm\.export|convert\.py|hf (download|upload|upload-large-folder)|\.build/(debug|release)/caix (run|eagle)|(^|/)(caix|coreai-pipeline) (run|eagle)|(^|/)swift (build|test)|swift-package|swiftc|swift-frontend|xctest' \
-    | grep -v grep >/dev/null; then
-    echo "error: another heavy build, conversion, upload, verification, or benchmark is active" >&2
+  local guard_args=()
+  [[ "$FORCE" == "1" ]] && guard_args+=(--ignore-lock)
+  if ! caix_heavy_task_lock="$LOCK" "$SCRIPT_DIR/conversion-guard.sh" "${guard_args[@]}" >/dev/null 2>&1; then
+    echo "error: heavy-task guard is busy; another build, conversion, upload, verification, benchmark, or lock is active" >&2
     return 2
   fi
 }

@@ -54,6 +54,8 @@
   in-process transport matches the socket contract.
 - Tagged distributed runtime validation failures as `runtime_validation` worker `ERROR` frames
   instead of generic worker errors.
+- Routed benchmark heavy-job preflights through `scripts/conversion-guard.sh` so lock/process
+  detection stays in one place.
 - Added same-machine pipeline guards for invalid position ranges and reset request IDs.
 - Added the cluster-plan contract check to publication gates.
 - Added fail-closed `caix cluster join` and `caix serve --cluster` CLI stubs for Brew surface tests.

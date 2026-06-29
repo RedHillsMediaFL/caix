@@ -133,14 +133,10 @@ LOCK="$(caix_env caix_heavy_task_lock HEAVY_TASK_LOCK "$REPO_DIR/.agent-heavy-ta
 DISK_FLOOR_GIB="$(caix_env caix_stop_floor_gib STOP_FLOOR_GIB 500)"
 "$SCRIPT_DIR/check-disk-pressure.sh" --path /Volumes/SSD --floor-gib "$DISK_FLOOR_GIB" --quiet
 
-if [[ -e "$LOCK" && "$FORCE" != "1" ]]; then
-  echo "error: heavy-task lock exists: $LOCK" >&2
-  exit 2
-fi
-if ps -axo command \
-  | grep -E 'coreai\.llm\.export|convert\.py|hf (download|upload|upload-large-folder)|\.build/(debug|release)/caix (run|eagle)|(^|/)(caix|coreai-pipeline) (run|eagle)|(^|/)swift (build|test)|swift-package|swiftc|swift-frontend|xctest' \
-  | grep -v grep >/dev/null; then
-  echo "error: another heavy build, conversion, upload, verification, or benchmark is active" >&2
+guard_args=()
+[[ "$FORCE" == "1" ]] && guard_args+=(--ignore-lock)
+if ! caix_heavy_task_lock="$LOCK" "$SCRIPT_DIR/conversion-guard.sh" "${guard_args[@]}" >/dev/null 2>&1; then
+  echo "error: heavy-task guard is busy; another build, conversion, upload, verification, benchmark, or lock is active" >&2
   exit 2
 fi
 

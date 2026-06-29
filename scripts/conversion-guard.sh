@@ -3,6 +3,8 @@
 # Usage:
 #   scripts/conversion-guard.sh          # print active jobs; exit 1 if busy
 #   scripts/conversion-guard.sh --wait   # block until no heavy job or heavy-task lock remains
+#   scripts/conversion-guard.sh --ignore-lock
+#                                      # ignore a stale lock, but still reject active jobs
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -13,6 +15,7 @@ LOCK="$(caix_env caix_heavy_task_lock HEAVY_TASK_LOCK "$REPO_DIR/.agent-heavy-ta
 wait_mode=0
 interval=30
 json=0
+ignore_lock=0
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -28,6 +31,10 @@ while [ "$#" -gt 0 ]; do
       json=1
       shift
       ;;
+    --ignore-lock)
+      ignore_lock=1
+      shift
+      ;;
     -h|--help)
       cat <<'EOF'
 Guard long-running Core AI conversion queues from overlapping heavy jobs.
@@ -35,6 +42,8 @@ Usage:
   scripts/conversion-guard.sh          # print active jobs; exit 1 if busy
   scripts/conversion-guard.sh --wait   # block until no heavy job or heavy-task lock remains
   scripts/conversion-guard.sh --json   # emit machine-readable status
+  scripts/conversion-guard.sh --ignore-lock
+                                      # ignore a stale lock, but still reject active jobs
 EOF
       exit 0
       ;;
@@ -93,7 +102,9 @@ print(json.dumps({"busy": bool(rows) or lock_path is not None, "lock_path": lock
 
 while true; do
   lock_busy=0
-  [ -e "$LOCK" ] && lock_busy=1
+  if [ "$ignore_lock" -eq 0 ] && [ -e "$LOCK" ]; then
+    lock_busy=1
+  fi
   jobs="$(active_jobs || true)"
   if [ "$lock_busy" -eq 0 ] && [ -z "$jobs" ]; then
     if [ "$json" -eq 1 ]; then

@@ -57,4 +57,14 @@ if not isinstance(doc.get("jobs"), list):
     sys.exit("jobs must be a list")
 PY
 
+if ! env caix_heavy_task_lock="$lock" \
+    "$SCRIPT_DIR/conversion-guard.sh" --ignore-lock >"$tmpdir/ignore-lock.txt" 2>&1; then
+  echo "error: conversion-guard --ignore-lock rejected a lock-only state" >&2
+  exit 1
+fi
+if ! grep -F "idle" "$tmpdir/ignore-lock.txt" >/dev/null; then
+  echo "error: conversion-guard --ignore-lock did not report idle" >&2
+  exit 1
+fi
+
 echo "conversion guard ok"
