@@ -45,6 +45,9 @@ done < <(find "$SCRIPT_DIR" -maxdepth 1 -type f -name '*.sh' | sort)
 if [[ "${#shell_scripts[@]}" -gt 0 ]]; then
   run bash -n "${shell_scripts[@]}"
 fi
+if command -v ruby >/dev/null 2>&1; then
+  run ruby -c "$REPO_DIR/Formula/caix.rb"
+fi
 run "$SCRIPT_DIR/check-token-handling.sh"
 run "$SCRIPT_DIR/check-public-copy.sh"
 run "$SCRIPT_DIR/check-version-sync.sh"

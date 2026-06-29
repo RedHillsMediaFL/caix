@@ -23,6 +23,10 @@
 - Added the cluster-plan contract check to publication gates.
 - Added fail-closed `caix cluster join` and `caix serve --cluster` CLI stubs for Brew surface tests.
 - Expanded the Homebrew formula test to cover distributed plan/join help and `serve --cluster`.
+- Expanded Brew release checks to validate the staged Qwen3 distributed manifest and exact caix
+  version through the package script and formula test.
+- Let the Homebrew formula install packaged release tarballs with `bin/caix` while keeping source
+  builds for `--HEAD`.
 - Added a same-machine distributed stage-handle harness with fake-stage tests.
 - Published verified RHM Qwen2.5-0.5B-Instruct and Qwen2.5-3B-Instruct Core AI bundles and
   documented them in the README model table.

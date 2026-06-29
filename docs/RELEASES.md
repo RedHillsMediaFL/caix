@@ -23,7 +23,8 @@ scripts/package.sh 0.2.0-beta
 ```
 
 The package script checks that `caix --version` matches the requested version. It also refuses
-`1.0.0` or higher unless the Core AI beta gate is explicitly lifted.
+`1.0.0` or higher unless the Core AI beta gate is explicitly lifted. It also checks the
+distributed Brew surface against the staged Qwen3 example manifest.
 
 Every version bump must update all of these in the same commit:
 
@@ -38,11 +39,16 @@ Distributed releases must pass the Brew-installed readiness gate before cross-Ma
 ```bash
 brew tap RedHillsMediaFL/caix
 brew reinstall caix
+brew test caix
 scripts/check-publication-gates.sh --distributed --brew-caix "$(command -v caix)"
 ```
 
-The formula test must keep checking `caix cluster plan --help`, `caix cluster join --help`, and
-top-level `caix --help` advertising `--cluster`.
+The formula test must keep checking `caix cluster plan --help`, `caix cluster join --help`,
+top-level `caix --help` advertising `--cluster`, exact `caix --version`, and the staged Qwen3
+manifest plan contract.
 
 Any release that exposes distributed inference must ship that surface through the tap formula. Use
 the installed binary for Thunderbolt tests, not a loose debug build.
+
+The tap formula supports both paths: source builds for `--HEAD`, and packaged `bin/caix` installs
+for versioned releases.

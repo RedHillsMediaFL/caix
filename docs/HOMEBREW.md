@@ -35,16 +35,21 @@ For a verified `0.x` release:
 1. Update the version in `Sources/PipelineCLI/BuildInfo.swift`, `scripts/package.sh`, and `Formula/caix.rb`.
 2. Run `scripts/check-version-sync.sh`.
 3. Run `scripts/check-release-version.sh v0.2.0-beta`.
-4. Cut a release tag below `v1.0.0`.
-5. Build and upload `caix-<version>-macos-arm64.tar.gz`.
-6. Update the tap formula with the release URL and SHA-256.
-7. Test:
+4. Build `caix-<version>-macos-arm64.tar.gz` with `scripts/package.sh <version>`.
+5. Cut a release tag below `v1.0.0`.
+6. Upload the tarball.
+7. Update the tap formula with the release URL and SHA-256. The formula can install the packaged
+   `bin/caix` binary for a versioned release or build from source for `--HEAD`.
+8. Test:
 
 ```bash
 brew audit --strict --online caix
 brew install caix
 brew test caix
 caix doctor
+caix_prefix="$(brew --prefix caix)"
+"$caix_prefix/share/caix/scripts/check-brew-distributed.sh" --caix "$(command -v caix)" --ready \
+  --manifest "$caix_prefix/share/caix/examples/cluster-stage-manifest.json"
 ```
 
 When those pass, document this as the first install command:
@@ -81,6 +86,7 @@ binary first:
 ```bash
 brew tap RedHillsMediaFL/caix
 brew reinstall caix
+brew test caix
 scripts/check-publication-gates.sh --distributed --brew-caix "$(command -v caix)"
 ```
 

@@ -20,14 +20,19 @@ if [ "$BUILT_VERSION" != "$VERSION" ]; then
   echo "  update Sources/PipelineCLI/BuildInfo.swift or pass the matching version." >&2
   exit 1
 fi
+"$DIR/scripts/check-brew-distributed.sh" \
+  --caix "$DIR/.build/release/caix" \
+  --ready \
+  --manifest "$DIR/docs/examples/cluster-stage-manifest.json"
 
 STAGE="$(mktemp -d)/$NAME"
-mkdir -p "$STAGE/bin" "$STAGE/models/exports" "$STAGE/scripts"
+mkdir -p "$STAGE/bin" "$STAGE/models/exports" "$STAGE/scripts" "$STAGE/docs/examples"
 cp .build/release/caix          "$STAGE/bin/caix"
 cp caix README.md LICENSE       "$STAGE/" 2>/dev/null || true
 cp -R web python                "$STAGE/"
 cp models/registry.json         "$STAGE/models/"
-cp scripts/install.sh scripts/check-coreai-runtime.sh "$STAGE/scripts/" 2>/dev/null || true
+cp docs/examples/cluster-stage-manifest.json "$STAGE/docs/examples/"
+cp scripts/install.sh scripts/check-coreai-runtime.sh scripts/check-brew-distributed.sh "$STAGE/scripts/" 2>/dev/null || true
 cp -R scripts/lib "$STAGE/scripts/" 2>/dev/null || true
 chmod +x "$STAGE/caix" "$STAGE/bin/caix"
 printf "%s\n" "$VERSION" > "$STAGE/VERSION"
