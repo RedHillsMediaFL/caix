@@ -39,6 +39,7 @@ Use the suite manifest to account for every known RHM caix repo:
 
 ```bash
 scripts/check-benchmark-coverage.sh
+scripts/check-hf-collections.sh
 scripts/benchmark-suite.sh --dry-run
 scripts/collect-model-revisions.sh \
   --out benchmarks/revisions.tsv \
@@ -58,6 +59,10 @@ recorded as skipped with the reason.
 Run `scripts/check-benchmark-coverage.sh` before assigning tests or collecting revisions. It compares
 the manifest with live `redhillsmediafl/rhm-*-caix` Hub metadata and fails if a converted repo is
 missing from benchmark coverage.
+
+Run `scripts/check-hf-collections.sh` after changing the manifest or Hugging Face collections. It
+fails if a manifest repo is missing from the public family collections or if a collection note uses
+speed/fluff wording.
 
 Create `benchmarks/revisions.tsv` before a publishable run:
 

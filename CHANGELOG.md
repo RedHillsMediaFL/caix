@@ -27,9 +27,12 @@
   wording, and vague model-size language.
 - Added a benchmark coverage guard that compares the manifest with live RHM caix repos on Hugging
   Face.
+- Added a Hugging Face collection guard that checks public family collections cover the manifest and
+  keep notes free of speed/fluff wording.
 - Added a reusable disk-pressure guard and wired benchmark runners to fail before writing logs when
   the checked volume is below the configured free-space floor.
 - Added a disk preflight for dashboard RHM bundle downloads before launching `hf download`.
+- Added a disk preflight for dashboard HF and GGUF conversions before launching `convert.py`.
 - Let benchmark suite runs pass exact model repo revisions into raw logs through a revisions TSV.
 - Added a metadata-only Hugging Face revision collector for benchmark manifests.
 - Added a generated tester request sheet for model verification and raw benchmark collection.
