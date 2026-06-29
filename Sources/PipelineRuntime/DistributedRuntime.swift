@@ -1617,6 +1617,99 @@ public struct DistributedWorkerWireFrame: Hashable, Sendable {
     }
 }
 
+public struct DistributedWorkerHandshakeCoordinator: Sendable {
+    public let plan: DistributedStagePlan
+    private let planIntegrityHash: String
+    private var claimedStageIDs: Set<String> = []
+
+    public init(plan: DistributedStagePlan) throws {
+        try plan.validate()
+        self.plan = plan
+        self.planIntegrityHash = try plan.integrityHash()
+    }
+
+    public var claimedStages: Set<String> {
+        claimedStageIDs
+    }
+
+    public var missingStageIDs: [String] {
+        plan.stages.map(\.id).filter { !claimedStageIDs.contains($0) }
+    }
+
+    public var isReady: Bool {
+        missingStageIDs.isEmpty
+    }
+
+    public mutating func processHello(
+        _ wireFrame: DistributedWorkerWireFrame
+    ) throws -> DistributedWorkerWireFrame {
+        try wireFrame.message.validatePayloadByteCount(wireFrame.payload.count)
+        guard case .hello(let hello) = wireFrame.message else {
+            throw DistributedStageExecutionError.invalidControlFrame(
+                "handshake requires hello frame")
+        }
+
+        do {
+            try hello.validate(
+                against: plan,
+                expectedPlanIntegrityHash: planIntegrityHash)
+        } catch {
+            return makeHelloAck(
+                stageID: hello.stage.id,
+                accepted: false,
+                reason: rejectionReason(error))
+        }
+
+        guard !claimedStageIDs.contains(hello.stage.id) else {
+            return makeHelloAck(
+                stageID: hello.stage.id,
+                accepted: false,
+                reason: "stage already claimed")
+        }
+
+        claimedStageIDs.insert(hello.stage.id)
+        return makeHelloAck(
+            stageID: hello.stage.id,
+            accepted: true,
+            reason: nil)
+    }
+
+    public func requireReady() throws {
+        let missing = missingStageIDs
+        guard missing.isEmpty else {
+            throw DistributedStageExecutionError.invalidControlFrame(
+                "missing worker stages: \(missing.joined(separator: ", "))")
+        }
+    }
+
+    private func makeHelloAck(
+        stageID: String,
+        accepted: Bool,
+        reason: String?
+    ) -> DistributedWorkerWireFrame {
+        DistributedWorkerWireFrame(message: .helloAck(
+            DistributedWorkerHelloAck(
+                accepted: accepted,
+                stageID: stageID,
+                reason: reason,
+                planIntegrityHash: accepted ? planIntegrityHash : nil)))
+    }
+
+    private func rejectionReason(_ error: Error) -> String {
+        guard let executionError = error as? DistributedStageExecutionError else {
+            return String(describing: error)
+        }
+        switch executionError {
+        case .invalidWorkerHello(let message),
+            .invalidControlFrame(let message),
+            .invalidWireFrame(let message):
+            return message
+        default:
+            return executionError.description
+        }
+    }
+}
+
 public final class DistributedWorkerFrameExecutor {
     public let plan: DistributedStagePlan
     public let handle: DistributedStageHandle

@@ -408,6 +408,112 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertEqual(hello.planIntegrityHash, try plan.integrityHash())
     }
 
+    func testWorkerHandshakeCoordinatorAcceptsAllStagesAndReportsReady() throws {
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 2], scalarType: .float16))
+        let handles = makeFakeHandles(for: plan)
+        var coordinator = try DistributedWorkerHandshakeCoordinator(plan: plan)
+
+        for handle in handles {
+            let executor = try DistributedWorkerFrameExecutor(plan: plan, handle: handle)
+            let response = try coordinator.processHello(try executor.makeHello())
+            guard case .helloAck(let ack) = response.message else {
+                return XCTFail("expected hello_ack")
+            }
+
+            XCTAssertTrue(ack.accepted)
+            XCTAssertEqual(ack.stageID, handle.descriptor.id)
+            XCTAssertNil(ack.reason)
+            XCTAssertEqual(ack.planIntegrityHash, try plan.integrityHash())
+            XCTAssertTrue(response.payload.isEmpty)
+        }
+
+        XCTAssertEqual(coordinator.claimedStages, Set(plan.stages.map(\.id)))
+        XCTAssertEqual(coordinator.missingStageIDs, [])
+        XCTAssertTrue(coordinator.isReady)
+        XCTAssertNoThrow(try coordinator.requireReady())
+    }
+
+    func testWorkerHandshakeCoordinatorRejectsDuplicateStageClaim() throws {
+        let plan = makePlan()
+        let handle = makeFakeHandles(for: plan)[1]
+        let executor = try DistributedWorkerFrameExecutor(plan: plan, handle: handle)
+        let hello = try executor.makeHello()
+        var coordinator = try DistributedWorkerHandshakeCoordinator(plan: plan)
+
+        _ = try coordinator.processHello(hello)
+        let response = try coordinator.processHello(hello)
+
+        guard case .helloAck(let ack) = response.message else {
+            return XCTFail("expected hello_ack")
+        }
+        XCTAssertFalse(ack.accepted)
+        XCTAssertEqual(ack.stageID, handle.descriptor.id)
+        XCTAssertEqual(ack.reason, "stage already claimed")
+        XCTAssertNil(ack.planIntegrityHash)
+        XCTAssertEqual(coordinator.claimedStages, [handle.descriptor.id])
+    }
+
+    func testWorkerHandshakeCoordinatorRejectsPlanMismatch() throws {
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 2], scalarType: .float16))
+        var coordinator = try DistributedWorkerHandshakeCoordinator(plan: plan)
+        let hello = DistributedWorkerHello(
+            stage: try XCTUnwrap(plan.stage(id: "layers-0-16")),
+            hiddenSize: 2,
+            boundaryScalarType: .float16,
+            planIntegrityHash: "stale")
+
+        let response = try coordinator.processHello(DistributedWorkerWireFrame(
+            message: .hello(hello)))
+
+        guard case .helloAck(let ack) = response.message else {
+            return XCTFail("expected hello_ack")
+        }
+        XCTAssertFalse(ack.accepted)
+        XCTAssertEqual(ack.stageID, "layers-0-16")
+        XCTAssertEqual(ack.reason, "plan_integrity_hash mismatch")
+        XCTAssertNil(ack.planIntegrityHash)
+        XCTAssertTrue(coordinator.claimedStages.isEmpty)
+    }
+
+    func testWorkerHandshakeCoordinatorRejectsNonHelloFrame() throws {
+        let plan = makePlan()
+        var coordinator = try DistributedWorkerHandshakeCoordinator(plan: plan)
+
+        XCTAssertThrowsError(
+            try coordinator.processHello(DistributedWorkerWireFrame(
+                message: .allocate(DistributedStageAllocation(
+                    requestID: "req-1", kvCapacity: 128))))
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidControlFrame("handshake requires hello frame"))
+        }
+    }
+
+    func testWorkerHandshakeCoordinatorRequiresAllStages() throws {
+        let plan = makePlan()
+        let handle = makeFakeHandles(for: plan)[0]
+        let executor = try DistributedWorkerFrameExecutor(plan: plan, handle: handle)
+        var coordinator = try DistributedWorkerHandshakeCoordinator(plan: plan)
+
+        _ = try coordinator.processHello(try executor.makeHello())
+
+        XCTAssertFalse(coordinator.isReady)
+        XCTAssertEqual(
+            coordinator.missingStageIDs,
+            ["layers-0-16", "layers-16-32", "final"])
+        XCTAssertThrowsError(try coordinator.requireReady()) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidControlFrame(
+                    "missing worker stages: layers-0-16, layers-16-32, final"))
+        }
+    }
+
     func testWorkerFrameExecutorProcessesControlFrames() async throws {
         let plan = makePlan()
         let handle = makeFakeHandles(for: plan)[1]

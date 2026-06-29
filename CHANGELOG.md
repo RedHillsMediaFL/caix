@@ -39,6 +39,8 @@
   path planned for local worker sockets.
 - Added a distributed worker frame executor that dispatches validated request frames to a stage
   handle and returns forward-result frames.
+- Added a distributed worker handshake coordinator for `HELLO`/ACK admission and missing-stage
+  startup checks.
 - Added a remote distributed stage handle for coordinator-to-worker frame round trips.
 - Added same-machine pipeline guards for invalid position ranges and reset request IDs.
 - Added the cluster-plan contract check to publication gates.

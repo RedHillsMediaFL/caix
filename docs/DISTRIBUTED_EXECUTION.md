@@ -56,6 +56,8 @@ This is blunt on purpose. Where the current code cannot do something, it says so
   - `DistributedWorkerFrameExecutor` dispatches validated request frames to one
     `DistributedStageHandle` and returns `forward_result` frames. It is transport-independent
     worker logic for the loopback and Thunderbolt paths.
+  - `DistributedWorkerHandshakeCoordinator` accepts or rejects worker `HELLO` frames, prevents
+    duplicate stage claims, and reports missing startup stages before execution.
   - `DistributedLoopbackWorkerTransport` runs worker requests through the same frame encoder,
     stream decoder, executor, and response path in-process. It is the socket contract before
     there is a socket.
