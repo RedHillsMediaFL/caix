@@ -24,6 +24,7 @@
 - Added a benchmark protocol and raw-log runner so future public speed numbers are reproducible.
 - Added a benchmark suite manifest so every known RHM caix repo is measured or skipped with a stated
   reason.
+- Added a benchmark-suite guard that refuses measured rows without an exact model repo revision.
 - Added a benchmark report gate that refuses missing raw logs and marks rows without model revisions
   as non-publishable.
 - Added external tester instructions for verified load/generation reports and raw benchmark

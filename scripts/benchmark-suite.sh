@@ -26,6 +26,8 @@ This script does not download models and does not publish numbers.
 Rows with benchmark_mode=speculative use scripts/benchmark-model.sh with <bundle>/draft.
 Rows with benchmark_mode=eagle-mtp use scripts/benchmark-eagle.sh against package layouts that contain
 eagle_target.aimodel, eagle_draft.aimodel, and tokenizer/.
+Non-dry-run measured rows require a 40-character model repo revision from --revisions or
+--repo-revision.
 USAGE
 }
 
@@ -79,6 +81,10 @@ fi
 [[ "$MAX_TOKENS" =~ ^[0-9]+$ ]] || { echo "error: --max-tokens must be an integer" >&2; exit 2; }
 [[ "$WARMUP" =~ ^[0-9]+$ ]] || { echo "error: --warmup must be an integer" >&2; exit 2; }
 [[ "$RUNS" =~ ^[1-9][0-9]*$ ]] || { echo "error: --runs must be a positive integer" >&2; exit 2; }
+if [[ "$REPO_REVISION" != "unknown" && ! "$REPO_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "error: --repo-revision must be a 40-character commit SHA or omitted" >&2
+  exit 2
+fi
 
 if [[ -n "$PROMPT_FILE" ]]; then
   [[ -f "$PROMPT_FILE" ]] || { echo "error: prompt file not found: $PROMPT_FILE" >&2; exit 2; }
@@ -110,6 +116,34 @@ canonical_benchmark_mode() {
   esac
 }
 
+require_revision_for_measured_rows() {
+  local errors=0
+  local repo local_dir kind mode status notes canonical_mode bundle revision row_revision
+  while IFS=$'\t' read -r repo local_dir kind mode status notes; do
+    [[ -z "${repo:-}" || "$repo" == "repo" || "$repo" == \#* ]] && continue
+    [[ "$status" == "eligible" ]] || continue
+    canonical_mode="$(canonical_benchmark_mode "$mode")"
+    [[ "$canonical_mode" == "decode" || "$canonical_mode" == "speculative" || "$canonical_mode" == "eagle-mtp" ]] || continue
+
+    bundle="$EXPORTS/$local_dir"
+    [[ -d "$bundle" ]] || continue
+    [[ "$canonical_mode" != "speculative" || -d "$bundle/draft" ]] || continue
+    if [[ "$canonical_mode" == "eagle-mtp" ]]; then
+      [[ -d "$bundle/eagle_target.aimodel" && -d "$bundle/eagle_draft.aimodel" && -d "$bundle/tokenizer" ]] || continue
+    fi
+
+    revision="$(revision_for_repo "$repo")"
+    row_revision="$REPO_REVISION"
+    [[ -n "$revision" ]] && row_revision="$revision"
+    if [[ ! "$row_revision" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "error: measured benchmark row needs exact repo revision: $repo" >&2
+      errors=$((errors + 1))
+    fi
+  done < "$MANIFEST"
+
+  [[ "$errors" == "0" ]] || return 1
+}
+
 eagle_backbone_for_bundle() {
   local bundle="$1"
   local contract="$bundle/contract.txt"
@@ -139,6 +173,7 @@ heavy_task_guard() {
 }
 
 if [[ "$DRY_RUN" != "1" ]]; then
+  require_revision_for_measured_rows
   heavy_task_guard
 fi
 

@@ -104,8 +104,8 @@ The revisions file is a local run artifact and is ignored by default. It contain
 redhillsmediafl/rhm-qwen3-4b-caix<TAB><model-repo-commit>
 ```
 
-Rows measured without a revision stay non-publishable in the report. Re-run the collection step
-immediately before measuring if any model repo was updated.
+Non-dry-run suite rows refuse to measure without a 40-character model repo revision. Re-run the
+collection step immediately before measuring if any model repo was updated.
 
 ## Report Gate
 
@@ -120,7 +120,8 @@ scripts/benchmark-report.sh \
 The report script reads the suite summary and each measured model's raw `summary.tsv` and
 `metadata.txt`. It refuses missing raw logs and failed measured rows. Rows without a recorded model
 repo revision are marked `publishable=no`; do not copy those numbers into public docs. The report
-includes `benchmark_mode`; do not compare rows unless the mode and prompt settings match.
+includes `benchmark_mode` and refuses suite/model setting drift; do not compare rows unless the mode
+and prompt settings match.
 
 Run `scripts/check-benchmark-raw.sh` before committing raw benchmark logs. It checks clean run-start
 git status for new or changed raw dirs, pinned model repo revisions, suite/model metadata consistency,
