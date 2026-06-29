@@ -107,6 +107,20 @@ canonical_benchmark_mode() {
   esac
 }
 
+eagle_backbone_for_bundle() {
+  local bundle="$1"
+  local contract="$bundle/contract.txt"
+  local backbone=""
+  if [[ -f "$contract" ]]; then
+    backbone="$(sed -nE 's/.*hidden\[f16,1xNx([0-9]+)\].*/\1/p' "$contract" | head -1)"
+  fi
+  if [[ "$backbone" =~ ^[1-9][0-9]*$ ]]; then
+    printf '%s' "$backbone"
+  else
+    printf '2816'
+  fi
+}
+
 heavy_task_guard() {
   local lock="$REPO_DIR/.agent-heavy-task.lock"
   if [[ -e "$lock" && "$FORCE" != "1" ]]; then
@@ -198,6 +212,7 @@ while IFS=$'\t' read -r repo local_dir kind mode status notes; do
     row_revision="$REPO_REVISION"
     [[ -n "$revision" ]] && row_revision="$revision"
     if [[ "$is_eagle" == "1" ]]; then
+      eagle_backbone="$(eagle_backbone_for_bundle "$bundle")"
       cmd=("$SCRIPT_DIR/benchmark-eagle.sh"
         --package "$bundle"
         --name "$local_dir"
@@ -205,6 +220,7 @@ while IFS=$'\t' read -r repo local_dir kind mode status notes; do
         --repo-revision "$row_revision"
         --prompt "$PROMPT"
         --max-tokens "$MAX_TOKENS"
+        --backbone "$eagle_backbone"
         --warmup "$WARMUP"
         --runs "$RUNS"
         --out "$OUT_ROOT")
