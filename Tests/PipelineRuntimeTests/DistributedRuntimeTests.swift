@@ -337,6 +337,47 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertEqual(handles[1].inputs.first?.hiddenState?.metadata.shape, [1, 2, 1024])
     }
 
+    func testSameMachinePipelineBuildsFromManifestFactory() async throws {
+        let manifest = try DistributedStageManifest.decode(
+            from: Data(stageManifestJSON(modelKey: "model", includeTotalLayerCount: true).utf8),
+            baseURL: URL(fileURLWithPath: "/tmp/caix-manifest", isDirectory: true))
+        let handles = makeFakeHandles(for: manifest.runtimePlan)
+        let factory = FakeDistributedStageHandleFactory(handles: handles)
+
+        let pipeline = try await DistributedSameMachinePipeline.make(
+            manifest: manifest, handleFactory: factory)
+        try await pipeline.allocate(requestID: "req-factory", kvCapacity: 8)
+        let output = try await pipeline.forward(
+            requestID: "req-factory",
+            stepIndex: 0,
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 2),
+            tokenIDs: [21, 22])
+
+        XCTAssertEqual(factory.requestedStageIDs, manifest.stages.map(\.id))
+        XCTAssertEqual(factory.requestedAssetNames.first, "stages/00-embed.aimodel")
+        XCTAssertEqual(output.stageID, "head")
+        XCTAssertEqual(output.tokenID, 42)
+    }
+
+    func testSameMachinePipelineFactoryPropagatesMissingHandle() async throws {
+        let manifest = try DistributedStageManifest.decode(
+            from: Data(stageManifestJSON(modelKey: "model", includeTotalLayerCount: true).utf8),
+            baseURL: URL(fileURLWithPath: "/tmp/caix-manifest", isDirectory: true))
+        let handles = makeFakeHandles(for: manifest.runtimePlan).filter {
+            $0.descriptor.id != "layers-14-28"
+        }
+        let factory = FakeDistributedStageHandleFactory(handles: handles)
+
+        await XCTAssertThrowsErrorAsync(
+            try await DistributedSameMachinePipeline.make(
+                manifest: manifest, handleFactory: factory)
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .missingStageHandle("layers-14-28"))
+        }
+    }
+
     func testSameMachinePipelineRejectsMissingManifestHandle() throws {
         let manifest = try DistributedStageManifest.decode(
             from: Data(stageManifestJSON(modelKey: "model", includeTotalLayerCount: true).utf8),
@@ -573,6 +614,30 @@ private final class FakeDistributedStageHandle: DistributedStageHandle {
     func reset(requestID: String) async throws {}
 
     func free(requestID: String) async {}
+}
+
+private final class FakeDistributedStageHandleFactory: DistributedStageHandleFactory {
+    var requestedStageIDs: [String] = []
+    var requestedAssetNames: [String] = []
+    private let handlesByStageID: [String: FakeDistributedStageHandle]
+
+    init(handles: [FakeDistributedStageHandle]) {
+        self.handlesByStageID = Dictionary(uniqueKeysWithValues: handles.map {
+            ($0.descriptor.id, $0)
+        })
+    }
+
+    func makeStageHandle(
+        for stage: DistributedStageManifestStage,
+        in manifest: DistributedStageManifest
+    ) async throws -> DistributedStageHandle {
+        requestedStageIDs.append(stage.id)
+        requestedAssetNames.append(stage.assetName)
+        guard let handle = handlesByStageID[stage.id] else {
+            throw DistributedStageExecutionError.missingStageHandle(stage.id)
+        }
+        return handle
+    }
 }
 
 private func XCTAssertThrowsErrorAsync<T>(

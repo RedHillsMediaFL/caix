@@ -51,6 +51,7 @@ run "$SCRIPT_DIR/check-version-sync.sh"
 run "$SCRIPT_DIR/check-cleanup-safety.sh"
 run "$SCRIPT_DIR/check-conversion-ledger.sh"
 run "$SCRIPT_DIR/check-conversion-gap-audit.sh"
+run "$SCRIPT_DIR/check-cluster-plan.sh"
 run "$SCRIPT_DIR/check-benchmark-raw.sh"
 if [[ "$STRICT_BENCHMARK_GAPS" == "1" ]]; then
   run "$SCRIPT_DIR/check-benchmark-gaps.sh" --strict

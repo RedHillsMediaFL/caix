@@ -39,9 +39,9 @@ This is blunt on purpose. Where the current code cannot do something, it says so
     `metadata.json` cluster blocks, including hidden-state boundary tensor metadata.
   - `DistributedHiddenStatePacket`, `DistributedStageHandle`, and
     `DistributedSameMachinePipeline` — an in-process coordinator harness tested with fake
-    stages. It can be built from a `DistributedStageManifest` plus stage-handle map, then
-    validates stage order, packet routes, boundary tensor shape/dtype, payload byte counts, and
-    final-token handoff without loading Core AI models.
+    stages. It can be built from a `DistributedStageManifest` plus stage-handle map or
+    stage-handle factory, then validates stage order, packet routes, boundary tensor shape/dtype,
+    payload byte counts, and final-token handoff without loading Core AI models.
 - A dry-run planner CLI (`Sources/PipelineCLI/Cluster.swift`, wired in `main.swift`):
   `caix cluster plan --manifest … | --model …` with greedy worker assignment. Manifest schema
   `caix.cluster.stage_manifest.v0` documented in `docs/CLUSTER.md`. JSON output includes a

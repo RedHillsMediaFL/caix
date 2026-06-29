@@ -1024,6 +1024,13 @@ public protocol DistributedStageHandle: AnyObject {
     func free(requestID: String) async
 }
 
+public protocol DistributedStageHandleFactory {
+    func makeStageHandle(
+        for stage: DistributedStageManifestStage,
+        in manifest: DistributedStageManifest
+    ) async throws -> DistributedStageHandle
+}
+
 public enum DistributedStageExecutionError: Error, Equatable, Sendable, CustomStringConvertible {
     case stageCountMismatch(expected: Int, actual: Int)
     case stageDescriptorMismatch(expected: String, actual: String)
@@ -1089,6 +1096,18 @@ public final class DistributedSameMachinePipeline {
             return handle
         }
         try self.init(plan: manifest.runtimePlan, stages: orderedHandles)
+    }
+
+    public static func make(
+        manifest: DistributedStageManifest,
+        handleFactory: DistributedStageHandleFactory
+    ) async throws -> DistributedSameMachinePipeline {
+        var handles: [DistributedStageHandle] = []
+        handles.reserveCapacity(manifest.stages.count)
+        for stage in manifest.stages {
+            handles.append(try await handleFactory.makeStageHandle(for: stage, in: manifest))
+        }
+        return try DistributedSameMachinePipeline(plan: manifest.runtimePlan, stages: handles)
     }
 
     public func allocate(requestID: String, kvCapacity: Int) async throws {

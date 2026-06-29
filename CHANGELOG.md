@@ -18,6 +18,8 @@
 - Added staged hidden-state boundary tensor metadata to the distributed manifest contract.
 - Added boundary tensor validation to `DistributedStagePlan` packet checks.
 - Added manifest-backed construction for the same-machine distributed pipeline harness.
+- Added a manifest stage-handle factory path for future Core AI staged execution.
+- Added the cluster-plan contract check to publication gates.
 - Added fail-closed `caix cluster join` and `caix serve --cluster` CLI stubs for Brew surface tests.
 - Expanded the Homebrew formula test to cover distributed plan/join help and `serve --cluster`.
 - Added a same-machine distributed stage-handle harness with fake-stage tests.
