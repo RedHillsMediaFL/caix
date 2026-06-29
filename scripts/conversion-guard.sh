@@ -54,6 +54,13 @@ EOF
   esac
 done
 
+case "$interval" in
+  ''|*[!0-9]*|0)
+    echo "error: --interval must be a positive integer" >&2
+    exit 2
+    ;;
+esac
+
 process_table() {
   if [ -n "${caix_test_process_table-}" ]; then
     printf '%s\n' "$caix_test_process_table"
