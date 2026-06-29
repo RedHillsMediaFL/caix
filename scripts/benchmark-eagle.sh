@@ -229,6 +229,39 @@ run_one() {
   [[ "$status" == "ok" ]]
 }
 
+verify_measured_runs() {
+  local measured failed generated_kinds first_stdout="" stdout_path
+  measured="$(awk -F '\t' 'NR > 1 && $1 == "measured" && $3 == "ok" { n++ } END { print n + 0 }' "$OUT_DIR/summary.tsv")"
+  failed="$(awk -F '\t' 'NR > 1 && $1 == "measured" && $3 != "ok" { n++ } END { print n + 0 }' "$OUT_DIR/summary.tsv")"
+  if [[ "$failed" != "0" ]]; then
+    echo "error: measured failures for $REPO: $failed" >&2
+    return 1
+  fi
+  if [[ "$measured" != "$RUNS" ]]; then
+    echo "error: measured run count mismatch for $REPO: summary=$measured metadata=$RUNS" >&2
+    return 1
+  fi
+  if awk -F '\t' 'NR > 1 && $1 == "measured" && $3 == "ok" && ($4 !~ /^[0-9]+$/ || $5 !~ /^[0-9]+([.][0-9]+)?$/ || $6 !~ /^[0-9]+([.][0-9]+)?$/ || $7 !~ /^[0-9]+([.][0-9]+)?$/ || $8 !~ /^[0-9]+([.][0-9]+)?$/) { bad = 1 } END { exit bad ? 0 : 1 }' "$OUT_DIR/summary.tsv"; then
+    echo "error: measured summary metrics are incomplete for $REPO" >&2
+    return 1
+  fi
+  generated_kinds="$(awk -F '\t' 'NR > 1 && $1 == "measured" && $3 == "ok" { seen[$4] = 1 } END { for (value in seen) n++; print n + 0 }' "$OUT_DIR/summary.tsv")"
+  if [[ "$generated_kinds" != "1" ]]; then
+    echo "error: measured generated-token count is not stable for $REPO" >&2
+    return 1
+  fi
+  while IFS=$'\t' read -r _phase _run _status _generated _load _prefill _decode _tps stdout_path _stderr; do
+    [[ "$_phase" == "measured" && "$_status" == "ok" ]] || continue
+    [[ -f "$stdout_path" ]] || { echo "error: measured stdout missing for $REPO: $stdout_path" >&2; return 1; }
+    if [[ -z "$first_stdout" ]]; then
+      first_stdout="$stdout_path"
+    elif ! cmp -s "$first_stdout" "$stdout_path"; then
+      echo "error: measured stdout differs for $REPO: $first_stdout vs $stdout_path" >&2
+      return 1
+    fi
+  done < "$OUT_DIR/summary.tsv"
+}
+
 for ((i = 1; i <= WARMUP; i++)); do
   run_one warmup "$i"
 done
@@ -236,4 +269,5 @@ for ((i = 1; i <= RUNS; i++)); do
   run_one measured "$i"
 done
 
+verify_measured_runs
 echo "$OUT_DIR"
