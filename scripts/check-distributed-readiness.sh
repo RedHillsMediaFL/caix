@@ -110,7 +110,9 @@ check_manifest_consistency() {
   local same_machine_file="$1"
   local loopback_file="$2"
 
-  [[ -s "$same_machine_file" && -s "$loopback_file" ]] || return
+  if [[ ! -s "$same_machine_file" || ! -s "$loopback_file" ]]; then
+    return 0
+  fi
 
   local same_machine_manifest loopback_manifest
   same_machine_manifest="$(evidence_value manifest "$same_machine_file")"
