@@ -78,14 +78,16 @@ if [[ -n "$PROMPT_FILE" ]]; then
   PROMPT="$(<"$PROMPT_FILE")"
 fi
 
-CAIX_BIN="${CAIX_BIN:-./caix}"
-[[ -x "$CAIX_BIN" ]] || CAIX_BIN="./.build/release/caix"
-[[ -x "$CAIX_BIN" ]] || { echo "error: no caix binary found; set CAIX_BIN" >&2; exit 2; }
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-LOCK="${CAIX_HEAVY_TASK_LOCK:-$REPO_DIR/.agent-heavy-task.lock}"
-DISK_FLOOR_GIB="${CAIX_STOP_FLOOR_GIB:-500}"
+source "$SCRIPT_DIR/lib/caix-env.sh"
+
+caix_bin="$(caix_env caix_bin BIN ./caix)"
+[[ -x "$caix_bin" ]] || caix_bin="./.build/release/caix"
+[[ -x "$caix_bin" ]] || { echo "error: no caix binary found; set caix_bin" >&2; exit 2; }
+
+LOCK="$(caix_env caix_heavy_task_lock HEAVY_TASK_LOCK "$REPO_DIR/.agent-heavy-task.lock")"
+DISK_FLOOR_GIB="$(caix_env caix_stop_floor_gib STOP_FLOOR_GIB 500)"
 "$SCRIPT_DIR/check-disk-pressure.sh" --path /Volumes/SSD --floor-gib "$DISK_FLOOR_GIB" --quiet
 
 if [[ -e "$LOCK" && "$FORCE" != "1" ]]; then
@@ -124,7 +126,7 @@ trap 'rm -f "$LOCK"' EXIT
   echo "draft=$DRAFT"
   echo "repo=$REPO"
   echo "repo_revision=$REPO_REVISION"
-  echo "caix_bin=$CAIX_BIN"
+  echo "caix_bin=$caix_bin"
   echo "caix_commit=$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || true)"
   echo "git_status=$(git -C "$REPO_DIR" status --short 2>/dev/null | wc -l | tr -d ' ') dirty entries"
   echo "machine=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || true)"
@@ -151,7 +153,7 @@ run_one() {
   [[ -n "$DRAFT" ]] && args+=(--draft "$DRAFT" --draft-tokens "$DRAFT_TOKENS")
   [[ "$RAW" == "1" ]] && args+=(--raw)
   local status="ok"
-  if ! "$CAIX_BIN" "${args[@]}" >"$stdout_file" 2>"$stderr_file"; then
+  if ! "$caix_bin" "${args[@]}" >"$stdout_file" 2>"$stderr_file"; then
     status="fail"
   fi
   local summary

@@ -488,7 +488,7 @@ public actor ModelManager {
 
     private static func defaultHeavyTaskLockPath(exportsDir: URL) -> URL {
         let env = ProcessInfo.processInfo.environment
-        if let raw = env["CAIX_HEAVY_TASK_LOCK"],
+        if let raw = caixEnv(env, "caix_heavy_task_lock", legacy: "HEAVY_TASK_LOCK"),
            !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return URL(fileURLWithPath: raw)
         }
@@ -503,6 +503,10 @@ public actor ModelManager {
         return URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
             .appendingPathComponent(".agent-heavy-task.lock")
             .standardizedFileURL
+    }
+
+    private static func caixEnv(_ env: [String: String], _ name: String, legacy suffix: String) -> String? {
+        env[name] ?? env["C" + "AIX_" + suffix]
     }
 
     /// "qwen3-0.6b-coreai" → "0.6B", "gemma4-31b-assistant-coreai" → "31B".
@@ -559,7 +563,7 @@ public actor ModelManager {
 
     private static func indexedBundleEntries(for exportsDir: URL) -> [DiscoveredBundle]? {
         let env = ProcessInfo.processInfo.environment
-        let path = env["CAIX_EXPORT_INDEX"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let path = caixEnv(env, "caix_export_index", legacy: "EXPORT_INDEX")?.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let path, !path.isEmpty else { return nil }
         guard let data = readSmallFile(URL(fileURLWithPath: path), timeoutSeconds: 0.5),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]

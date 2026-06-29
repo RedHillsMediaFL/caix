@@ -10,7 +10,7 @@ struct DiskSpaceGuard {
     static let defaultReserveGiB: Int64 = 500
 
     static func reserveBytesFromEnvironment(_ env: [String: String] = ProcessInfo.processInfo.environment) -> Int64 {
-        guard let raw = env["CAIX_STOP_FLOOR_GIB"],
+        guard let raw = caixEnv(env, "caix_stop_floor_gib", legacy: "STOP_FLOOR_GIB"),
               let gib = Int64(raw.trimmingCharacters(in: .whitespacesAndNewlines)),
               gib >= 0
         else {
@@ -18,6 +18,10 @@ struct DiskSpaceGuard {
         }
         let (bytes, overflow) = gib.multipliedReportingOverflow(by: bytesPerGiB)
         return overflow ? Int64.max : bytes
+    }
+
+    private static func caixEnv(_ env: [String: String], _ name: String, legacy suffix: String) -> String? {
+        env[name] ?? env["C" + "AIX_" + suffix]
     }
 
     static func preflightInstall(

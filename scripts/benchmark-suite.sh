@@ -31,7 +31,9 @@ USAGE
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-LOCK="${CAIX_HEAVY_TASK_LOCK:-$REPO_DIR/.agent-heavy-task.lock}"
+source "$SCRIPT_DIR/lib/caix-env.sh"
+
+LOCK="$(caix_env caix_heavy_task_lock HEAVY_TASK_LOCK "$REPO_DIR/.agent-heavy-task.lock")"
 
 MANIFEST="$REPO_DIR/benchmarks/MANIFEST.tsv"
 REVISIONS=""
@@ -83,7 +85,7 @@ if [[ -n "$PROMPT_FILE" ]]; then
   PROMPT="$(<"$PROMPT_FILE")"
 fi
 
-DISK_FLOOR_GIB="${CAIX_STOP_FLOOR_GIB:-500}"
+DISK_FLOOR_GIB="$(caix_env caix_stop_floor_gib STOP_FLOOR_GIB 500)"
 "$SCRIPT_DIR/check-disk-pressure.sh" --path /Volumes/SSD --floor-gib "$DISK_FLOOR_GIB" --quiet
 
 revision_for_repo() {
@@ -135,6 +137,10 @@ heavy_task_guard() {
     return 2
   fi
 }
+
+if [[ "$DRY_RUN" != "1" ]]; then
+  heavy_task_guard
+fi
 
 STAMP="$(date '+%Y%m%d-%H%M%S')"
 SUITE_DIR="$OUT_ROOT/$STAMP-suite"

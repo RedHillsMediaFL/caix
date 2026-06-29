@@ -6,6 +6,7 @@
 #   ./caix --help
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$DIR/scripts/lib/caix-env.sh"
 
 # Prefer a prebuilt release binary (bin/caix), else the locally-built one, else build from source.
 if   [ -x "$DIR/bin/caix" ];               then BIN="$DIR/bin/caix"
@@ -19,9 +20,10 @@ fi
 # Serve the bundled web UI + converter + model registry from this checkout by default.
 if [ "${1:-}" = "serve" ]; then
   shift
+  caix_exports="$(caix_env caix_exports EXPORTS "$DIR/models/exports")"
   exec "$BIN" serve \
     --web "$DIR/web" \
-    --exports "${CAIX_EXPORTS:-$DIR/models/exports}" \
+    --exports "$caix_exports" \
     --registry "$DIR/models/registry.json" \
     --convert-script "$DIR/python/converter/convert.py" \
     "$@"

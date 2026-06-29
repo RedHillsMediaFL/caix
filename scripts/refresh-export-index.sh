@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-exports_dir="${1:-${CAIX_EXPORTS:-$PWD/exports}}"
-index_path="${2:-${CAIX_EXPORT_INDEX:-$HOME/coreai-server/export-index.json}}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/caix-env.sh"
+
+exports_dir="${1:-$(caix_env caix_exports EXPORTS "$PWD/exports")}"
+index_path="${2:-$(caix_env caix_export_index EXPORT_INDEX "$HOME/coreai-server/export-index.json")}"
 
 python3 - "$exports_dir" "$index_path" <<'PY'
 import json

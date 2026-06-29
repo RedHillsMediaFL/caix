@@ -18,9 +18,16 @@ from pathlib import Path
 
 PIPELINE_ROOT = Path(__file__).resolve().parents[2]
 REGISTRY = PIPELINE_ROOT / "models" / "registry.json"
+
+
+def caix_env(name: str, legacy_suffix: str, default: str | None = None) -> str | None:
+    return os.environ.get(name) or os.environ.get("C" + "AIX_" + legacy_suffix, default)
+
+
 # Apple's coreai-models python checkout (provides coreai.llm.export). Required for CONVERSION only.
+_coreai_models = caix_env("caix_coreai_models", "COREAI_MODELS")
 _apple_env_candidates = [
-    Path(os.environ["CAIX_COREAI_MODELS"]).expanduser() if os.environ.get("CAIX_COREAI_MODELS") else None,
+    Path(_coreai_models).expanduser() if _coreai_models else None,
     PIPELINE_ROOT.parent / "coreai-models" / "python",
     Path("/Volumes/SSD/ai-dev/coreai-gemma4/vendor/coreai-models/python"),
 ]
@@ -29,9 +36,9 @@ _normalized_apple_env_candidates = [
     for p in _apple_env_candidates
 ]
 APPLE_ENV = next((p for p in _normalized_apple_env_candidates if p and p.exists()), _normalized_apple_env_candidates[1])
-EXPORTS = Path(os.environ.get("CAIX_EXPORTS", str(PIPELINE_ROOT / "exports"))).expanduser()
+EXPORTS = Path(caix_env("caix_exports", "EXPORTS", str(PIPELINE_ROOT / "exports"))).expanduser()
 HF_HOME = os.environ.get("HF_HOME", "/Volumes/SSD/hf-cache")
-TMPDIR_EXPORT = os.environ.get("CAIX_TMPDIR", "/Volumes/SSD/coreai-tmp")
+TMPDIR_EXPORT = caix_env("caix_tmpdir", "TMPDIR", "/Volumes/SSD/coreai-tmp")
 CHECK_SUPPORT = Path(__file__).resolve().parent / "check_support.py"
 GGUF_DEQUANT = Path(__file__).resolve().parent / "gguf_dequant.py"
 

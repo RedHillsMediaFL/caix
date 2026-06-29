@@ -3,14 +3,16 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-CAIX_BIN="${CAIX_BIN:-$REPO_DIR/.build/debug/caix}"
+source "$SCRIPT_DIR/lib/caix-env.sh"
+
+caix_bin="$(caix_env caix_bin BIN "$REPO_DIR/.build/debug/caix")"
 MANIFEST="${1:-$REPO_DIR/docs/examples/cluster-stage-manifest.json}"
 
-if [[ ! -x "$CAIX_BIN" ]]; then
+if [[ ! -x "$caix_bin" ]]; then
   swift build --product caix >/dev/null
 fi
 
-json="$("$CAIX_BIN" cluster plan \
+json="$("$caix_bin" cluster plan \
   --manifest "$MANIFEST" \
   --workers main=4,mini=2 \
   --json)"

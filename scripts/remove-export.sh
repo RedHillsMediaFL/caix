@@ -11,8 +11,10 @@ USAGE
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$SCRIPT_DIR/lib/caix-env.sh"
+
 EXPORTS="$REPO_DIR/models/exports"
-LOCK="${CAIX_HEAVY_TASK_LOCK:-$REPO_DIR/.agent-heavy-task.lock}"
+LOCK="$(caix_env caix_heavy_task_lock HEAVY_TASK_LOCK "$REPO_DIR/.agent-heavy-task.lock")"
 DRY_RUN=0
 NAME=""
 
