@@ -2,6 +2,7 @@
   "schema": "caix.cluster.stage_manifest.v0",
   "model": "qwen3-0.6b-coreai",
   "total_layer_count": 28,
+  "position_mode": "full_prefix",
   "boundary": {
     "hidden_state": {
       "name": "hidden_states",

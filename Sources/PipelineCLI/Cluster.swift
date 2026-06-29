@@ -37,6 +37,7 @@ private struct ClusterPlanSource {
     var totalLayerCountDerived: Bool
     var stages: [ClusterPlanStage]
     var boundaryTensor: DistributedBoundaryTensorSpec?
+    var positionMode: DistributedPositionMode
     var runtimePlan: DistributedStagePlan
 }
 
@@ -53,6 +54,7 @@ struct ClusterPlanOutput: Codable {
     var totalLayerCount: Int
     var stages: [ClusterPlanStage]
     var boundaryTensor: DistributedBoundaryTensorSpec?
+    var positionMode: DistributedPositionMode
     var workers: [ClusterWorkerBudget]
     var assignments: [ClusterAssignment]
     var runtimePlan: DistributedStagePlan
@@ -66,6 +68,7 @@ struct ClusterPlanOutput: Codable {
         case totalLayerCount = "total_layer_count"
         case stages
         case boundaryTensor = "boundary_tensor"
+        case positionMode = "position_mode"
         case workers
         case assignments
         case runtimePlan = "runtime_plan"
@@ -268,6 +271,7 @@ private func clusterPlanCommand(_ argv: [String]) {
             totalLayerCount: planSource.totalLayerCount,
             stages: stages,
             boundaryTensor: planSource.boundaryTensor,
+            positionMode: planSource.positionMode,
             workers: workers,
             assignments: assignments,
             runtimePlan: runtimePlan,
@@ -339,6 +343,7 @@ private func loadClusterPlanSource(
         totalLayerCountDerived: manifest.totalLayerCountDerived,
         stages: stages,
         boundaryTensor: manifest.boundaryTensor,
+        positionMode: manifest.positionMode,
         runtimePlan: manifest.runtimePlan)
 }
 
@@ -415,6 +420,7 @@ private func renderClusterPlan(_ output: ClusterPlanOutput) -> String {
         "cluster plan (dry-run): \(output.source)",
         "model: \(output.modelName)",
         "total layers: \(output.totalLayerCount)",
+        "position mode: \(output.positionMode.rawValue)",
         "stages: \(output.stages.count)",
     ]
     if output.workers.isEmpty {

@@ -166,8 +166,8 @@ Rules carried over unchanged from the monolithic contract:
   inside each decoder layer; the mask window is the `position_ids` length. The coordinator
   computes `position_ids` exactly as `LLMEngine` does and sends the **identical** array to
   every stage on every step.
-- All stages agree on position mode (full prefix vs current window). The coordinator honors
-  the mode the shards were exported with; mixing modes silently corrupts RoPE.
+- All stages agree on `position_mode` (`full_prefix` vs `current`). The coordinator honors
+  the mode recorded in the staged manifest; mixing modes silently corrupts RoPE.
 - KV capacity is allocated once per request per stage, floored to that stage's KV floor —
   identical math to `LLMEngine.resolvedCapacity` / `allocateKVCache` (`LLMEngine.swift:546-566`).
 - `H` (`hidden_size`) is fixed across all boundaries. The boundary tensor rank is always 3
@@ -415,8 +415,8 @@ add transport, per §4/§5/§7.
   exporter still needs to materialize a host-readable boundary.
 - **Staged exporter handoff.** The runtime and CLI can load staged manifests, but current exports
   still do not record staged metadata. The exporter must write `cluster.stages`,
-  `total_layer_count`, stage asset names, and boundary tensor metadata before same-machine staged
-  equivalence can run.
+  `total_layer_count`, `position_mode`, stage asset names, and boundary tensor metadata before
+  same-machine staged equivalence can run.
 - **`AIModel.specialize` cache keying.** Does the `.default` compile cache key cleanly per
   stage graph, or do same-named functions (`main`/`decode`) across stage bundles collide?
   Settle during 9.2.

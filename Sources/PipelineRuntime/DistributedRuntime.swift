@@ -12,6 +12,32 @@ public enum DistributedStageRole: String, Codable, CaseIterable, Sendable {
     }
 }
 
+/// Position-id contract used by a staged export.
+public enum DistributedPositionMode: String, Codable, CaseIterable, Sendable {
+    case current
+    case fullPrefix = "full_prefix"
+
+    public func positionIDs(for positionRange: DistributedSequenceRange) throws -> [Int32] {
+        guard positionRange.isValid else {
+            throw DistributedStageExecutionError.invalidForwardInput("position_range is invalid")
+        }
+        let range: Range<Int>
+        switch self {
+        case .current:
+            range = positionRange.lowerBound..<positionRange.upperBound
+        case .fullPrefix:
+            range = 0..<positionRange.upperBound
+        }
+        guard range.lowerBound >= Int(Int32.min),
+            range.upperBound <= Int(Int32.max)
+        else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "position_ids exceed Int32 range")
+        }
+        return range.map { Int32($0) }
+    }
+}
+
 /// Half-open transformer layer range: `lowerBound ..< upperBound`.
 public struct DistributedLayerRange: Codable, Hashable, Sendable, CustomStringConvertible {
     public let lowerBound: Int
@@ -307,6 +333,7 @@ public struct DistributedStageManifest: Hashable, Sendable {
     public let totalLayerCountDerived: Bool
     public let stages: [DistributedStageManifestStage]
     public let boundaryTensor: DistributedBoundaryTensorSpec?
+    public let positionMode: DistributedPositionMode
     public let runtimePlan: DistributedStagePlan
 
     public init(
@@ -315,7 +342,8 @@ public struct DistributedStageManifest: Hashable, Sendable {
         totalLayerCount: Int,
         totalLayerCountDerived: Bool = false,
         stages: [DistributedStageManifestStage],
-        boundaryTensor: DistributedBoundaryTensorSpec? = nil
+        boundaryTensor: DistributedBoundaryTensorSpec? = nil,
+        positionMode: DistributedPositionMode = .current
     ) throws {
         self.schema = schema
         self.modelName = modelName
@@ -323,13 +351,15 @@ public struct DistributedStageManifest: Hashable, Sendable {
         self.totalLayerCountDerived = totalLayerCountDerived
         self.stages = stages
         self.boundaryTensor = boundaryTensor
+        self.positionMode = positionMode
         try boundaryTensor?.validate()
         self.runtimePlan = DistributedStagePlan(
             modelName: modelName,
             totalLayerCount: totalLayerCount,
             stages: stages.map { $0.descriptor() },
             workers: [],
-            boundaryTensor: boundaryTensor)
+            boundaryTensor: boundaryTensor,
+            positionMode: positionMode)
         try self.runtimePlan.validate()
     }
 
@@ -419,7 +449,9 @@ public struct DistributedStageManifest: Hashable, Sendable {
             totalLayerCountDerived: totalLayerCountDerived,
             stages: stages,
             boundaryTensor: body.boundary?.hiddenState ?? body.boundaryTensor
-                ?? root.boundary?.hiddenState ?? root.boundaryTensor)
+                ?? root.boundary?.hiddenState ?? root.boundaryTensor,
+            positionMode: body.positionMode ?? body.positionModeCamel ?? root.positionMode
+                ?? root.positionModeCamel ?? .current)
     }
 
     private static func normalizeStage(
@@ -572,6 +604,8 @@ private struct RawDistributedStageManifestRoot: Decodable {
     let stages: [RawDistributedStageManifestStage]?
     let boundary: RawDistributedBoundaryBlock?
     let boundaryTensor: DistributedBoundaryTensorSpec?
+    let positionMode: DistributedPositionMode?
+    let positionModeCamel: DistributedPositionMode?
 
     enum CodingKeys: String, CodingKey {
         case schema
@@ -584,6 +618,8 @@ private struct RawDistributedStageManifestRoot: Decodable {
         case stages
         case boundary
         case boundaryTensor = "boundary_tensor"
+        case positionMode = "position_mode"
+        case positionModeCamel = "positionMode"
     }
 
     var asBody: RawDistributedStageManifestBody {
@@ -595,7 +631,9 @@ private struct RawDistributedStageManifestRoot: Decodable {
             totalLayers: totalLayers,
             stages: stages,
             boundary: boundary,
-            boundaryTensor: boundaryTensor)
+            boundaryTensor: boundaryTensor,
+            positionMode: positionMode,
+            positionModeCamel: positionModeCamel)
     }
 }
 
@@ -608,6 +646,8 @@ private struct RawDistributedStageManifestBody: Decodable {
     let stages: [RawDistributedStageManifestStage]?
     let boundary: RawDistributedBoundaryBlock?
     let boundaryTensor: DistributedBoundaryTensorSpec?
+    let positionMode: DistributedPositionMode?
+    let positionModeCamel: DistributedPositionMode?
 
     enum CodingKeys: String, CodingKey {
         case schema
@@ -618,6 +658,8 @@ private struct RawDistributedStageManifestBody: Decodable {
         case stages
         case boundary
         case boundaryTensor = "boundary_tensor"
+        case positionMode = "position_mode"
+        case positionModeCamel = "positionMode"
     }
 }
 
@@ -922,6 +964,7 @@ public struct DistributedStagePlan: Codable, Hashable, Sendable {
     public let stages: [DistributedStageDescriptor]
     public let workers: [DistributedWorkerEndpoint]
     public let boundaryTensor: DistributedBoundaryTensorSpec?
+    public let positionMode: DistributedPositionMode
 
     enum CodingKeys: String, CodingKey {
         case modelName = "model_name"
@@ -929,6 +972,7 @@ public struct DistributedStagePlan: Codable, Hashable, Sendable {
         case stages
         case workers
         case boundaryTensor = "boundary_tensor"
+        case positionMode = "position_mode"
     }
 
     public init(
@@ -936,13 +980,41 @@ public struct DistributedStagePlan: Codable, Hashable, Sendable {
         totalLayerCount: Int,
         stages: [DistributedStageDescriptor],
         workers: [DistributedWorkerEndpoint] = [],
-        boundaryTensor: DistributedBoundaryTensorSpec? = nil
+        boundaryTensor: DistributedBoundaryTensorSpec? = nil,
+        positionMode: DistributedPositionMode = .current
     ) {
         self.modelName = modelName
         self.totalLayerCount = totalLayerCount
         self.stages = stages
         self.workers = workers
         self.boundaryTensor = boundaryTensor
+        self.positionMode = positionMode
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.modelName = try container.decode(String.self, forKey: .modelName)
+        self.totalLayerCount = try container.decode(Int.self, forKey: .totalLayerCount)
+        self.stages = try container.decode([DistributedStageDescriptor].self, forKey: .stages)
+        self.workers = try container.decodeIfPresent(
+            [DistributedWorkerEndpoint].self,
+            forKey: .workers) ?? []
+        self.boundaryTensor = try container.decodeIfPresent(
+            DistributedBoundaryTensorSpec.self,
+            forKey: .boundaryTensor)
+        self.positionMode = try container.decodeIfPresent(
+            DistributedPositionMode.self,
+            forKey: .positionMode) ?? .current
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(modelName, forKey: .modelName)
+        try container.encode(totalLayerCount, forKey: .totalLayerCount)
+        try container.encode(stages, forKey: .stages)
+        try container.encode(workers, forKey: .workers)
+        try container.encodeIfPresent(boundaryTensor, forKey: .boundaryTensor)
+        try container.encode(positionMode, forKey: .positionMode)
     }
 
     public func stage(id: String) -> DistributedStageDescriptor? {
@@ -1249,9 +1321,10 @@ public struct DistributedStageForwardFrame: Codable, Hashable, Sendable {
         guard positionRange.isValid else {
             throw DistributedStageExecutionError.invalidForwardInput("position_range is invalid")
         }
-        guard positionIDs.count == positionRange.count else {
+        let expectedPositionIDs = try plan.positionMode.positionIDs(for: positionRange)
+        guard positionIDs == expectedPositionIDs else {
             throw DistributedStageExecutionError.invalidForwardInput(
-                "position_ids count must match position_range")
+                "position_ids do not match \(plan.positionMode.rawValue) position_mode")
         }
         guard let descriptor = plan.stage(id: stageID) else {
             throw DistributedStageExecutionError.invalidForwardInput("unknown stage_id \(stageID)")
@@ -2476,7 +2549,7 @@ public final class DistributedSameMachinePipeline {
 
         var hiddenState: DistributedHiddenStatePacket?
         var tokenID: Int32?
-        let positionIDs = try Self.positionIDs(for: positionRange)
+        let positionIDs = try plan.positionMode.positionIDs(for: positionRange)
         let firstFrame = DistributedStageForwardFrame(
             stageID: stages.first!.descriptor.id,
             requestID: requestID,
@@ -2511,18 +2584,6 @@ public final class DistributedSameMachinePipeline {
             stepIndex: stepIndex,
             hiddenState: hiddenState,
             tokenID: tokenID)
-    }
-
-    private static func positionIDs(
-        for positionRange: DistributedSequenceRange
-    ) throws -> [Int32] {
-        guard positionRange.lowerBound >= Int(Int32.min),
-            positionRange.upperBound <= Int(Int32.max)
-        else {
-            throw DistributedStageExecutionError.invalidForwardInput(
-                "position_ids exceed Int32 range")
-        }
-        return (positionRange.lowerBound..<positionRange.upperBound).map { Int32($0) }
     }
 
     public func reset(requestID: String) async throws {

@@ -42,6 +42,10 @@ if runtime.get("model_name") != doc["model_name"]:
     fail("runtime_plan model_name drift")
 if runtime.get("total_layer_count") != doc["total_layer_count"]:
     fail("runtime_plan total_layer_count drift")
+if doc.get("position_mode") != "full_prefix":
+    fail("unexpected position_mode")
+if runtime.get("position_mode") != doc["position_mode"]:
+    fail("runtime_plan position_mode drift")
 
 boundary = doc.get("boundary_tensor")
 if not isinstance(boundary, dict):

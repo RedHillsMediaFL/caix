@@ -1866,6 +1866,7 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertTrue(json.contains(#""layer_range""#))
         XCTAssertTrue(json.contains(#""worker_id""#))
         XCTAssertTrue(json.contains(#""boundary_tensor""#))
+        XCTAssertTrue(json.contains(#""position_mode""#))
 
         let decoded = try JSONDecoder().decode(DistributedStagePlan.self, from: data)
         XCTAssertEqual(decoded, plan)
@@ -1912,7 +1913,9 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertEqual(manifest.boundaryTensor?.name, "hidden_states")
         XCTAssertEqual(manifest.boundaryTensor?.shape, [1, -1, 1024])
         XCTAssertEqual(manifest.boundaryTensor?.scalarType, .float16)
+        XCTAssertEqual(manifest.positionMode, .fullPrefix)
         XCTAssertEqual(manifest.runtimePlan.boundaryTensor, manifest.boundaryTensor)
+        XCTAssertEqual(manifest.runtimePlan.positionMode, .fullPrefix)
         XCTAssertEqual(
             manifest.stages[1].resolvedAssetPath,
             "/tmp/caix-manifest/stages/01-layers-00-14.aimodel")
@@ -1940,6 +1943,7 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertEqual(manifest.totalLayerCount, 28)
         XCTAssertTrue(manifest.totalLayerCountDerived)
         XCTAssertEqual(manifest.boundaryTensor?.shape, [1, -1, 1024])
+        XCTAssertEqual(manifest.runtimePlan.positionMode, .fullPrefix)
         XCTAssertEqual(manifest.runtimePlan.stages[2].layerRange, DistributedLayerRange(lowerBound: 14, upperBound: 28))
     }
 
@@ -2390,6 +2394,28 @@ final class DistributedRuntimeTests: XCTestCase {
         ])
     }
 
+    func testStagedEngineUsesFullPrefixPositionMode() async throws {
+        let plan = makePlan(positionMode: .fullPrefix)
+        let handles = makeFakeHandles(for: plan)
+        let pipeline = try DistributedSameMachinePipeline(plan: plan, stages: handles)
+        let engine = try DistributedStagedEngine(pipeline: pipeline, maxContextLength: 16)
+
+        let result = try await engine.generate(
+            promptTokens: [10, 11],
+            options: DistributedStagedGenerationOptions(maxTokens: 2),
+            requestID: "req-full-prefix")
+
+        XCTAssertEqual(result.generatedTokenIDs, [42, 42])
+        XCTAssertEqual(
+            handles[0].inputs.map(\.positionRange),
+            [
+                DistributedSequenceRange(lowerBound: 0, upperBound: 2),
+                DistributedSequenceRange(lowerBound: 2, upperBound: 3),
+            ])
+        XCTAssertEqual(handles[0].inputs.map(\.positionIDs), [[0, 1], [0, 1, 2]])
+        XCTAssertEqual(handles[1].inputs.map(\.positionIDs), [[0, 1], [0, 1, 2]])
+    }
+
     func testStagedEngineStopsBeforeAppendingStopToken() async throws {
         let plan = makePlan()
         let handles = makeFakeHandles(for: plan)
@@ -2529,7 +2555,8 @@ final class DistributedRuntimeTests: XCTestCase {
     private func makePlan(
         stages: [DistributedStageDescriptor]? = nil,
         workers: [DistributedWorkerEndpoint]? = nil,
-        boundaryTensor: DistributedBoundaryTensorSpec? = nil
+        boundaryTensor: DistributedBoundaryTensorSpec? = nil,
+        positionMode: DistributedPositionMode = .current
     ) -> DistributedStagePlan {
         DistributedStagePlan(
             modelName: "qwen3-0.6b-coreai",
@@ -2551,7 +2578,8 @@ final class DistributedRuntimeTests: XCTestCase {
                 DistributedWorkerEndpoint(id: "worker-a", host: "127.0.0.1", port: 9011),
                 DistributedWorkerEndpoint(id: "worker-b", host: "127.0.0.1", port: 9012),
             ],
-            boundaryTensor: boundaryTensor)
+            boundaryTensor: boundaryTensor,
+            positionMode: positionMode)
     }
 
     private func stage(
@@ -2590,6 +2618,7 @@ final class DistributedRuntimeTests: XCTestCase {
               "schema": "\(DistributedStageManifest.currentSchema)",
               \(modelLine)
               \(totalLine)
+              "position_mode": "full_prefix",
               "boundary": {
                 "hidden_state": {
                   "name": "hidden_states",

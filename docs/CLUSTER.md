@@ -53,6 +53,7 @@ Use top-level `stages` in a standalone manifest. A copyable example lives at
   "schema": "caix.cluster.stage_manifest.v0",
   "model": "qwen3-0.6b-coreai",
   "total_layer_count": 28,
+  "position_mode": "full_prefix",
   "boundary": {
     "hidden_state": {
       "name": "hidden_states",
@@ -110,11 +111,12 @@ Or put the same `stages` array under `cluster` in a bundle `metadata.json`:
 ```
 
 Each manifest needs `model` and stage rows with `id`, `role`, `layers`, `bundle`, and `memory_gb`.
-Set `total_layer_count` explicitly for runtime handoff. The dry-run planner can derive it from the
-last transformer layer range and will warn when it does. Use the runtime role names `embeddings`,
-`transformer_layers`, and `final_norm_head`. For `transformer_layers`, `layers` is a half-open
-`[lower, upper]` range. Bundle paths are resolved relative to the manifest file, or relative to the
-model bundle when using `--model`.
+Set `total_layer_count` and `position_mode` explicitly for runtime handoff. `position_mode` is
+`full_prefix` or `current`, matching the staged export. The dry-run planner can derive the layer
+count from the last transformer layer range and will warn when it does. Use the runtime role names
+`embeddings`, `transformer_layers`, and `final_norm_head`. For `transformer_layers`, `layers` is a
+half-open `[lower, upper]` range. Bundle paths are resolved relative to the manifest file, or
+relative to the model bundle when using `--model`.
 
 For real staged exports, include `boundary.hidden_state`. `shape` is `[batch, sequence, hidden]`;
 use `-1` for dynamic sequence length. `scalar_type` must be `float16` or `float32`.
