@@ -371,7 +371,7 @@ Report the fields in `docs/TESTING.md`. Send the raw benchmark directory. Remove
 you installed:
 
 ```bash
-rm -rf "models/exports/$NAME"
+scripts/remove-export.sh "$NAME"
 scripts/check-disk-pressure.sh --path /Volumes/SSD --floor-gib 500
 ```
 EOF

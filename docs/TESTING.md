@@ -201,7 +201,7 @@ scripts/check-hf-model-cards.sh
 After testing, remove only the payload you installed:
 
 ```bash
-rm -rf "models/exports/$NAME"
+scripts/remove-export.sh "$NAME"
 ```
 
 Check free disk before starting another test:

@@ -189,6 +189,7 @@ public actor ModelManager {
     private let registryPath: URL
     private let verbose: Bool
     private let eagleConfig: EagleConfig?
+    private let heavyTaskLockPath: URL
 
     private var handles: [String: ModelHandle] = [:]
     private var loadTasks: [String: Task<ModelHandle, Error>] = [:]
@@ -198,11 +199,12 @@ public actor ModelManager {
     private var formats: [String: OutputFormat] = [:]
 
     public init(exportsDir: URL, registryPath: URL, verbose: Bool = false,
-                eagleConfig: EagleConfig? = nil) {
+                eagleConfig: EagleConfig? = nil, heavyTaskLockPath: URL? = nil) {
         self.exportsDir = exportsDir
         self.registryPath = registryPath
         self.verbose = verbose
         self.eagleConfig = eagleConfig
+        self.heavyTaskLockPath = heavyTaskLockPath ?? Self.defaultHeavyTaskLockPath(exportsDir: exportsDir)
     }
 
     // MARK: Discovery
@@ -463,6 +465,9 @@ public actor ModelManager {
         if let cfg = eagleConfig, cfg.name == name {
             return "refusing to delete the built-in MTP model"
         }
+        if FileManager.default.fileExists(atPath: heavyTaskLockPath.path) {
+            return "refusing to delete bundle while heavy-task lock exists: \(heavyTaskLockPath.path)"
+        }
         let dir = exportsDir.appendingPathComponent(name)
         guard Self.isDirectory(dir),
               Self.isLoadableBundle(at: dir) else {
@@ -480,6 +485,25 @@ public actor ModelManager {
     }
 
     // MARK: Helpers
+
+    private static func defaultHeavyTaskLockPath(exportsDir: URL) -> URL {
+        let env = ProcessInfo.processInfo.environment
+        if let raw = env["CAIX_HEAVY_TASK_LOCK"],
+           !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return URL(fileURLWithPath: raw)
+        }
+        let normalized = exportsDir.standardizedFileURL
+        if normalized.lastPathComponent == "exports",
+           normalized.deletingLastPathComponent().lastPathComponent == "models" {
+            return normalized
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent(".agent-heavy-task.lock")
+        }
+        return URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+            .appendingPathComponent(".agent-heavy-task.lock")
+            .standardizedFileURL
+    }
 
     /// "qwen3-0.6b-coreai" → "0.6B", "gemma4-31b-assistant-coreai" → "31B".
     static func inferParams(from name: String) -> String {

@@ -32,10 +32,9 @@ Use [docs/TESTER_REQUESTS.md](docs/TESTER_REQUESTS.md) for current test requests
 repo revision, prompt, token budget, temperature, warmup count, measured run count, and chat-template
 mode unchanged. Send the raw benchmark directory.
 
-Want to fund conversions, benchmark time, hosting, and tester access:
+Support conversions, benchmark time, hosting, and tester access:
 [redhillsmediafl.com/open-source](https://redhillsmediafl.com/open-source).
 
-Merch and packs are at [redhillsmediafl.com/shop](https://redhillsmediafl.com/shop).
 Support is optional and never gates features.
 
 ---

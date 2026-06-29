@@ -59,6 +59,8 @@ scan "vague model-size wording" \
   'large model|large chat|dense large|\blarger\b|\blargest\b'
 scan "bare large wording; use parameter count, disk size, memory, and license instead" \
   '\blarge\b'
+scan "unsafe export cleanup command; use scripts/remove-export.sh" \
+  'rm[[:space:]]+-rf[^[:cntrl:]]*models/exports'
 
 if [ "$fail" -ne 0 ]; then
   exit 1
