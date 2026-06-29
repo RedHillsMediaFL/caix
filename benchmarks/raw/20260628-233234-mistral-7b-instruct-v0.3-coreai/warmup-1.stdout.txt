@@ -1,0 +1,12 @@
+here.
+
+# Local Inference
+
+Local Inference is a Python library for performing inference on local data, with a focus on privacy, speed, and ease of use. It is built on top of TensorFlow and PyTorch, and provides a simple, consistent interface for performing inference on a wide variety of models.
+
+## Features
+
+* Supports TensorFlow and PyTorch models
+* Provides a simple, consistent interface for performing inference
+* Supports local data, allowing for fast, privacy-preserving inference
+* Includes utilities for loading and preprocessing data
