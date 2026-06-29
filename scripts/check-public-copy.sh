@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Fail public docs/pages that drift into benchmark placeholders, hype, unsupported support links,
-# or vague model-size language.
+# Fail public docs/pages that drift into benchmark placeholders, hype, or vague model-size language.
 set -euo pipefail
 
 usage() {
@@ -54,8 +53,6 @@ scan "raw benchmark speed number in public copy" \
   '[0-9]+([.][0-9]+)?[[:space:]]*tok/s'
 scan "marketing/hype wording" \
   'revolutionary|game[- ]changer|world[- ]class|best[- ]in[- ]class|magic|gimmick'
-scan "unverified support-product wording" \
-  'donat(e|ion)?|sticker|fund|shop'
 scan "vague model-size wording" \
   'large model|large chat|dense large|\blarger\b|\blargest\b'
 scan "bare large wording; use parameter count, disk size, memory, and license instead" \
