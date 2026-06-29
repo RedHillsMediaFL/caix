@@ -1,0 +1,5 @@
+phase	run	status	generated	load_s	prefill_s	decode_s	decode_tps	stdout	stderr
+warmup	1	ok	129	260.84	0.00	32.33	4.0	benchmarks/raw/20260629-042411-mixtral-8x7b-instruct-coreai/warmup-1.stdout.txt	benchmarks/raw/20260629-042411-mixtral-8x7b-instruct-coreai/warmup-1.stderr.txt
+measured	1	ok	129	283.18	0.00	26.70	4.8	benchmarks/raw/20260629-042411-mixtral-8x7b-instruct-coreai/measured-1.stdout.txt	benchmarks/raw/20260629-042411-mixtral-8x7b-instruct-coreai/measured-1.stderr.txt
+measured	2	ok	129	265.66	0.00	26.71	4.8	benchmarks/raw/20260629-042411-mixtral-8x7b-instruct-coreai/measured-2.stdout.txt	benchmarks/raw/20260629-042411-mixtral-8x7b-instruct-coreai/measured-2.stderr.txt
+measured	3	ok	129	282.34	0.00	26.68	4.8	benchmarks/raw/20260629-042411-mixtral-8x7b-instruct-coreai/measured-3.stdout.txt	benchmarks/raw/20260629-042411-mixtral-8x7b-instruct-coreai/measured-3.stderr.txt

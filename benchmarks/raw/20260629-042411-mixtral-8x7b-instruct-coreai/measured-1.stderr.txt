@@ -1,0 +1,7 @@
+[fast] language bundle ok: mixtral-8x7b-instruct-coreai
+[fast] creating engine (auto→pipelined) …
+[fast] engine + tokenizer ready
+[fast] warming up engine …
+[fast] warmup done; generating 128 tokens …
+[fast] generate done in 26.70s
+[coreai] 15 prompt tok, 129 generated, stop=maxTokens, load=283.18s prefill=0.00s decode=26.70s (4.8 tok/s)

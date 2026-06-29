@@ -1,0 +1,3 @@
+The future of local inferencing is likely to be shaped by ongoing advancements in data analysis techniques, computational power, and the increasing availability of granular data. Local inferencing refers to the process of making inferences or predictions about specific subgroups or locations, as opposed to global inferences that apply to entire populations or regions. Here are some trends that are likely to influence the future of local inference:
+
+1. Spatial and spatio-temporal modeling: As more data becomes available with geographic and temporal information, there is a growing need for statistical models that can account for the spatial and temporal dependencies
