@@ -270,26 +270,28 @@ public struct DistributedBoundaryTensorSpec: Codable, Hashable, Sendable {
         self.scalarType = scalarType
     }
 
-    public func validate() throws {
-        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw DistributedStageManifestError.invalidManifest(
-                "boundary hidden_state name is missing")
+    public var validationErrorMessage: String? {
+        if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "boundary hidden_state name is missing"
         }
         guard shape.count == 3 else {
-            throw DistributedStageManifestError.invalidManifest(
-                "boundary hidden_state shape must be [batch, sequence, hidden]")
+            return "boundary hidden_state shape must be [batch, sequence, hidden]"
         }
         guard shape[0] > 0 else {
-            throw DistributedStageManifestError.invalidManifest(
-                "boundary hidden_state batch dimension must be positive")
+            return "boundary hidden_state batch dimension must be positive"
         }
         guard shape[1] == -1 || shape[1] > 0 else {
-            throw DistributedStageManifestError.invalidManifest(
-                "boundary hidden_state sequence dimension must be positive or -1")
+            return "boundary hidden_state sequence dimension must be positive or -1"
         }
         guard shape[2] > 0 else {
-            throw DistributedStageManifestError.invalidManifest(
-                "boundary hidden_state hidden dimension must be positive")
+            return "boundary hidden_state hidden dimension must be positive"
+        }
+        return nil
+    }
+
+    public func validate() throws {
+        if let message = validationErrorMessage {
+            throw DistributedStageManifestError.invalidManifest(message)
         }
     }
 }
@@ -325,7 +327,8 @@ public struct DistributedStageManifest: Hashable, Sendable {
             modelName: modelName,
             totalLayerCount: totalLayerCount,
             stages: stages.map { $0.descriptor() },
-            workers: [])
+            workers: [],
+            boundaryTensor: boundaryTensor)
         try self.runtimePlan.validate()
     }
 
@@ -917,24 +920,28 @@ public struct DistributedStagePlan: Codable, Hashable, Sendable {
     public let totalLayerCount: Int
     public let stages: [DistributedStageDescriptor]
     public let workers: [DistributedWorkerEndpoint]
+    public let boundaryTensor: DistributedBoundaryTensorSpec?
 
     enum CodingKeys: String, CodingKey {
         case modelName = "model_name"
         case totalLayerCount = "total_layer_count"
         case stages
         case workers
+        case boundaryTensor = "boundary_tensor"
     }
 
     public init(
         modelName: String,
         totalLayerCount: Int,
         stages: [DistributedStageDescriptor],
-        workers: [DistributedWorkerEndpoint] = []
+        workers: [DistributedWorkerEndpoint] = [],
+        boundaryTensor: DistributedBoundaryTensorSpec? = nil
     ) {
         self.modelName = modelName
         self.totalLayerCount = totalLayerCount
         self.stages = stages
         self.workers = workers
+        self.boundaryTensor = boundaryTensor
     }
 
     public func stage(id: String) -> DistributedStageDescriptor? {
@@ -1200,6 +1207,7 @@ public enum DistributedRuntimeValidationError: Error, Equatable, Sendable, Custo
     case duplicateWorkerID(String)
     case invalidEndpoint(id: String, reason: String)
     case unknownWorkerID(stageID: String, workerID: String)
+    case invalidBoundaryTensor(String)
     case layerRangeRequired(stageID: String)
     case layerRangeNotAllowed(stageID: String, role: DistributedStageRole)
     case invalidLayerRange(stageID: String, range: DistributedLayerRange)
@@ -1225,6 +1233,8 @@ public enum DistributedRuntimeValidationError: Error, Equatable, Sendable, Custo
             return "Invalid worker endpoint \(id): \(reason)"
         case .unknownWorkerID(let stageID, let workerID):
             return "Stage \(stageID) references unknown worker \(workerID)"
+        case .invalidBoundaryTensor(let message):
+            return "Invalid boundary tensor: \(message)"
         case .layerRangeRequired(let stageID):
             return "Stage \(stageID) requires a layer range"
         case .layerRangeNotAllowed(let stageID, let role):
@@ -1292,6 +1302,9 @@ public enum DistributedRuntimeValidation {
     public static func validate(plan: DistributedStagePlan) throws {
         guard plan.totalLayerCount > 0 else {
             throw DistributedRuntimeValidationError.invalidTotalLayerCount(plan.totalLayerCount)
+        }
+        if let message = plan.boundaryTensor?.validationErrorMessage {
+            throw DistributedRuntimeValidationError.invalidBoundaryTensor(message)
         }
 
         var workerIDs = Set<String>()
@@ -1418,6 +1431,31 @@ public enum DistributedRuntimeValidation {
             throw DistributedRuntimeValidationError.packetRouteMismatch(
                 sourceStageID: packet.sourceStageID,
                 destinationStageID: packet.destinationStageID)
+        }
+        if let boundaryTensor = plan.boundaryTensor {
+            try validate(packet: packet, matches: boundaryTensor)
+        }
+    }
+
+    private static func validate(
+        packet: DistributedHiddenStatePacketMetadata,
+        matches boundaryTensor: DistributedBoundaryTensorSpec
+    ) throws {
+        guard packet.scalarType == boundaryTensor.scalarType else {
+            throw DistributedRuntimeValidationError.invalidPacket(
+                "hidden-state packet scalar_type \(packet.scalarType.rawValue) does not match boundary tensor \(boundaryTensor.scalarType.rawValue)")
+        }
+        guard packet.shape.count == 3 else {
+            throw DistributedRuntimeValidationError.invalidPacket(
+                "hidden-state packet shape must be [batch, sequence, hidden]")
+        }
+        let expected = boundaryTensor.shape
+        guard packet.shape[0] == expected[0],
+            (expected[1] == -1 || packet.shape[1] == expected[1]),
+            packet.shape[2] == expected[2]
+        else {
+            throw DistributedRuntimeValidationError.invalidPacket(
+                "hidden-state packet shape \(packet.shape) does not match boundary tensor shape \(expected)")
         }
     }
 

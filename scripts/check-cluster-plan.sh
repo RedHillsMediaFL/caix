@@ -52,6 +52,8 @@ if boundary.get("shape") != [1, -1, 1024]:
     fail("unexpected boundary tensor shape")
 if boundary.get("scalar_type") != "float16":
     fail("unexpected boundary tensor scalar_type")
+if runtime.get("boundary_tensor") != boundary:
+    fail("runtime_plan boundary_tensor drift")
 
 stages = runtime.get("stages")
 if not isinstance(stages, list) or len(stages) != 4:

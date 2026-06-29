@@ -161,6 +161,8 @@ if boundary.get("shape") != [1, -1, 1024]:
     sys.exit(1)
 if boundary.get("scalar_type") != "float16":
     sys.exit(1)
+if runtime.get("boundary_tensor") != boundary:
+    sys.exit(1)
 PY
     then
       ready "cluster plan produces validated runtime_plan and boundary_tensor"

@@ -113,8 +113,32 @@ final class DistributedRuntimeTests: XCTestCase {
         }
     }
 
+    func testHiddenStatePacketRejectsBoundaryTensorMismatch() {
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 2], scalarType: .float16))
+        let packet = DistributedHiddenStatePacketMetadata(
+            requestID: "req-1",
+            sourceStageID: "layers-0-16",
+            destinationStageID: "layers-16-32",
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+            shape: [1, 1, 4],
+            scalarType: .float16,
+            byteCount: 8,
+            stepIndex: 0)
+
+        XCTAssertThrowsError(try plan.validate(hiddenStatePacket: packet)) { error in
+            XCTAssertEqual(
+                error as? DistributedRuntimeValidationError,
+                .invalidPacket(
+                    "hidden-state packet shape [1, 1, 4] does not match boundary tensor shape [1, -1, 2]"))
+        }
+    }
+
     func testStagePlanCodableUsesStableSnakeCaseKeys() throws {
-        let plan = makePlan()
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 2], scalarType: .float16))
         let data = try JSONEncoder().encode(plan)
         let json = String(decoding: data, as: UTF8.self)
 
@@ -122,6 +146,7 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertTrue(json.contains(#""total_layer_count""#))
         XCTAssertTrue(json.contains(#""layer_range""#))
         XCTAssertTrue(json.contains(#""worker_id""#))
+        XCTAssertTrue(json.contains(#""boundary_tensor""#))
 
         let decoded = try JSONDecoder().decode(DistributedStagePlan.self, from: data)
         XCTAssertEqual(decoded, plan)
@@ -141,6 +166,7 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertEqual(manifest.boundaryTensor?.name, "hidden_states")
         XCTAssertEqual(manifest.boundaryTensor?.shape, [1, -1, 1024])
         XCTAssertEqual(manifest.boundaryTensor?.scalarType, .float16)
+        XCTAssertEqual(manifest.runtimePlan.boundaryTensor, manifest.boundaryTensor)
         XCTAssertEqual(
             manifest.stages[1].resolvedAssetPath,
             "/tmp/caix-manifest/stages/01-layers-00-14.aimodel")
@@ -302,7 +328,8 @@ final class DistributedRuntimeTests: XCTestCase {
 
     private func makePlan(
         stages: [DistributedStageDescriptor]? = nil,
-        workers: [DistributedWorkerEndpoint]? = nil
+        workers: [DistributedWorkerEndpoint]? = nil,
+        boundaryTensor: DistributedBoundaryTensorSpec? = nil
     ) -> DistributedStagePlan {
         DistributedStagePlan(
             modelName: "qwen3-0.6b-coreai",
@@ -323,7 +350,8 @@ final class DistributedRuntimeTests: XCTestCase {
                 DistributedWorkerEndpoint(id: "coordinator", host: "127.0.0.1", port: 9010),
                 DistributedWorkerEndpoint(id: "worker-a", host: "127.0.0.1", port: 9011),
                 DistributedWorkerEndpoint(id: "worker-b", host: "127.0.0.1", port: 9012),
-            ])
+            ],
+            boundaryTensor: boundaryTensor)
     }
 
     private func stage(

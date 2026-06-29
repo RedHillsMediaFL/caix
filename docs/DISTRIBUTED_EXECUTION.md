@@ -44,8 +44,8 @@ This is blunt on purpose. Where the current code cannot do something, it says so
 - A dry-run planner CLI (`Sources/PipelineCLI/Cluster.swift`, wired in `main.swift`):
   `caix cluster plan --manifest … | --model …` with greedy worker assignment. Manifest schema
   `caix.cluster.stage_manifest.v0` documented in `docs/CLUSTER.md`. JSON output includes a
-  `runtime_plan` from the shared manifest loader. It does not load Core AI models, start workers,
-  or move tensors.
+  `runtime_plan` from the shared manifest loader, including the boundary tensor contract. It does
+  not load Core AI models, start workers, or move tensors.
 
 **Gap:** there is no Core AI stage execution path. Nothing produces a per-stage `.aimodel`,
 nothing emits an intermediate hidden state from a graph or feeds one back in, and there is no

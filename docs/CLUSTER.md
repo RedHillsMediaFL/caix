@@ -5,7 +5,7 @@ Planned feature. This page documents the first user-visible dry-run surface only
 `caix cluster plan` reads local staged-bundle metadata and prints a placement plan. It does not
 load Core AI models, start workers, transfer tensors, benchmark, download, or upload anything.
 JSON output includes a `runtime_plan` object using the same `DistributedStagePlan` contract that
-the runtime validates.
+the runtime validates, including `boundary_tensor`.
 
 ## Commands
 
