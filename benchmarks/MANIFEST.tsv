@@ -2,6 +2,7 @@ repo	local_dir	kind	benchmark_mode	status	notes
 redhillsmediafl/rhm-qwen2.5-0.5b-instruct-caix	qwen2.5-0.5b-instruct-coreai	standalone	decode	eligible	verified
 redhillsmediafl/rhm-qwen2.5-3b-instruct-caix	qwen2.5-3b-instruct-coreai	standalone	decode	eligible	verified; Qwen Research License
 redhillsmediafl/rhm-qwen3-0.6b-caix	qwen3-0.6b-coreai	standalone	decode	eligible	cataloged
+redhillsmediafl/rhm-qwen3-1.7b-caix	qwen3-1.7b-coreai	standalone	decode	eligible	verified
 redhillsmediafl/rhm-qwen3-4b-caix	qwen3-4b-coreai	standalone	decode	eligible	cataloged
 redhillsmediafl/rhm-qwen3-8b-caix	qwen3-8b-coreai	standalone	decode	eligible	verified
 redhillsmediafl/rhm-qwen3-14b-caix	qwen3-14b-coreai	standalone	decode	eligible	verified
