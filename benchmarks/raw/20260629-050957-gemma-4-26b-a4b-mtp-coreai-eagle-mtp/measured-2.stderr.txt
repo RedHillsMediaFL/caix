@@ -1,0 +1,1 @@
+[coreai] eagle: 20 prompt, 128 generated, stop=maxTokens, K=4, 84/192 accepted (43.8%), 2.67 tok/pass, load=50.61s prefill=6.25s decode=44.77s (2.9 tok/s)
