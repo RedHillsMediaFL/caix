@@ -67,6 +67,8 @@ enum PipelinedLLM {
         dbg("creating persistent engine (auto->pipelined) ...")
         let engine = try await engineResult
         let tokenizer = try await tokenizerResult
+        dbg("warming persistent engine ...")
+        try await engine.warmup(queryLength: 0, sampling: .greedy)
         let loadSeconds = Date().timeIntervalSince(loadStart)
         dbg("persistent engine + tokenizer ready")
 
@@ -99,9 +101,13 @@ enum PipelinedLLM {
                 promptTokenCount = tokenizer.encode(text: text).count
             }
 
-            requestDbg("warming up engine ...")
-            try await engine.warmup(queryLength: 0, sampling: sampling)
-            requestDbg("warmup done; generating \(options.maxTokens) tokens ...")
+            if options.temperature > 0 {
+                requestDbg("warming up engine ...")
+                try await engine.warmup(queryLength: 0, sampling: sampling)
+                requestDbg("warmup done; generating \(options.maxTokens) tokens ...")
+            } else {
+                requestDbg("generating \(options.maxTokens) tokens ...")
+            }
 
             let result = try await decodeWithVanillaStrategy(
                 input: input,
