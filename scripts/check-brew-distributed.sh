@@ -57,6 +57,15 @@ if roles != ["embeddings", "transformer_layers", "transformer_layers", "final_no
     sys.exit(1)
 if runtime.get("total_layer_count") != 28:
     sys.exit(1)
+boundary = doc.get("boundary_tensor")
+if not isinstance(boundary, dict):
+    sys.exit(1)
+if boundary.get("name") != "hidden_states":
+    sys.exit(1)
+if boundary.get("shape") != [1, -1, 1024]:
+    sys.exit(1)
+if boundary.get("scalar_type") != "float16":
+    sys.exit(1)
 PY
 fi
 

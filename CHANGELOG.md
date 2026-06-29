@@ -15,6 +15,7 @@
   cannot be placeholders and must carry raw-log and manifest fields.
 - Added a shared distributed stage-manifest loader so runtime code and `caix cluster plan` validate
   the same staged model contract.
+- Added staged hidden-state boundary tensor metadata to the distributed manifest contract.
 - Added fail-closed `caix cluster join` and `caix serve --cluster` CLI stubs for Brew surface tests.
 - Expanded the Homebrew formula test to cover distributed plan/join help and `serve --cluster`.
 - Added a same-machine distributed stage-handle harness with fake-stage tests.

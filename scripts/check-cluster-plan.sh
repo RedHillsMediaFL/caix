@@ -43,6 +43,16 @@ if runtime.get("model_name") != doc["model_name"]:
 if runtime.get("total_layer_count") != doc["total_layer_count"]:
     fail("runtime_plan total_layer_count drift")
 
+boundary = doc.get("boundary_tensor")
+if not isinstance(boundary, dict):
+    fail("missing boundary_tensor")
+if boundary.get("name") != "hidden_states":
+    fail("unexpected boundary tensor name")
+if boundary.get("shape") != [1, -1, 1024]:
+    fail("unexpected boundary tensor shape")
+if boundary.get("scalar_type") != "float16":
+    fail("unexpected boundary tensor scalar_type")
+
 stages = runtime.get("stages")
 if not isinstance(stages, list) or len(stages) != 4:
     fail("runtime_plan stages must contain four rows")

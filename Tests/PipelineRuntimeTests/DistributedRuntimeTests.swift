@@ -138,6 +138,9 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertFalse(manifest.totalLayerCountDerived)
         XCTAssertEqual(manifest.stages.count, 4)
         XCTAssertEqual(manifest.stages[1].layerRange, DistributedLayerRange(lowerBound: 0, upperBound: 14))
+        XCTAssertEqual(manifest.boundaryTensor?.name, "hidden_states")
+        XCTAssertEqual(manifest.boundaryTensor?.shape, [1, -1, 1024])
+        XCTAssertEqual(manifest.boundaryTensor?.scalarType, .float16)
         XCTAssertEqual(
             manifest.stages[1].resolvedAssetPath,
             "/tmp/caix-manifest/stages/01-layers-00-14.aimodel")
@@ -164,6 +167,7 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertEqual(manifest.modelName, "qwen3-0.6b-coreai")
         XCTAssertEqual(manifest.totalLayerCount, 28)
         XCTAssertTrue(manifest.totalLayerCountDerived)
+        XCTAssertEqual(manifest.boundaryTensor?.shape, [1, -1, 1024])
         XCTAssertEqual(manifest.runtimePlan.stages[2].layerRange, DistributedLayerRange(lowerBound: 14, upperBound: 28))
     }
 
@@ -190,6 +194,36 @@ final class DistributedRuntimeTests: XCTestCase {
                     expectedStart: 10,
                     stageID: "layers-12-28",
                     actual: DistributedLayerRange(lowerBound: 12, upperBound: 28)))
+        }
+    }
+
+    func testStageManifestRejectsBadBoundaryTensorShape() {
+        let json =
+            """
+            {
+              "schema": "\(DistributedStageManifest.currentSchema)",
+              "model": "qwen3-0.6b-coreai",
+              "total_layer_count": 28,
+              "boundary": {
+                "hidden_state": {
+                  "name": "hidden_states",
+                  "shape": [1, 0, 1024],
+                  "scalar_type": "float16"
+                }
+              },
+              "stages": [
+                {"id":"embed","role":"embeddings","layers":"embeddings","bundle":"embed.aimodel","memory_gb":1},
+                {"id":"layers-00-28","role":"transformer_layers","layers":[0,28],"bundle":"layers.aimodel","memory_gb":2},
+                {"id":"head","role":"final_norm_head","layers":"norm+lm_head","bundle":"head.aimodel","memory_gb":1}
+              ]
+            }
+            """
+
+        XCTAssertThrowsError(try DistributedStageManifest.decode(from: Data(json.utf8))) { error in
+            XCTAssertEqual(
+                error as? DistributedStageManifestError,
+                .invalidManifest(
+                    "boundary hidden_state sequence dimension must be positive or -1"))
         }
     }
 
@@ -312,6 +346,13 @@ final class DistributedRuntimeTests: XCTestCase {
               "schema": "\(DistributedStageManifest.currentSchema)",
               \(modelLine)
               \(totalLine)
+              "boundary": {
+                "hidden_state": {
+                  "name": "hidden_states",
+                  "shape": [1, -1, 1024],
+                  "scalar_type": "float16"
+                }
+              },
               "stages": [
                 {
                   "id": "embed",

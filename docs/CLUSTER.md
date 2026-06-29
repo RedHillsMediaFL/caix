@@ -53,6 +53,13 @@ Use top-level `stages` in a standalone manifest. A copyable example lives at
   "schema": "caix.cluster.stage_manifest.v0",
   "model": "qwen3-0.6b-coreai",
   "total_layer_count": 28,
+  "boundary": {
+    "hidden_state": {
+      "name": "hidden_states",
+      "shape": [1, -1, 1024],
+      "scalar_type": "float16"
+    }
+  },
   "stages": [
     {
       "id": "embed",
@@ -108,6 +115,9 @@ last transformer layer range and will warn when it does. Use the runtime role na
 `transformer_layers`, and `final_norm_head`. For `transformer_layers`, `layers` is a half-open
 `[lower, upper]` range. Bundle paths are resolved relative to the manifest file, or relative to the
 model bundle when using `--model`.
+
+For real staged exports, include `boundary.hidden_state`. `shape` is `[batch, sequence, hidden]`;
+use `-1` for dynamic sequence length. `scalar_type` must be `float16` or `float32`.
 
 ## Current TODOs
 

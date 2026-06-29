@@ -36,7 +36,7 @@ This is blunt on purpose. Where the current code cannot do something, it says so
     gap-free layer coverage `0 ..< total_layer_count`, unique stage/worker ids, and
     adjacency-only packet routing (`destination == source + 1`).
   - `DistributedStageManifest` — the shared loader for top-level staged manifests and
-    `metadata.json` cluster blocks.
+    `metadata.json` cluster blocks, including hidden-state boundary tensor metadata.
   - `DistributedHiddenStatePacket`, `DistributedStageHandle`, and
     `DistributedSameMachinePipeline` — an in-process coordinator harness tested with fake
     stages. It validates stage order, packet routes, payload byte counts, and final-token
@@ -112,7 +112,8 @@ its role, its layer range (for `transformer_layers`), and its `.aimodel` path. A
 example is `docs/examples/cluster-stage-manifest.json`: `total_layer_count` sits at the top
 level; each `transformer_layers` stage gives `layers` as a half-open `[lower, upper]` array;
 the `embeddings` and `final_norm_head` stages give `layers` as a label string (`"embeddings"`,
-`"norm+lm_head"`).
+`"norm+lm_head"`). Real staged exports also include `boundary.hidden_state` with tensor name,
+shape `[batch, sequence, hidden]`, and scalar type (`float16` or `float32`).
 
 Note: the dry-run manifest carries `memory_gb` per stage for placement. Tied-embedding models
 (Qwen3 family) duplicate the embedding/unembedding matrix across the `embeddings` and
@@ -381,8 +382,8 @@ add transport, per §4/§5/§7.
 ## 10. Open questions / contract risks
 
 - **Boundary dtype export policy (§4).** `DistributedTensorScalarType` is float16/float32 only.
-  The exporter still needs to record the actual boundary dtype in staged metadata and, for
-  internally bfloat16 graphs, materialize a host-readable boundary.
+  Staged metadata can record the boundary tensor contract now; for internally bfloat16 graphs, the
+  exporter still needs to materialize a host-readable boundary.
 - **Staged exporter handoff.** The runtime and CLI can load staged manifests, but current exports
   still do not record staged metadata. The exporter must write `cluster.stages`,
   `total_layer_count`, stage asset names, and boundary tensor metadata before same-machine staged

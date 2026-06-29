@@ -36,6 +36,7 @@ private struct ClusterPlanSource {
     var totalLayerCount: Int
     var totalLayerCountDerived: Bool
     var stages: [ClusterPlanStage]
+    var boundaryTensor: DistributedBoundaryTensorSpec?
     var runtimePlan: DistributedStagePlan
 }
 
@@ -51,6 +52,7 @@ struct ClusterPlanOutput: Codable {
     var modelName: String
     var totalLayerCount: Int
     var stages: [ClusterPlanStage]
+    var boundaryTensor: DistributedBoundaryTensorSpec?
     var workers: [ClusterWorkerBudget]
     var assignments: [ClusterAssignment]
     var runtimePlan: DistributedStagePlan
@@ -63,6 +65,7 @@ struct ClusterPlanOutput: Codable {
         case modelName = "model_name"
         case totalLayerCount = "total_layer_count"
         case stages
+        case boundaryTensor = "boundary_tensor"
         case workers
         case assignments
         case runtimePlan = "runtime_plan"
@@ -264,6 +267,7 @@ private func clusterPlanCommand(_ argv: [String]) {
             modelName: planSource.modelName,
             totalLayerCount: planSource.totalLayerCount,
             stages: stages,
+            boundaryTensor: planSource.boundaryTensor,
             workers: workers,
             assignments: assignments,
             runtimePlan: runtimePlan,
@@ -334,6 +338,7 @@ private func loadClusterPlanSource(
         totalLayerCount: manifest.totalLayerCount,
         totalLayerCountDerived: manifest.totalLayerCountDerived,
         stages: stages,
+        boundaryTensor: manifest.boundaryTensor,
         runtimePlan: manifest.runtimePlan)
 }
 
@@ -431,6 +436,12 @@ private func renderClusterPlan(_ output: ClusterPlanOutput) -> String {
             stage.pathExists.map { $0 ? "path_status=ok" : "path_status=missing" },
         ].compactMap { $0 }
         lines.append("- \(stage.name)" + (parts.isEmpty ? "" : "  " + parts.joined(separator: " ")))
+    }
+    if let boundaryTensor = output.boundaryTensor {
+        let shape = boundaryTensor.shape.map(String.init).joined(separator: "x")
+        lines.append(
+            "boundary: \(boundaryTensor.name) shape=\(shape) dtype=\(boundaryTensor.scalarType.rawValue)"
+        )
     }
     lines.append("")
     for assignment in output.assignments {

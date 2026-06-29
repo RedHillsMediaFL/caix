@@ -251,6 +251,49 @@ public struct DistributedStageManifestStage: Codable, Hashable, Sendable {
     }
 }
 
+/// Hidden-state tensor contract at stage boundaries.
+public struct DistributedBoundaryTensorSpec: Codable, Hashable, Sendable {
+    public let name: String
+    /// Manifest shapes may use `-1` for the sequence dimension. Runtime packets use concrete sizes.
+    public let shape: [Int]
+    public let scalarType: DistributedTensorScalarType
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case shape
+        case scalarType = "scalar_type"
+    }
+
+    public init(name: String, shape: [Int], scalarType: DistributedTensorScalarType) {
+        self.name = name
+        self.shape = shape
+        self.scalarType = scalarType
+    }
+
+    public func validate() throws {
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw DistributedStageManifestError.invalidManifest(
+                "boundary hidden_state name is missing")
+        }
+        guard shape.count == 3 else {
+            throw DistributedStageManifestError.invalidManifest(
+                "boundary hidden_state shape must be [batch, sequence, hidden]")
+        }
+        guard shape[0] > 0 else {
+            throw DistributedStageManifestError.invalidManifest(
+                "boundary hidden_state batch dimension must be positive")
+        }
+        guard shape[1] == -1 || shape[1] > 0 else {
+            throw DistributedStageManifestError.invalidManifest(
+                "boundary hidden_state sequence dimension must be positive or -1")
+        }
+        guard shape[2] > 0 else {
+            throw DistributedStageManifestError.invalidManifest(
+                "boundary hidden_state hidden dimension must be positive")
+        }
+    }
+}
+
 /// Normalized staged manifest used by the CLI planner, same-machine harness, and future workers.
 public struct DistributedStageManifest: Hashable, Sendable {
     public static let currentSchema = "caix.cluster.stage_manifest.v0"
@@ -260,6 +303,7 @@ public struct DistributedStageManifest: Hashable, Sendable {
     public let totalLayerCount: Int
     public let totalLayerCountDerived: Bool
     public let stages: [DistributedStageManifestStage]
+    public let boundaryTensor: DistributedBoundaryTensorSpec?
     public let runtimePlan: DistributedStagePlan
 
     public init(
@@ -267,13 +311,16 @@ public struct DistributedStageManifest: Hashable, Sendable {
         modelName: String,
         totalLayerCount: Int,
         totalLayerCountDerived: Bool = false,
-        stages: [DistributedStageManifestStage]
+        stages: [DistributedStageManifestStage],
+        boundaryTensor: DistributedBoundaryTensorSpec? = nil
     ) throws {
         self.schema = schema
         self.modelName = modelName
         self.totalLayerCount = totalLayerCount
         self.totalLayerCountDerived = totalLayerCountDerived
         self.stages = stages
+        self.boundaryTensor = boundaryTensor
+        try boundaryTensor?.validate()
         self.runtimePlan = DistributedStagePlan(
             modelName: modelName,
             totalLayerCount: totalLayerCount,
@@ -366,7 +413,9 @@ public struct DistributedStageManifest: Hashable, Sendable {
             modelName: modelName,
             totalLayerCount: totalLayerCount,
             totalLayerCountDerived: totalLayerCountDerived,
-            stages: stages)
+            stages: stages,
+            boundaryTensor: body.boundary?.hiddenState ?? body.boundaryTensor
+                ?? root.boundary?.hiddenState ?? root.boundaryTensor)
     }
 
     private static func normalizeStage(
@@ -517,6 +566,8 @@ private struct RawDistributedStageManifestRoot: Decodable {
     let totalLayerCount: FlexibleInt?
     let totalLayers: FlexibleInt?
     let stages: [RawDistributedStageManifestStage]?
+    let boundary: RawDistributedBoundaryBlock?
+    let boundaryTensor: DistributedBoundaryTensorSpec?
 
     enum CodingKeys: String, CodingKey {
         case schema
@@ -527,6 +578,8 @@ private struct RawDistributedStageManifestRoot: Decodable {
         case totalLayerCount = "total_layer_count"
         case totalLayers = "total_layers"
         case stages
+        case boundary
+        case boundaryTensor = "boundary_tensor"
     }
 
     var asBody: RawDistributedStageManifestBody {
@@ -536,7 +589,9 @@ private struct RawDistributedStageManifestRoot: Decodable {
             modelName: modelName,
             totalLayerCount: totalLayerCount,
             totalLayers: totalLayers,
-            stages: stages)
+            stages: stages,
+            boundary: boundary,
+            boundaryTensor: boundaryTensor)
     }
 }
 
@@ -547,6 +602,8 @@ private struct RawDistributedStageManifestBody: Decodable {
     let totalLayerCount: FlexibleInt?
     let totalLayers: FlexibleInt?
     let stages: [RawDistributedStageManifestStage]?
+    let boundary: RawDistributedBoundaryBlock?
+    let boundaryTensor: DistributedBoundaryTensorSpec?
 
     enum CodingKeys: String, CodingKey {
         case schema
@@ -555,6 +612,16 @@ private struct RawDistributedStageManifestBody: Decodable {
         case totalLayerCount = "total_layer_count"
         case totalLayers = "total_layers"
         case stages
+        case boundary
+        case boundaryTensor = "boundary_tensor"
+    }
+}
+
+private struct RawDistributedBoundaryBlock: Decodable {
+    let hiddenState: DistributedBoundaryTensorSpec?
+
+    enum CodingKeys: String, CodingKey {
+        case hiddenState = "hidden_state"
     }
 }
 

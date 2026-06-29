@@ -26,7 +26,7 @@ Current in-tree pieces:
 - `DistributedStagePlan` and validation for roles, layer coverage, workers, and hidden-state
   packet routes.
 - `DistributedStageManifest`, a shared loader for staged manifest and `metadata.json` cluster
-  blocks.
+  blocks, including hidden-state boundary tensor metadata.
 - `caix cluster plan` dry-run placement for staged manifests.
 - Fail-closed `caix cluster join` and `caix serve --cluster` CLI stubs.
 - `DistributedSameMachinePipeline`, an in-process stage-handle harness tested with fake stages.
