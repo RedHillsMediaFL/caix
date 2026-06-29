@@ -1080,6 +1080,30 @@ public struct DistributedWorkerHelloAck: Codable, Hashable, Sendable {
         self.reason = reason
         self.planIntegrityHash = planIntegrityHash
     }
+
+    public func validate(against plan: DistributedStagePlan? = nil) throws {
+        guard !stageID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw DistributedStageExecutionError.invalidControlFrame("stage_id is empty")
+        }
+        if let plan {
+            guard plan.stage(id: stageID) != nil else {
+                throw DistributedStageExecutionError.invalidControlFrame("unknown stage_id \(stageID)")
+            }
+            if accepted {
+                let expectedHash = try plan.integrityHash()
+                guard planIntegrityHash == expectedHash else {
+                    throw DistributedStageExecutionError.invalidControlFrame(
+                        "plan_integrity_hash mismatch")
+                }
+            }
+        }
+        if !accepted {
+            guard let reason, !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw DistributedStageExecutionError.invalidControlFrame(
+                    "rejected hello_ack needs a reason")
+            }
+        }
+    }
 }
 
 public struct DistributedRequestControl: Codable, Hashable, Sendable {
@@ -1094,6 +1118,20 @@ public struct DistributedRequestControl: Codable, Hashable, Sendable {
     public init(requestID: String, stageID: String? = nil) {
         self.requestID = requestID
         self.stageID = stageID
+    }
+
+    public func validate(against plan: DistributedStagePlan? = nil) throws {
+        guard !requestID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw DistributedStageExecutionError.invalidControlFrame("request_id is empty")
+        }
+        if let stageID {
+            guard !stageID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw DistributedStageExecutionError.invalidControlFrame("stage_id is empty")
+            }
+            if let plan, plan.stage(id: stageID) == nil {
+                throw DistributedStageExecutionError.invalidControlFrame("unknown stage_id \(stageID)")
+            }
+        }
     }
 }
 
@@ -1116,6 +1154,28 @@ public struct DistributedWorkerErrorFrame: Codable, Hashable, Sendable {
         self.requestID = requestID
         self.stageID = stageID
     }
+
+    public func validate(against plan: DistributedStagePlan? = nil) throws {
+        guard !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw DistributedStageExecutionError.invalidControlFrame("error code is empty")
+        }
+        guard !detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw DistributedStageExecutionError.invalidControlFrame("error detail is empty")
+        }
+        if let requestID {
+            guard !requestID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw DistributedStageExecutionError.invalidControlFrame("request_id is empty")
+            }
+        }
+        if let stageID {
+            guard !stageID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw DistributedStageExecutionError.invalidControlFrame("stage_id is empty")
+            }
+            if let plan, plan.stage(id: stageID) == nil {
+                throw DistributedStageExecutionError.invalidControlFrame("unknown stage_id \(stageID)")
+            }
+        }
+    }
 }
 
 public struct DistributedStageAllocation: Codable, Hashable, Sendable {
@@ -1130,6 +1190,15 @@ public struct DistributedStageAllocation: Codable, Hashable, Sendable {
     public init(requestID: String, kvCapacity: Int) {
         self.requestID = requestID
         self.kvCapacity = kvCapacity
+    }
+
+    public func validate() throws {
+        guard !requestID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw DistributedStageExecutionError.invalidControlFrame("request_id is empty")
+        }
+        guard kvCapacity > 0 else {
+            throw DistributedStageExecutionError.invalidControlFrame("kv_capacity must be positive")
+        }
     }
 }
 
@@ -1390,6 +1459,25 @@ public enum DistributedWorkerMessage: Codable, Hashable, Sendable {
             try container.encode(value, forKey: .error)
         }
     }
+
+    public func validate(against plan: DistributedStagePlan) throws {
+        switch self {
+        case .hello(let hello):
+            try hello.validate(against: plan)
+        case .helloAck(let ack):
+            try ack.validate(against: plan)
+        case .allocate(let allocation):
+            try allocation.validate()
+        case .forward(let frame):
+            try frame.validate(against: plan)
+        case .forwardResult(let frame):
+            try frame.validate(against: plan)
+        case .reset(let control), .free(let control):
+            try control.validate(against: plan)
+        case .error(let frame):
+            try frame.validate(against: plan)
+        }
+    }
 }
 
 public struct DistributedStageForwardInput: Hashable, Sendable {
@@ -1496,6 +1584,7 @@ public enum DistributedStageExecutionError: Error, Equatable, Sendable, CustomSt
     case missingStageAssetPath(String)
     case missingStageAsset(stageID: String, path: String)
     case invalidWorkerHello(String)
+    case invalidControlFrame(String)
     case invalidForwardInput(String)
     case invalidStageOutput(String)
 
@@ -1515,6 +1604,8 @@ public enum DistributedStageExecutionError: Error, Equatable, Sendable, CustomSt
             return "Missing stage asset for \(stageID): \(path)"
         case .invalidWorkerHello(let message):
             return "Invalid distributed worker hello: \(message)"
+        case .invalidControlFrame(let message):
+            return "Invalid distributed control frame: \(message)"
         case .invalidForwardInput(let message):
             return "Invalid distributed forward input: \(message)"
         case .invalidStageOutput(let message):

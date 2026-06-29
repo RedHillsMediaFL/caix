@@ -218,6 +218,183 @@ final class DistributedRuntimeTests: XCTestCase {
         }
     }
 
+    func testAllocationFrameValidatesRequestAndCapacity() throws {
+        XCTAssertNoThrow(try DistributedStageAllocation(requestID: "req-1", kvCapacity: 128).validate())
+
+        XCTAssertThrowsError(
+            try DistributedStageAllocation(requestID: " ", kvCapacity: 128).validate()
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidControlFrame("request_id is empty"))
+        }
+        XCTAssertThrowsError(
+            try DistributedStageAllocation(requestID: "req-1", kvCapacity: 0).validate()
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidControlFrame("kv_capacity must be positive"))
+        }
+    }
+
+    func testRequestControlFrameValidatesRequestAndOptionalStage() throws {
+        let plan = makePlan()
+        XCTAssertNoThrow(
+            try DistributedRequestControl(requestID: "req-1").validate(against: plan))
+        XCTAssertNoThrow(
+            try DistributedRequestControl(requestID: "req-1", stageID: "layers-0-16")
+                .validate(against: plan))
+
+        XCTAssertThrowsError(
+            try DistributedRequestControl(requestID: "").validate(against: plan)
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidControlFrame("request_id is empty"))
+        }
+        XCTAssertThrowsError(
+            try DistributedRequestControl(requestID: "req-1", stageID: "missing")
+                .validate(against: plan)
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidControlFrame("unknown stage_id missing"))
+        }
+    }
+
+    func testHelloAckFrameValidatesPlanHashAndRejectedReason() throws {
+        let plan = makePlan()
+        let accepted = DistributedWorkerHelloAck(
+            accepted: true,
+            stageID: "layers-0-16",
+            planIntegrityHash: try plan.integrityHash())
+        let rejected = DistributedWorkerHelloAck(
+            accepted: false,
+            stageID: "layers-0-16",
+            reason: "plan mismatch")
+
+        XCTAssertNoThrow(try accepted.validate(against: plan))
+        XCTAssertNoThrow(try rejected.validate(against: plan))
+
+        XCTAssertThrowsError(
+            try DistributedWorkerHelloAck(
+                accepted: true, stageID: "layers-0-16", planIntegrityHash: "old")
+                .validate(against: plan)
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidControlFrame("plan_integrity_hash mismatch"))
+        }
+        XCTAssertThrowsError(
+            try DistributedWorkerHelloAck(accepted: false, stageID: "layers-0-16")
+                .validate(against: plan)
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidControlFrame("rejected hello_ack needs a reason"))
+        }
+    }
+
+    func testErrorFrameValidatesCodeDetailAndStage() throws {
+        let plan = makePlan()
+        XCTAssertNoThrow(
+            try DistributedWorkerErrorFrame(
+                code: "plan_mismatch",
+                detail: "worker plan hash did not match",
+                requestID: "req-1",
+                stageID: "layers-0-16")
+                .validate(against: plan))
+
+        XCTAssertThrowsError(
+            try DistributedWorkerErrorFrame(code: " ", detail: "bad").validate(against: plan)
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidControlFrame("error code is empty"))
+        }
+        XCTAssertThrowsError(
+            try DistributedWorkerErrorFrame(code: "bad", detail: "", stageID: "missing")
+                .validate(against: plan)
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidControlFrame("error detail is empty"))
+        }
+        XCTAssertThrowsError(
+            try DistributedWorkerErrorFrame(code: "bad", detail: "bad", stageID: "missing")
+                .validate(against: plan)
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidControlFrame("unknown stage_id missing"))
+        }
+    }
+
+    func testWorkerMessageValidateDispatchesControlAndForwardFrames() throws {
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 2], scalarType: .float16))
+        let hidden = try hiddenPacket(
+            requestID: "req-1",
+            source: "layers-0-16",
+            destination: "layers-16-32",
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+            stepIndex: 0,
+            fill: 1)
+        let messages: [DistributedWorkerMessage] = [
+            .hello(
+                DistributedWorkerHello(
+                    stage: try XCTUnwrap(plan.stage(id: "layers-0-16")),
+                    hiddenSize: 2,
+                    boundaryScalarType: .float16,
+                    planIntegrityHash: try plan.integrityHash())),
+            .helloAck(
+                DistributedWorkerHelloAck(
+                    accepted: true,
+                    stageID: "layers-0-16",
+                    planIntegrityHash: try plan.integrityHash())),
+            .allocate(DistributedStageAllocation(requestID: "req-1", kvCapacity: 128)),
+            .forward(
+                DistributedStageForwardFrame(
+                    stageID: "layers-16-32",
+                    requestID: "req-1",
+                    stepIndex: 0,
+                    positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+                    positionIDs: [0],
+                    hiddenState: hidden.metadata)),
+            .forwardResult(
+                DistributedStageForwardResultFrame(
+                    stageID: "layers-0-16",
+                    requestID: "req-1",
+                    stepIndex: 0,
+                    hiddenState: hidden.metadata)),
+            .reset(DistributedRequestControl(requestID: "req-1", stageID: "layers-0-16")),
+            .free(DistributedRequestControl(requestID: "req-1", stageID: "layers-0-16")),
+            .error(
+                DistributedWorkerErrorFrame(
+                    code: "bad_request",
+                    detail: "bad frame",
+                    requestID: "req-1",
+                    stageID: "layers-0-16")),
+        ]
+
+        for message in messages {
+            XCTAssertNoThrow(try message.validate(against: plan))
+        }
+    }
+
+    func testWorkerMessageValidateRejectsBadFrame() throws {
+        let plan = makePlan()
+        let message = DistributedWorkerMessage.allocate(
+            DistributedStageAllocation(requestID: "req-1", kvCapacity: 0))
+
+        XCTAssertThrowsError(try message.validate(against: plan)) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidControlFrame("kv_capacity must be positive"))
+        }
+    }
+
     func testForwardFrameValidatesRoleSpecificInputs() throws {
         let plan = makePlan(
             boundaryTensor: DistributedBoundaryTensorSpec(

@@ -28,6 +28,9 @@
 - Added canonical `DistributedStagePlan` integrity hashes for distributed worker handshakes.
 - Added `HELLO` frame validation for distributed worker plan-hash, stage descriptor, and boundary
   contract checks.
+- Added distributed allocation/reset/free control-frame validation for request IDs, stage IDs, and
+  KV capacity.
+- Added whole-message validation for distributed worker frames, including ACK and error frames.
 - Added the cluster-plan contract check to publication gates.
 - Added fail-closed `caix cluster join` and `caix serve --cluster` CLI stubs for Brew surface tests.
 - Expanded the Homebrew formula test to cover distributed plan/join help and `serve --cluster`.
