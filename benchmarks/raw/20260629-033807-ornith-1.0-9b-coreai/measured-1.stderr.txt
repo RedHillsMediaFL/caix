@@ -1,0 +1,8 @@
+[fast] skipping CoreAILanguageModels path: bundle requires KV floor 1024
+[coreai] loading model ornith-1.0-9b-bf16-coreai.aimodel + tokenizer …
+[coreai] dtypes: logits=float16 keyCache=bfloat16 valueCache=bfloat16
+[coreai] model+tokenizer ready in 9.63s
+[coreai] prompt -> 16 tokens, KV cache capacity 1152 (floor 1024)
+[coreai] prefill 64.986s (0.2 tok/s)
+[coreai] decode 128 tokens in 283.220s (0.5 tok/s), stop=maxTokens
+[coreai] 16 prompt tok, 128 generated, stop=maxTokens, load=9.63s prefill=64.99s decode=283.22s (0.5 tok/s)
