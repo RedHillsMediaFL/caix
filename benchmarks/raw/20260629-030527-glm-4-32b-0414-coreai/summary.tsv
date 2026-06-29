@@ -1,0 +1,5 @@
+phase	run	status	generated	load_s	prefill_s	decode_s	decode_tps	stdout	stderr
+warmup	1	ok	128	85.80	0.00	145.43	0.9	benchmarks/raw/20260629-030527-glm-4-32b-0414-coreai/warmup-1.stdout.txt	benchmarks/raw/20260629-030527-glm-4-32b-0414-coreai/warmup-1.stderr.txt
+measured	1	ok	128	87.68	0.00	145.49	0.9	benchmarks/raw/20260629-030527-glm-4-32b-0414-coreai/measured-1.stdout.txt	benchmarks/raw/20260629-030527-glm-4-32b-0414-coreai/measured-1.stderr.txt
+measured	2	ok	128	87.91	0.00	145.48	0.9	benchmarks/raw/20260629-030527-glm-4-32b-0414-coreai/measured-2.stdout.txt	benchmarks/raw/20260629-030527-glm-4-32b-0414-coreai/measured-2.stderr.txt
+measured	3	ok	128	86.76	0.00	145.16	0.9	benchmarks/raw/20260629-030527-glm-4-32b-0414-coreai/measured-3.stdout.txt	benchmarks/raw/20260629-030527-glm-4-32b-0414-coreai/measured-3.stderr.txt

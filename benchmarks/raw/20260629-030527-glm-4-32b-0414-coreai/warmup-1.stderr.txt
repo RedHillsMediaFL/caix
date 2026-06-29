@@ -1,0 +1,7 @@
+[fast] language bundle ok: glm-4-32b-0414-coreai
+[fast] creating engine (auto→pipelined) …
+[fast] engine + tokenizer ready
+[fast] warming up engine …
+[fast] warmup done; generating 128 tokens …
+[fast] generate done in 145.43s
+[coreai] 11 prompt tok, 128 generated, stop=maxTokens, load=85.80s prefill=0.00s decode=145.43s (0.9 tok/s)
