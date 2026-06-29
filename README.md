@@ -5,7 +5,8 @@
 [![Swift](https://img.shields.io/badge/Swift-F05138?logo=swift&logoColor=white)](https://github.com/RedHillsMediaFL/caix)
 [![HF models](https://img.shields.io/badge/HF%20models-redhillsmediafl-ffcc4d)](https://huggingface.co/redhillsmediafl)
 
-Local Core AI inference server for Apple silicon.
+Local Core AI inference server for Apple silicon — private, on-device LLMs behind OpenAI- and
+Anthropic-compatible APIs. Free and open, no paywall.
 
 > **Beta.** caix depends on Apple's beta **Core AI** runtime. Expect breakage across macOS/Xcode
 > beta lines. Inference is local; downloads still use the network.
@@ -20,6 +21,21 @@ OpenAI and Anthropic clients can point at the local server.
 
 caix supports classic speculative packages and EAGLE target+draft packages. Use the model-card flags
 for each package.
+
+---
+
+## Support the work
+
+caix is **free and open, with no paywall — and it stays that way.** Every model bundle and feature is
+free to use.
+
+If caix is useful to you, you can optionally **fund the local-model work** — model conversions,
+testing, benchmark time, and hosting — and get merch for it:
+
+- **[redhillsmediafl.com/open-source](https://redhillsmediafl.com/open-source)** — sticker packs plus "model run" and "tester pool" support tiers.
+- **[redhillsmediafl.com/shop](https://redhillsmediafl.com/shop)** — prints and product packs.
+
+Support is entirely optional and never gates a feature.
 
 ---
 
