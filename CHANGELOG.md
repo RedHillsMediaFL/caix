@@ -35,6 +35,8 @@
 - Added payload byte-count validation for distributed worker wire frames.
 - Added full distributed worker wire-frame encoding and decoding for header-plus-payload transport.
 - Added an incremental distributed worker wire-frame stream decoder for loopback socket reads.
+- Added an in-process distributed loopback worker transport that exercises the same frame stream
+  path planned for local worker sockets.
 - Added a distributed worker frame executor that dispatches validated request frames to a stage
   handle and returns forward-result frames.
 - Added a remote distributed stage handle for coordinator-to-worker frame round trips.

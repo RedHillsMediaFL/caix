@@ -1716,6 +1716,66 @@ public final class DistributedWorkerFrameExecutor {
     }
 }
 
+public final class DistributedLoopbackWorkerTransport {
+    private let executor: DistributedWorkerFrameExecutor
+    private let requestChunkSize: Int?
+    private let responseChunkSize: Int?
+
+    public init(
+        executor: DistributedWorkerFrameExecutor,
+        requestChunkSize: Int? = nil,
+        responseChunkSize: Int? = nil
+    ) {
+        self.executor = executor
+        self.requestChunkSize = requestChunkSize
+        self.responseChunkSize = responseChunkSize
+    }
+
+    public func roundTrip(
+        _ request: DistributedWorkerWireFrame
+    ) async throws -> DistributedWorkerWireFrame? {
+        let requestFrames = try decodeStream(
+            DistributedWorkerMessageCodec.encodeWireFrame(request),
+            chunkSize: requestChunkSize)
+        guard requestFrames.count == 1, let requestFrame = requestFrames.first else {
+            throw DistributedStageExecutionError.invalidWireFrame(
+                "loopback request must contain exactly one frame")
+        }
+
+        guard let response = try await executor.process(requestFrame) else {
+            return nil
+        }
+        let responseFrames = try decodeStream(
+            DistributedWorkerMessageCodec.encodeWireFrame(response),
+            chunkSize: responseChunkSize)
+        guard responseFrames.count == 1, let responseFrame = responseFrames.first else {
+            throw DistributedStageExecutionError.invalidWireFrame(
+                "loopback response must contain exactly one frame")
+        }
+        return responseFrame
+    }
+
+    private func decodeStream(
+        _ data: Data,
+        chunkSize: Int?
+    ) throws -> [DistributedWorkerWireFrame] {
+        var decoder = DistributedWorkerWireFrameStreamDecoder()
+        var frames: [DistributedWorkerWireFrame] = []
+        let size = max(1, chunkSize ?? data.count)
+        var index = data.startIndex
+
+        while index < data.endIndex {
+            let end = data.index(index, offsetBy: size, limitedBy: data.endIndex) ?? data.endIndex
+            decoder.append(data[index..<end])
+            frames.append(contentsOf: try decoder.drainFrames())
+            index = end
+        }
+
+        try decoder.finish()
+        return frames
+    }
+}
+
 extension DistributedWorkerMessage {
     fileprivate var kindName: String {
         switch self {
