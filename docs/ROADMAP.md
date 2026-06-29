@@ -38,6 +38,12 @@ Do first:
 5. Add the 16 GB Mac mini as a third shard.
 6. Add `caix cluster plan`, `caix cluster join`, and `caix serve --cluster`.
 
+MacBook test gate:
+
+- Do not ask for Thunderbolt testing until steps 1-3 pass.
+- First external test is one MacBook stage over Thunderbolt Bridge.
+- Use the same staged Qwen3-0.6B manifest that passed loopback.
+
 Do not start with:
 
 - Tensor parallelism.

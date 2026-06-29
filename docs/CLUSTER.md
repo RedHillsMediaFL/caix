@@ -20,6 +20,16 @@ what metadata is missing.
 The planner preserves stage order and assigns each stage to the first worker, in the order supplied,
 with enough remaining memory. Worker memory is a dry-run budget in GB.
 
+## Thunderbolt Test Gate
+
+Do not ask for MacBook Thunderbolt testing yet. The gate is:
+
+1. Same-machine staged Qwen3-0.6B matches the monolithic bundle token-for-token.
+2. The same stage split works across two local processes over loopback.
+3. `caix cluster join` and `caix serve --cluster` can run the same manifest used by the loopback test.
+
+After those pass, test one MacBook stage over Thunderbolt Bridge. Until then, keep testing local.
+
 ## Stage Manifest Format
 
 Use top-level `stages` in a standalone manifest. A copyable example lives at
