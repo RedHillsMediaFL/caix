@@ -1,0 +1,5 @@
+phase	run	status	generated	load_s	prefill_s	decode_s	decode_tps	stdout	stderr
+warmup	1	ok	128	9.09	14.05	576.16	0.2	benchmarks/raw/20260629-004612-qwen3.6-27b-coreai/warmup-1.stdout.txt	benchmarks/raw/20260629-004612-qwen3.6-27b-coreai/warmup-1.stderr.txt
+measured	1	ok	128	9.19	14.45	575.06	0.2	benchmarks/raw/20260629-004612-qwen3.6-27b-coreai/measured-1.stdout.txt	benchmarks/raw/20260629-004612-qwen3.6-27b-coreai/measured-1.stderr.txt
+measured	2	ok	128	9.19	14.00	575.90	0.2	benchmarks/raw/20260629-004612-qwen3.6-27b-coreai/measured-2.stdout.txt	benchmarks/raw/20260629-004612-qwen3.6-27b-coreai/measured-2.stderr.txt
+measured	3	ok	128	9.24	14.09	572.99	0.2	benchmarks/raw/20260629-004612-qwen3.6-27b-coreai/measured-3.stdout.txt	benchmarks/raw/20260629-004612-qwen3.6-27b-coreai/measured-3.stderr.txt

@@ -1,0 +1,40 @@
+ here.
+
+# Local Inference
+
+Local inference is the future of AI.
+
+## Why Local Inference?
+
+Local inference is the future of AI.
+
+### Privacy
+
+Your data never leaves your device.
+
+### Speed
+
+No network latency. Instant responses.
+
+### Cost
+
+No API calls. No monthly fees.
+
+### Offline
+
+Works without internet connection.
+
+## Get Started
+
+Install the package:
+
+```bash
+npm install @local-inference/core
+```
+
+Initialize and run inference:
+
+```javascript
+import { LocalInference } from '@local-inference/core';
+
+const inference = new LocalInference

@@ -1,0 +1,8 @@
+[fast] skipping CoreAILanguageModels path: bundle requires KV floor 768
+[coreai] loading model Qwen3.6-27B-coreai.aimodel + tokenizer …
+[coreai] dtypes: logits=float16 keyCache=bfloat16 valueCache=bfloat16
+[coreai] model+tokenizer ready in 9.19s
+[coreai] prompt -> 6 tokens, KV cache capacity 896 (floor 768)
+[coreai] prefill 14.450s (0.4 tok/s)
+[coreai] decode 128 tokens in 575.058s (0.2 tok/s), stop=maxTokens
+[coreai] 6 prompt tok, 128 generated, stop=maxTokens, load=9.19s prefill=14.45s decode=575.06s (0.2 tok/s)
