@@ -11,10 +11,8 @@ temperature, streaming mode, warmup count, measured run count, and chat-template
 
 | repo | revision | local dir | request | notes |
 |---|---|---|---|---|
-| `redhillsmediafl/rhm-mixtral-8x7b-instruct-caix` | `ea180189c4266d8a0dde4e3238cf959789c0504f` | `mixtral-8x7b-instruct-coreai` | load, generation, benchmark | cataloged |
 | `redhillsmediafl/rhm-gemma-4-26b-a4b-mtp-caix` | `98793a039e2a548f04668acb4c254f57ff16f145` | `gemma-4-26b-a4b-mtp-coreai` | EAGLE MTP load, generation, benchmark | benchmark MTP package; compare against standalone target row |
 | `redhillsmediafl/rhm-gemma-4-31b-it-mtp-caix` | `0c68d17473cdc0fee45e4d27540d50897f81334a` | `gemma-4-31b-it-mtp-coreai` | EAGLE MTP load, generation, benchmark | benchmark MTP package; compare against standalone target row |
-| `redhillsmediafl/rhm-qwen3-4b-mtp-caix` | `4190150f7a47b113d36ea679c4541d95a21ce3f6` | `qwen3-4b-mtp-coreai` | classic speculative load, generation, benchmark | benchmark classic target+draft package; compare against standalone target row |
 
 ## Existing Raw Evidence
 
@@ -34,9 +32,11 @@ temperature, streaming mode, warmup count, measured run count, and chat-template
 | `redhillsmediafl/rhm-mistral-7b-instruct-v0.3-caix` | `2014f4967181dcab32c75ffb89dbd714f8f89910` | `mistral-7b-instruct-v0.3-coreai` | `decode` | 3 | `benchmarks/raw/20260628-233234-mistral-7b-instruct-v0.3-coreai` |
 | `redhillsmediafl/rhm-mistral-nemo-instruct-2407-caix` | `9821a2de1f1029c0352b0d6311c6d399e9aac1fe` | `mistral-nemo-instruct-2407-coreai` | `decode` | 3 | `benchmarks/raw/20260628-234824-mistral-nemo-instruct-2407-coreai` |
 | `redhillsmediafl/rhm-mistral-small-instruct-2409-caix` | `0549d42b45a65454bc2f99843deaebeab1587bb1` | `mistral-small-instruct-2409-coreai` | `decode` | 3 | `benchmarks/raw/20260629-000628-mistral-small-instruct-2409-coreai` |
+| `redhillsmediafl/rhm-mixtral-8x7b-instruct-caix` | `ea180189c4266d8a0dde4e3238cf959789c0504f` | `mixtral-8x7b-instruct-coreai` | `decode` | 3 | `benchmarks/raw/20260629-042411-mixtral-8x7b-instruct-coreai` |
 | `redhillsmediafl/rhm-qwen3.6-27b-caix` | `436642eef9fb9fb49f53cafc2d32c0f25a0b175a` | `qwen3.6-27b-coreai` | `decode` | 3 | `benchmarks/raw/20260629-004612-qwen3.6-27b-coreai` |
 | `redhillsmediafl/rhm-gemma-4-26b-a4b-caix` | `fede95233c003d99e6db4da433add133ba9458d6` | `gemma-4-26b-a4b-coreai` | `decode` | 3 | `benchmarks/raw/20260629-014239-gemma-4-26b-a4b-coreai` |
 | `redhillsmediafl/rhm-gemma-4-31b-it-caix` | `de8554bf1b4c5b26d3bf9eb40cac2b22303eb0e4` | `gemma-4-31b-it-coreai` | `decode` | 3 | `benchmarks/raw/20260629-020515-gemma-4-31b-it-coreai` |
+| `redhillsmediafl/rhm-qwen3-4b-mtp-caix` | `4190150f7a47b113d36ea679c4541d95a21ce3f6` | `qwen3-4b-mtp-coreai` | `speculative` | 3 | `benchmarks/raw/20260629-045620-qwen3-4b-mtp-coreai` |
 
 ## Manual Or Component Requests
 
