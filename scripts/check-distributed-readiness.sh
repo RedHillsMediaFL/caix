@@ -189,6 +189,10 @@ if roles != expected:
     sys.exit(1)
 if runtime.get("total_layer_count") != 28:
     sys.exit(1)
+if doc.get("position_mode") != "full_prefix":
+    sys.exit(1)
+if runtime.get("position_mode") != doc["position_mode"]:
+    sys.exit(1)
 boundary = doc.get("boundary_tensor")
 if not isinstance(boundary, dict):
     sys.exit(1)
