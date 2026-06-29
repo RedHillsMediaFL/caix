@@ -57,6 +57,8 @@ scan "Bearer Authorization header" \
   'Authorization[^[:cntrl:]]*Bearer|Bearer[^[:cntrl:]]*Authorization'
 scan "token passed as argv" \
   '(^|[[:space:]])--token([[:space:]=]|$)'
+scan "stale HF cache default; use /Volumes/SSD/hf-cache" \
+  '<checkout-parent>/hf-cache|converter default is[^[:cntrl:]]*hf-cache'
 
 if [[ "$fail" -ne 0 ]]; then
   exit 1
