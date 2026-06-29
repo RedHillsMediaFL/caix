@@ -25,7 +25,7 @@ For loopback evidence, use `mode=loopback`.
 Rules:
 
 - Same prompt set for monolithic and staged runs.
-- Same manifest between same-machine and loopback runs.
+- Same `manifest=` value between same-machine and loopback runs.
 - Greedy only: `temperature=0`.
 - Keep raw stdout/stderr or an archive. Do not record only a summary.
 - Do not ask for Thunderbolt testing until both evidence files pass

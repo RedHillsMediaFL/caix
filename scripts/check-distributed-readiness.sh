@@ -69,7 +69,7 @@ check_token_match_evidence() {
     return
   fi
 
-  local result mode model manifest caix_commit prompts max_tokens temperature token_match
+  local result mode model manifest caix_commit prompts max_tokens temperature token_match raw_log
   result="$(evidence_value result "$file")"
   mode="$(evidence_value mode "$file")"
   model="$(evidence_value model "$file")"
@@ -79,6 +79,7 @@ check_token_match_evidence() {
   max_tokens="$(evidence_value max_tokens "$file")"
   temperature="$(evidence_value temperature "$file")"
   token_match="$(evidence_value token_match "$file")"
+  raw_log="$(evidence_value raw_log "$file")"
 
   if [[ "$result" != "pass" ]]; then
     missing "$label evidence result must be pass: $file"
@@ -98,8 +99,29 @@ check_token_match_evidence() {
     missing "$label evidence temperature must be 0: $file"
   elif [[ "$token_match" != "true" ]]; then
     missing "$label evidence token_match must be true: $file"
+  elif [[ -z "$raw_log" ]]; then
+    missing "$label evidence raw_log is missing: $file"
   else
     ready "$label staged Qwen3-0.6B evidence is structured"
+  fi
+}
+
+check_manifest_consistency() {
+  local same_machine_file="$1"
+  local loopback_file="$2"
+
+  [[ -s "$same_machine_file" && -s "$loopback_file" ]] || return
+
+  local same_machine_manifest loopback_manifest
+  same_machine_manifest="$(evidence_value manifest "$same_machine_file")"
+  loopback_manifest="$(evidence_value manifest "$loopback_file")"
+
+  [[ -n "$same_machine_manifest" && -n "$loopback_manifest" ]] || return
+
+  if [[ "$same_machine_manifest" == "$loopback_manifest" ]]; then
+    ready "same-machine and loopback evidence use the same manifest"
+  else
+    missing "same-machine and loopback evidence manifests differ"
   fi
 }
 
@@ -156,6 +178,7 @@ loopback_evidence="$evidence_dir/loopback-qwen3-0.6b-token-match.txt"
 
 check_token_match_evidence "$same_machine_evidence" "same-machine" "same-machine"
 check_token_match_evidence "$loopback_evidence" "loopback" "loopback"
+check_manifest_consistency "$same_machine_evidence" "$loopback_evidence"
 
 if [[ -n "$brew_caix_binary" ]]; then
   if "$SCRIPT_DIR/check-brew-distributed.sh" \
