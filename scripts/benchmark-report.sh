@@ -122,9 +122,10 @@ suite_os="$(metadata_value os "$SUITE/metadata.txt")"
 suite_prompt="$(metadata_value prompt "$SUITE/metadata.txt")"
 suite_max_tokens="$(metadata_value max_tokens "$SUITE/metadata.txt")"
 suite_temperature="$(metadata_value temperature "$SUITE/metadata.txt")"
+suite_seed="$(metadata_value seed "$SUITE/metadata.txt")"
 suite_raw="$(metadata_value raw "$SUITE/metadata.txt")"
 
-printf 'repo\trepo_revision\tlocal_dir\tkind\tbenchmark_mode\tstatus\tpublishable\treason\tmeasured_runs\tmedian_generated\tmedian_load_s\tmedian_prefill_s\tmedian_decode_s\tmedian_decode_tps\tmin_decode_tps\tmax_decode_tps\tcaix_commit\tmachine\tmemory_bytes\tos\tmax_tokens\ttemperature\traw\tprompt\traw_dir\n' > "$TMP"
+printf 'repo\trepo_revision\tlocal_dir\tkind\tbenchmark_mode\tstatus\tpublishable\treason\tmeasured_runs\tmedian_generated\tmedian_load_s\tmedian_prefill_s\tmedian_decode_s\tmedian_decode_tps\tmin_decode_tps\tmax_decode_tps\tcaix_commit\tmachine\tmemory_bytes\tos\tmax_tokens\ttemperature\tseed\traw\tprompt\traw_dir\n' > "$TMP"
 
 while IFS=$'\t' read -r repo local_dir kind col4 col5 col6 col7 col8; do
   [[ -z "${repo:-}" || "$repo" == "repo" || "$repo" == \#* ]] && continue
@@ -163,6 +164,7 @@ while IFS=$'\t' read -r repo local_dir kind col4 col5 col6 col7 col8; do
   os="$suite_os"
   max_tokens="$suite_max_tokens"
   temperature="$suite_temperature"
+  seed="$suite_seed"
   raw="$suite_raw"
   prompt="$suite_prompt"
   raw_dir="$output"
@@ -192,6 +194,7 @@ while IFS=$'\t' read -r repo local_dir kind col4 col5 col6 col7 col8; do
     os="$(metadata_value os "$output/metadata.txt")"
     raw_max_tokens="$(metadata_value max_tokens "$output/metadata.txt")"
     raw_temperature="$(metadata_value temperature "$output/metadata.txt")"
+    raw_seed="$(metadata_value seed "$output/metadata.txt")"
     raw_template_mode="$(metadata_value raw "$output/metadata.txt")"
     raw_prompt="$(metadata_value prompt "$output/metadata.txt")"
     raw_mode="$(metadata_value benchmark_mode "$output/metadata.txt")"
@@ -207,6 +210,7 @@ while IFS=$'\t' read -r repo local_dir kind col4 col5 col6 col7 col8; do
 
     require_same_setting "$repo" max_tokens "$suite_max_tokens" "$raw_max_tokens"
     require_same_setting "$repo" temperature "$suite_temperature" "$raw_temperature"
+    require_same_setting "$repo" seed "$suite_seed" "$raw_seed"
     require_same_setting "$repo" raw "$suite_raw" "$raw_template_mode"
     require_same_setting "$repo" prompt "$suite_prompt" "$raw_prompt"
 
@@ -222,6 +226,7 @@ while IFS=$'\t' read -r repo local_dir kind col4 col5 col6 col7 col8; do
 
     max_tokens="$raw_max_tokens"
     temperature="$raw_temperature"
+    seed="$raw_seed"
     raw="$raw_template_mode"
     prompt="$raw_prompt"
 
@@ -251,11 +256,11 @@ while IFS=$'\t' read -r repo local_dir kind col4 col5 col6 col7 col8; do
     exit 1
   fi
 
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$repo" "$repo_revision" "$local_dir" "$kind" "$benchmark_mode" "$status" "$publishable" "$reason" \
     "$measured_runs" "$median_generated" "$median_load" "$median_prefill" "$median_decode" \
     "$median_tps" "$min_tps" "$max_tps" "$caix_commit" "$machine" "$memory" "$os" \
-    "$max_tokens" "$temperature" "$raw" "$prompt" "$raw_dir" >> "$TMP"
+    "$max_tokens" "$temperature" "$seed" "$raw" "$prompt" "$raw_dir" >> "$TMP"
 done < "$SUITE/summary.tsv"
 
 mv "$TMP" "$OUT"

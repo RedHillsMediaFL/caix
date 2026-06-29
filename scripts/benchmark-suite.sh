@@ -15,6 +15,7 @@ Options:
   --repo-revision <sha> Exact model repo commit to record for every measured row. Default: unknown.
   --max-tokens <n>      Max generated tokens. Default: 128.
   --temperature <n>     Temperature. Default: 0.
+  --seed <n>            RNG seed passed to caix run rows.
   --warmup <n>          Warmup runs. Default: 1.
   --runs <n>            Measured runs. Default: 3.
   --raw                 Skip chat template for every run.
@@ -46,6 +47,7 @@ PROMPT_FILE=""
 REPO_REVISION="unknown"
 MAX_TOKENS=128
 TEMPERATURE=0
+SEED=""
 WARMUP=1
 RUNS=3
 RAW=0
@@ -63,6 +65,7 @@ while [[ $# -gt 0 ]]; do
     --repo-revision) REPO_REVISION="${2:?}"; shift 2 ;;
     --max-tokens) MAX_TOKENS="${2:?}"; shift 2 ;;
     --temperature) TEMPERATURE="${2:?}"; shift 2 ;;
+    --seed) SEED="${2:?}"; shift 2 ;;
     --warmup) WARMUP="${2:?}"; shift 2 ;;
     --runs) RUNS="${2:?}"; shift 2 ;;
     --raw) RAW=1; shift ;;
@@ -79,6 +82,10 @@ if [[ -n "$REVISIONS" ]]; then
 fi
 [[ -d "$EXPORTS" ]] || { echo "error: exports directory not found: $EXPORTS" >&2; exit 2; }
 [[ "$MAX_TOKENS" =~ ^[0-9]+$ ]] || { echo "error: --max-tokens must be an integer" >&2; exit 2; }
+if [[ -n "$SEED" && ! "$SEED" =~ ^[0-9]+$ ]]; then
+  echo "error: --seed must be a non-negative integer" >&2
+  exit 2
+fi
 [[ "$WARMUP" =~ ^[0-9]+$ ]] || { echo "error: --warmup must be an integer" >&2; exit 2; }
 [[ "$RUNS" =~ ^[1-9][0-9]*$ ]] || { echo "error: --runs must be a positive integer" >&2; exit 2; }
 if [[ "$REPO_REVISION" != "unknown" && ! "$REPO_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
@@ -197,6 +204,7 @@ SUMMARY="$SUITE_DIR/summary.tsv"
   echo "os=$(sw_vers -productVersion 2>/dev/null || true) ($(sw_vers -buildVersion 2>/dev/null || true))"
   echo "max_tokens=$MAX_TOKENS"
   echo "temperature=$TEMPERATURE"
+  echo "seed=$SEED"
   echo "repo_revision=$REPO_REVISION"
   echo "warmup=$WARMUP"
   echo "runs=$RUNS"
@@ -282,6 +290,7 @@ while IFS=$'\t' read -r repo local_dir kind mode status notes; do
         --warmup "$WARMUP"
         --runs "$RUNS"
         --out "$OUT_ROOT")
+      [[ -n "$SEED" ]] && cmd+=(--seed "$SEED")
       [[ "$canonical_mode" == "speculative" ]] && cmd+=(--draft "$bundle/draft" --draft-tokens 4)
     fi
     [[ "$RAW" == "1" ]] && cmd+=(--raw)

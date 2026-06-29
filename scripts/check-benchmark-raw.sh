@@ -144,22 +144,25 @@ check_model_dir() {
     fi
   done < "$output/summary.tsv"
 
-  local suite_prompt suite_max_tokens suite_temperature suite_raw
+  local suite_prompt suite_max_tokens suite_temperature suite_seed suite_raw
   suite_prompt="$(metadata_value prompt "$suite/metadata.txt")"
   suite_max_tokens="$(metadata_value max_tokens "$suite/metadata.txt")"
   suite_temperature="$(metadata_value temperature "$suite/metadata.txt")"
+  suite_seed="$(metadata_value seed "$suite/metadata.txt")"
   suite_raw="$(metadata_value raw "$suite/metadata.txt")"
 
-  local model_prompt model_max_tokens model_temperature model_raw model_mode
+  local model_prompt model_max_tokens model_temperature model_seed model_raw model_mode
   model_prompt="$(metadata_value prompt "$output/metadata.txt")"
   model_max_tokens="$(metadata_value max_tokens "$output/metadata.txt")"
   model_temperature="$(metadata_value temperature "$output/metadata.txt")"
+  model_seed="$(metadata_value seed "$output/metadata.txt")"
   model_raw="$(metadata_value raw "$output/metadata.txt")"
   model_mode="$(canonical_benchmark_mode "$(metadata_value benchmark_mode "$output/metadata.txt")")"
   row_mode="$(canonical_benchmark_mode "$row_mode")"
 
   if [[ "$model_prompt" != "$suite_prompt" || "$model_max_tokens" != "$suite_max_tokens" ||
-        "$model_temperature" != "$suite_temperature" || "$model_raw" != "$suite_raw" ]]; then
+        "$model_temperature" != "$suite_temperature" || "$model_seed" != "$suite_seed" ||
+        "$model_raw" != "$suite_raw" ]]; then
     echo "error: suite/model benchmark settings drift for $repo" >&2
     return 1
   fi
