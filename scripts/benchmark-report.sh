@@ -12,6 +12,7 @@ Options:
 Reads suite summary rows plus per-model raw benchmark summaries.
 Refuses measured rows with missing raw logs or failed measured runs.
 Rows without a recorded model revision are marked publishable=no.
+Preserves benchmark_mode so standalone decode, classic speculative, and EAGLE rows are not mixed.
 USAGE
 }
 
@@ -105,10 +106,27 @@ suite_max_tokens="$(metadata_value max_tokens "$SUITE/metadata.txt")"
 suite_temperature="$(metadata_value temperature "$SUITE/metadata.txt")"
 suite_raw="$(metadata_value raw "$SUITE/metadata.txt")"
 
-printf 'repo\trepo_revision\tlocal_dir\tkind\tstatus\tpublishable\treason\tmeasured_runs\tmedian_generated\tmedian_load_s\tmedian_prefill_s\tmedian_decode_s\tmedian_decode_tps\tmin_decode_tps\tmax_decode_tps\tcaix_commit\tmachine\tmemory_bytes\tos\tmax_tokens\ttemperature\traw\tprompt\traw_dir\n' > "$TMP"
+printf 'repo\trepo_revision\tlocal_dir\tkind\tbenchmark_mode\tstatus\tpublishable\treason\tmeasured_runs\tmedian_generated\tmedian_load_s\tmedian_prefill_s\tmedian_decode_s\tmedian_decode_tps\tmin_decode_tps\tmax_decode_tps\tcaix_commit\tmachine\tmemory_bytes\tos\tmax_tokens\ttemperature\traw\tprompt\traw_dir\n' > "$TMP"
 
-while IFS=$'\t' read -r repo local_dir kind status reason bundle output; do
+while IFS=$'\t' read -r repo local_dir kind col4 col5 col6 col7 col8; do
   [[ -z "${repo:-}" || "$repo" == "repo" || "$repo" == \#* ]] && continue
+
+  case "$col5" in
+    measured|planned|skip|fail)
+      benchmark_mode="$col4"
+      status="$col5"
+      reason="$col6"
+      bundle="$col7"
+      output="$col8"
+      ;;
+    *)
+      benchmark_mode="-"
+      status="$col4"
+      reason="$col5"
+      bundle="$col6"
+      output="$col7"
+      ;;
+  esac
 
   repo_revision="-"
   publishable="no"
@@ -157,6 +175,8 @@ while IFS=$'\t' read -r repo local_dir kind status reason bundle output; do
     temperature="$(metadata_value temperature "$output/metadata.txt")"
     raw="$(metadata_value raw "$output/metadata.txt")"
     prompt="$(metadata_value prompt "$output/metadata.txt")"
+    raw_mode="$(metadata_value benchmark_mode "$output/metadata.txt")"
+    [[ -n "$raw_mode" ]] && benchmark_mode="$raw_mode"
 
     median_generated="$(median_field "$output/summary.tsv" 4)"
     median_load="$(median_field "$output/summary.tsv" 5)"
@@ -181,8 +201,8 @@ while IFS=$'\t' read -r repo local_dir kind status reason bundle output; do
     exit 1
   fi
 
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$repo" "$repo_revision" "$local_dir" "$kind" "$status" "$publishable" "$reason" \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$repo" "$repo_revision" "$local_dir" "$kind" "$benchmark_mode" "$status" "$publishable" "$reason" \
     "$measured_runs" "$median_generated" "$median_load" "$median_prefill" "$median_decode" \
     "$median_tps" "$min_tps" "$max_tps" "$caix_commit" "$machine" "$memory" "$os" \
     "$max_tokens" "$temperature" "$raw" "$prompt" "$raw_dir" >> "$TMP"

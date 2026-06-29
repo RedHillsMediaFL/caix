@@ -135,7 +135,7 @@ SUMMARY="$SUITE_DIR/summary.tsv"
   printf 'prompt=%s\n' "$PROMPT"
 } > "$SUITE_DIR/metadata.txt"
 
-printf 'repo\tlocal_dir\tkind\tstatus\treason\tbundle\toutput\n' > "$SUMMARY"
+printf 'repo\tlocal_dir\tkind\tbenchmark_mode\tstatus\treason\tbundle\toutput\n' > "$SUMMARY"
 
 total=0
 measured=0
@@ -220,8 +220,8 @@ while IFS=$'\t' read -r repo local_dir kind mode status notes; do
     fi
   fi
 
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$repo" "$local_dir" "$kind" "$row_status" "$reason" "$bundle" "$output" >> "$SUMMARY"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$repo" "$local_dir" "$kind" "$mode" "$row_status" "$reason" "$bundle" "$output" >> "$SUMMARY"
 done < "$MANIFEST"
 
 {

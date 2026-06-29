@@ -102,6 +102,8 @@ STAMP="$(date '+%Y%m%d-%H%M%S')"
 SAFE_NAME="$(printf '%s' "$NAME" | tr -cs 'A-Za-z0-9._-' '-')"
 OUT_DIR="$OUT_ROOT/$STAMP-$SAFE_NAME"
 mkdir -p "$OUT_DIR"
+BENCHMARK_MODE="decode"
+[[ -n "$DRAFT" ]] && BENCHMARK_MODE="speculative"
 
 FREE_GIB="$(df -g /Volumes/SSD 2>/dev/null | awk 'NR==2 {print $4}')"
 {
@@ -133,6 +135,7 @@ trap 'rm -f "$LOCK"' EXIT
   echo "runs=$RUNS"
   echo "raw=$RAW"
   echo "draft_tokens=$DRAFT_TOKENS"
+  echo "benchmark_mode=$BENCHMARK_MODE"
   printf 'prompt=%s\n' "$PROMPT"
 } > "$OUT_DIR/metadata.txt"
 

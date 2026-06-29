@@ -35,6 +35,8 @@
   component-only, or blocked with an explicit next step.
 - Added classic speculative and EAGLE/MTP benchmark runner support so target+draft packages can
   produce raw benchmark logs instead of staying manual-only.
+- Added benchmark-mode fields to suite summaries and reports so standalone, classic speculative,
+  and EAGLE measurements stay separate.
 - Added a reusable disk-pressure guard and wired benchmark runners to fail before writing logs when
   the checked volume is below the configured free-space floor.
 - Added a disk preflight for dashboard RHM bundle downloads before launching `hf download`.

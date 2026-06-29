@@ -52,7 +52,7 @@ scripts/benchmark-suite.sh \
 ```
 
 The suite reads `benchmarks/MANIFEST.tsv`, does not download models, and writes one row per repo to
-`benchmarks/raw/<timestamp>-suite/summary.tsv`. Installed standalone bundles use
+`benchmarks/raw/<timestamp>-suite/summary.tsv` with the row's `benchmark_mode`. Installed standalone bundles use
 `scripts/benchmark-model.sh`. Classic speculative packages use `scripts/benchmark-model.sh` with
 `<bundle>/draft`. EAGLE/MTP packages use `scripts/benchmark-eagle.sh` against
 `eagle_target.aimodel`, `eagle_draft.aimodel`, and `tokenizer/`. Missing bundles, missing draft
@@ -105,7 +105,8 @@ scripts/benchmark-report.sh \
 
 The report script reads the suite summary and each measured model's raw `summary.tsv` and
 `metadata.txt`. It refuses missing raw logs and failed measured rows. Rows without a recorded model
-repo revision are marked `publishable=no`; do not copy those numbers into public docs.
+repo revision are marked `publishable=no`; do not copy those numbers into public docs. The report
+includes `benchmark_mode`; do not compare rows unless the mode and prompt settings match.
 
 ## Public Table Fields
 
@@ -117,6 +118,7 @@ Use these fields for any published benchmark table:
 | caix commit | `git rev-parse HEAD` |
 | hardware | `sysctl -n machdep.cpu.brand_string`, unified memory, macOS build |
 | command | exact `caix run` or server request |
+| benchmark mode | `decode`, `speculative`, or `eagle-mtp` |
 | prompt | exact prompt text or fixture path |
 | max tokens | command value |
 | temperature | command value |
