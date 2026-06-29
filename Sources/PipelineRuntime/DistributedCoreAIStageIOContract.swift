@@ -110,10 +110,10 @@ extension DistributedStageHandleFactoryContext {
 }
 
 public final class DistributedCoreAIStageHandleFactory: DistributedStageHandleFactory {
-    private let functionName: String
+    private let functionName: String?
     private let vocabSize: Int?
 
-    public init(functionName: String = "main", vocabSize: Int? = nil) {
+    public init(functionName: String? = nil, vocabSize: Int? = nil) {
         self.functionName = functionName
         self.vocabSize = vocabSize
     }
@@ -155,10 +155,12 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
 
     public static func load(
         for context: DistributedStageHandleFactoryContext,
-        functionName: String = "main",
+        functionName: String? = nil,
         vocabSize: Int? = nil
     ) async throws -> DistributedCoreAIStageHandle {
         let assetURL = try context.requireExistingAssetURL()
+        let resolvedFunctionName = functionName ?? context.mainFunctionName
+        let resolvedVocabSize = vocabSize ?? context.vocabSize
         var specialization = SpecializationOptions(
             preferredComputeUnitKind: LLMEngine.preferredComputeUnit())
         specialization.expectFrequentReshapes = true
@@ -167,18 +169,18 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
             options: specialization,
             cache: .default,
             cachePolicy: .persistent)
-        guard let functionDescriptor = model.functionDescriptor(for: functionName) else {
+        guard let functionDescriptor = model.functionDescriptor(for: resolvedFunctionName) else {
             throw CoreAIPipeline.RuntimeError.modelContract(
-                "distributed stage function '\(functionName)' not found in \(assetURL.lastPathComponent); have \(model.functionNames)")
+                "distributed stage function '\(resolvedFunctionName)' not found in \(assetURL.lastPathComponent); have \(model.functionNames)")
         }
         let ioContract = try context.validateCoreAIStageIOContract(
-            functionName: functionName,
+            functionName: resolvedFunctionName,
             descriptor: functionDescriptor,
-            vocabSize: vocabSize)
+            vocabSize: resolvedVocabSize)
         return DistributedCoreAIStageHandle(
             descriptor: context.descriptor,
             assetURL: assetURL,
-            functionName: functionName,
+            functionName: resolvedFunctionName,
             ioContract: ioContract,
             model: model,
             functionDescriptor: functionDescriptor)

@@ -2112,6 +2112,82 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertNoThrow(try manifest.runtimePlan.validate())
     }
 
+    func testStageManifestLoadsPerStageFunctionMetadata() throws {
+        let json =
+            """
+            {
+              "schema": "\(DistributedStageManifest.currentSchema)",
+              "model": "qwen3-0.6b-coreai",
+              "total_layer_count": 28,
+              "position_mode": "full_prefix",
+              "boundary": {
+                "hidden_state": {
+                  "name": "hidden_states",
+                  "shape": [1, -1, 1024],
+                  "scalar_type": "float16"
+                }
+              },
+              "stages": [
+                {
+                  "id": "embed",
+                  "role": "embeddings",
+                  "layers": "embeddings",
+                  "bundle": "stages/00-embed.aimodel",
+                  "decode_asset": "stages/00-embed-decode.aimodel",
+                  "function_map": {"main": ["prefill_embed"], "decode": ["decode_embed"]},
+                  "vocab_size": 151936,
+                  "memory_gb": 1.0
+                },
+                {
+                  "id": "layers-00-28",
+                  "role": "transformer_layers",
+                  "layers": [0, 28],
+                  "bundle": "stages/01-layers.aimodel",
+                  "function_map": {"main": ["prefill_layers"]},
+                  "memory_gb": 2.0
+                },
+                {
+                  "id": "head",
+                  "role": "final_norm_head",
+                  "layers": "norm+lm_head",
+                  "bundle": "stages/02-head.aimodel",
+                  "function_map": {"main": ["prefill_head"], "decode": ["decode_head"]},
+                  "vocab_size": 151936,
+                  "memory_gb": 1.0
+                }
+              ]
+            }
+            """
+        let baseURL = URL(fileURLWithPath: "/tmp/caix-manifest", isDirectory: true)
+        let manifest = try DistributedStageManifest.decode(
+            from: Data(json.utf8),
+            baseURL: baseURL)
+
+        let embed = try XCTUnwrap(manifest.stages.first)
+        XCTAssertEqual(embed.functionMap?.mainFunctionName, "prefill_embed")
+        XCTAssertEqual(embed.functionMap?.decodeFunctionName, "decode_embed")
+        XCTAssertEqual(embed.decodeAssetName, "stages/00-embed-decode.aimodel")
+        XCTAssertEqual(
+            embed.resolvedDecodeAssetPath,
+            "/tmp/caix-manifest/stages/00-embed-decode.aimodel")
+        XCTAssertEqual(embed.vocabSize, 151_936)
+
+        let descriptor = try XCTUnwrap(manifest.runtimePlan.stage(id: "embed"))
+        XCTAssertEqual(descriptor.functionMap?.mainFunctionName, "prefill_embed")
+        XCTAssertEqual(descriptor.functionMap?.decodeFunctionName, "decode_embed")
+        XCTAssertEqual(descriptor.decodeAssetName, "stages/00-embed-decode.aimodel")
+        XCTAssertEqual(descriptor.vocabSize, 151_936)
+
+        let context = try XCTUnwrap(makeContext(manifest: manifest, stage: embed))
+        XCTAssertEqual(context.mainFunctionName, "prefill_embed")
+        XCTAssertEqual(context.decodeFunctionName, "decode_embed")
+        XCTAssertEqual(context.vocabSize, 151_936)
+        XCTAssertEqual(context.nextStage?.id, "layers-00-28")
+        XCTAssertEqual(
+            context.resolvedDecodeAssetURL?.path,
+            "/tmp/caix-manifest/stages/00-embed-decode.aimodel")
+    }
+
     func testStageManifestLoadsMetadataClusterBlockAndDerivesLayerCount() throws {
         let json =
             """
@@ -2132,6 +2208,38 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertEqual(manifest.boundaryTensor?.shape, [1, -1, 1024])
         XCTAssertEqual(manifest.runtimePlan.positionMode, .fullPrefix)
         XCTAssertEqual(manifest.runtimePlan.stages[2].layerRange, DistributedLayerRange(lowerBound: 14, upperBound: 28))
+    }
+
+    func testStageManifestRejectsInvalidPerStageFunctionMetadata() {
+        let json =
+            """
+            {
+              "schema": "\(DistributedStageManifest.currentSchema)",
+              "model": "qwen3-0.6b-coreai",
+              "total_layer_count": 28,
+              "stages": [
+                {
+                  "id": "embed",
+                  "role": "embeddings",
+                  "layers": "embeddings",
+                  "bundle": "stages/00-embed.aimodel",
+                  "function_map": {"main": [" "]},
+                  "memory_gb": 1.0
+                },
+                {"id":"layers","role":"transformer_layers","layers":[0,28],"bundle":"stages/layers.aimodel","memory_gb":2.0},
+                {"id":"head","role":"final_norm_head","layers":"norm+lm_head","bundle":"stages/head.aimodel","memory_gb":1.0}
+              ]
+            }
+            """
+
+        XCTAssertThrowsError(try DistributedStageManifest.decode(from: Data(json.utf8))) { error in
+            XCTAssertEqual(
+                error as? DistributedStageManifestError,
+                .invalidStageField(
+                    stageID: "embed",
+                    field: "function_map",
+                    reason: "function_map main names must be non-empty"))
+        }
     }
 
     func testStageManifestRejectsLayerCoverageGap() {

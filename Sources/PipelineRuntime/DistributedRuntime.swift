@@ -83,12 +83,73 @@ public struct DistributedLayerRange: Codable, Hashable, Sendable, CustomStringCo
     }
 }
 
+/// Optional per-stage exported function names.
+public struct DistributedStageFunctionMap: Codable, Hashable, Sendable {
+    public let byRole: [String: [String]]
+
+    public init(_ byRole: [String: [String]]) {
+        self.byRole = byRole
+    }
+
+    public init(main: String = "main", decode: String? = nil) {
+        var byRole = ["main": [main]]
+        if let decode {
+            byRole["decode"] = [decode]
+        }
+        self.byRole = byRole
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        self.byRole = try container.decode([String: [String]].self)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(byRole)
+    }
+
+    public func name(for role: String) -> String? {
+        byRole[role]?.first
+    }
+
+    public var mainFunctionName: String {
+        name(for: "main") ?? "main"
+    }
+
+    public var decodeFunctionName: String? {
+        name(for: "decode")
+    }
+
+    var validationErrorMessage: String? {
+        for (role, names) in byRole {
+            if Self.trimmed(role).isEmpty {
+                return "function_map roles must be non-empty"
+            }
+            if names.isEmpty {
+                return "function_map \(role) names must be non-empty"
+            }
+            if names.contains(where: { Self.trimmed($0).isEmpty }) {
+                return "function_map \(role) names must be non-empty"
+            }
+        }
+        return nil
+    }
+
+    private static func trimmed(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
 /// One stage bundle assignment. `assetName` is the manifest asset key or local bundle label.
 public struct DistributedStageDescriptor: Codable, Hashable, Sendable {
     public let id: String
     public let role: DistributedStageRole
     public let layerRange: DistributedLayerRange?
     public let assetName: String
+    public let decodeAssetName: String?
+    public let functionMap: DistributedStageFunctionMap?
+    public let vocabSize: Int?
     public let workerID: String?
 
     enum CodingKeys: String, CodingKey {
@@ -96,6 +157,9 @@ public struct DistributedStageDescriptor: Codable, Hashable, Sendable {
         case role
         case layerRange = "layer_range"
         case assetName = "asset_name"
+        case decodeAssetName = "decode_asset_name"
+        case functionMap = "function_map"
+        case vocabSize = "vocab_size"
         case workerID = "worker_id"
     }
 
@@ -104,12 +168,18 @@ public struct DistributedStageDescriptor: Codable, Hashable, Sendable {
         role: DistributedStageRole,
         layerRange: DistributedLayerRange? = nil,
         assetName: String,
+        decodeAssetName: String? = nil,
+        functionMap: DistributedStageFunctionMap? = nil,
+        vocabSize: Int? = nil,
         workerID: String? = nil
     ) {
         self.id = id
         self.role = role
         self.layerRange = layerRange
         self.assetName = assetName
+        self.decodeAssetName = decodeAssetName
+        self.functionMap = functionMap
+        self.vocabSize = vocabSize
         self.workerID = workerID
     }
 }
@@ -229,6 +299,10 @@ public struct DistributedStageManifestStage: Codable, Hashable, Sendable {
     public let layerSpec: DistributedStageLayerSpec
     public let assetName: String
     public let resolvedAssetPath: String?
+    public let decodeAssetName: String?
+    public let resolvedDecodeAssetPath: String?
+    public let functionMap: DistributedStageFunctionMap?
+    public let vocabSize: Int?
     public let memoryGB: Double
 
     enum CodingKeys: String, CodingKey {
@@ -237,6 +311,10 @@ public struct DistributedStageManifestStage: Codable, Hashable, Sendable {
         case layerSpec = "layers"
         case assetName = "asset_name"
         case resolvedAssetPath = "resolved_asset_path"
+        case decodeAssetName = "decode_asset_name"
+        case resolvedDecodeAssetPath = "resolved_decode_asset_path"
+        case functionMap = "function_map"
+        case vocabSize = "vocab_size"
         case memoryGB = "memory_gb"
     }
 
@@ -246,6 +324,10 @@ public struct DistributedStageManifestStage: Codable, Hashable, Sendable {
         layerSpec: DistributedStageLayerSpec,
         assetName: String,
         resolvedAssetPath: String? = nil,
+        decodeAssetName: String? = nil,
+        resolvedDecodeAssetPath: String? = nil,
+        functionMap: DistributedStageFunctionMap? = nil,
+        vocabSize: Int? = nil,
         memoryGB: Double
     ) {
         self.id = id
@@ -253,6 +335,10 @@ public struct DistributedStageManifestStage: Codable, Hashable, Sendable {
         self.layerSpec = layerSpec
         self.assetName = assetName
         self.resolvedAssetPath = resolvedAssetPath
+        self.decodeAssetName = decodeAssetName
+        self.resolvedDecodeAssetPath = resolvedDecodeAssetPath
+        self.functionMap = functionMap
+        self.vocabSize = vocabSize
         self.memoryGB = memoryGB
     }
 
@@ -274,6 +360,9 @@ public struct DistributedStageManifestStage: Codable, Hashable, Sendable {
             role: role,
             layerRange: layerRange,
             assetName: assetName,
+            decodeAssetName: decodeAssetName,
+            functionMap: functionMap,
+            vocabSize: vocabSize,
             workerID: workerID)
     }
 }
@@ -889,12 +978,31 @@ public struct DistributedStageManifest: Hashable, Sendable {
                 stageID: id, field: "memory_gb", reason: "must be positive")
         }
 
+        if let reason = rawStage.functionMap?.validationErrorMessage {
+            throw DistributedStageManifestError.invalidStageField(
+                stageID: id, field: "function_map", reason: reason)
+        }
+        let decodeAssetName = firstNonEmpty([
+            rawStage.decodeAssetName, rawStage.decodeAsset, rawStage.decodeBundle,
+        ])
+        let vocabSize = rawStage.vocabSize?.value
+        if let vocabSize, vocabSize <= 0 {
+            throw DistributedStageManifestError.invalidStageField(
+                stageID: id, field: "vocab_size", reason: "must be positive")
+        }
+
         return DistributedStageManifestStage(
             id: id,
             role: role,
             layerSpec: layerSpec,
             assetName: assetName,
             resolvedAssetPath: resolveAssetPath(assetName, baseURL: baseURL),
+            decodeAssetName: decodeAssetName,
+            resolvedDecodeAssetPath: decodeAssetName.flatMap {
+                resolveAssetPath($0, baseURL: baseURL)
+            },
+            functionMap: rawStage.functionMap,
+            vocabSize: vocabSize,
             memoryGB: memoryGB)
     }
 
@@ -1059,6 +1167,11 @@ private struct RawDistributedStageManifestStage: Decodable {
     let requiredMemoryGB: FlexibleDouble?
     let requiredMemoryGBCamel: FlexibleDouble?
     let estimatedMemoryGB: FlexibleDouble?
+    let decodeAssetName: String?
+    let decodeAsset: String?
+    let decodeBundle: String?
+    let functionMap: DistributedStageFunctionMap?
+    let vocabSize: FlexibleInt?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -1077,6 +1190,11 @@ private struct RawDistributedStageManifestStage: Decodable {
         case requiredMemoryGB = "required_memory_gb"
         case requiredMemoryGBCamel = "requiredMemoryGB"
         case estimatedMemoryGB = "estimated_memory_gb"
+        case decodeAssetName = "decode_asset_name"
+        case decodeAsset = "decode_asset"
+        case decodeBundle = "decode_bundle"
+        case functionMap = "function_map"
+        case vocabSize = "vocab_size"
     }
 }
 
@@ -2760,6 +2878,26 @@ public struct DistributedStageHandleFactoryContext: Hashable, Sendable {
         stage.resolvedAssetPath.map { URL(fileURLWithPath: $0) }
     }
 
+    public var resolvedDecodeAssetURL: URL? {
+        stage.resolvedDecodeAssetPath.map { URL(fileURLWithPath: $0) }
+    }
+
+    public var nextStage: DistributedStageDescriptor? {
+        manifest.runtimePlan.nextStage(after: descriptor.id)
+    }
+
+    public var mainFunctionName: String {
+        descriptor.functionMap?.mainFunctionName ?? "main"
+    }
+
+    public var decodeFunctionName: String? {
+        descriptor.functionMap?.decodeFunctionName
+    }
+
+    public var vocabSize: Int? {
+        descriptor.vocabSize
+    }
+
     public func requireResolvedAssetURL() throws -> URL {
         guard let resolvedAssetURL else {
             throw DistributedStageExecutionError.missingStageAssetPath(stage.id)
@@ -2769,6 +2907,15 @@ public struct DistributedStageHandleFactoryContext: Hashable, Sendable {
 
     public func requireExistingAssetURL(fileManager: FileManager = .default) throws -> URL {
         let url = try requireResolvedAssetURL()
+        guard fileManager.fileExists(atPath: url.path) else {
+            throw DistributedStageExecutionError.missingStageAsset(
+                stageID: stage.id, path: url.path)
+        }
+        return url
+    }
+
+    public func requireExistingDecodeAssetURL(fileManager: FileManager = .default) throws -> URL? {
+        guard let url = resolvedDecodeAssetURL else { return nil }
         guard fileManager.fileExists(atPath: url.path) else {
             throw DistributedStageExecutionError.missingStageAsset(
                 stageID: stage.id, path: url.path)
@@ -3311,6 +3458,16 @@ public enum DistributedRuntimeValidation {
         }
         guard !trimmed(stage.assetName).isEmpty else {
             throw DistributedRuntimeValidationError.invalidIdentifier(field: "stage.asset_name")
+        }
+        if let decodeAssetName = stage.decodeAssetName, trimmed(decodeAssetName).isEmpty {
+            throw DistributedRuntimeValidationError.invalidIdentifier(
+                field: "stage.decode_asset_name")
+        }
+        if let vocabSize = stage.vocabSize, vocabSize <= 0 {
+            throw DistributedRuntimeValidationError.invalidIdentifier(field: "stage.vocab_size")
+        }
+        if stage.functionMap?.validationErrorMessage != nil {
+            throw DistributedRuntimeValidationError.invalidIdentifier(field: "stage.function_map")
         }
         if let workerID = stage.workerID, trimmed(workerID).isEmpty {
             throw DistributedRuntimeValidationError.invalidIdentifier(field: "stage.worker_id")

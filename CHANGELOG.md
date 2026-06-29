@@ -50,6 +50,7 @@
 - Added staged distributed function IO contract validation against manifest roles and boundary tensors.
 - Added a CoreAI descriptor adapter for staged distributed function IO validation.
 - Added a fail-closed CoreAI distributed stage-handle factory for descriptor validation.
+- Added per-stage distributed function-map, decode-asset, and vocab metadata.
 - Tightened distributed worker `FREE` handling so unknown request IDs are rejected before stage
   teardown runs.
 - Threaded `HELLO`/ACK through the loopback worker transport so handshake frames use the same

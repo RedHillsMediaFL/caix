@@ -415,8 +415,8 @@ add transport, per §4/§5/§7.
   exporter still needs to materialize a host-readable boundary.
 - **Staged exporter handoff.** The runtime and CLI can load staged manifests, but current exports
   still do not record staged metadata. The exporter must write `cluster.stages`,
-  `total_layer_count`, `position_mode`, stage asset names, and boundary tensor metadata before
-  same-machine staged equivalence can run.
+  `total_layer_count`, `position_mode`, stage asset names, `function_map`, optional decode assets,
+  `vocab_size`, and boundary tensor metadata before same-machine staged equivalence can run.
 - **`AIModel.specialize` cache keying.** Does the `.default` compile cache key cleanly per
   stage graph, or do same-named functions (`main`/`decode`) across stage bundles collide?
   Settle during 9.2.

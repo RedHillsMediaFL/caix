@@ -16,6 +16,9 @@
       "role": "embeddings",
       "layers": "embeddings",
       "bundle": "stages/00-embed.aimodel",
+      "decode_asset": "stages/00-embed-decode.aimodel",
+      "function_map": {"main": ["main"], "decode": ["decode"]},
+      "vocab_size": 151936,
       "memory_gb": 1.0
     },
     {
@@ -23,6 +26,7 @@
       "role": "transformer_layers",
       "layers": [0, 14],
       "bundle": "stages/01-layers-00-14.aimodel",
+      "function_map": {"main": ["main"], "decode": ["decode"]},
       "memory_gb": 2.0
     },
     {
@@ -30,6 +34,7 @@
       "role": "transformer_layers",
       "layers": [14, 28],
       "bundle": "stages/02-layers-14-28.aimodel",
+      "function_map": {"main": ["main"], "decode": ["decode"]},
       "memory_gb": 2.0
     },
     {
@@ -37,6 +42,9 @@
       "role": "final_norm_head",
       "layers": "norm+lm_head",
       "bundle": "stages/03-head.aimodel",
+      "decode_asset": "stages/03-head-decode.aimodel",
+      "function_map": {"main": ["main"], "decode": ["decode"]},
+      "vocab_size": 151936,
       "memory_gb": 1.0
     }
   ]
