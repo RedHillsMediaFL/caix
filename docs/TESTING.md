@@ -19,6 +19,8 @@ scripts/check-conversion-ledger.sh
 scripts/generate-tester-requests.sh \
   --revisions benchmarks/revisions.tsv \
   --out docs/TESTER_REQUESTS.md
+scripts/check-tester-requests.sh \
+  --revisions benchmarks/revisions.tsv
 ```
 
 Draft repos are components. Test them only with the matching target repo and the command documented
