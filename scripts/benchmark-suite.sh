@@ -173,6 +173,10 @@ heavy_task_guard() {
 }
 
 if [[ "$DRY_RUN" != "1" ]]; then
+  if [[ -n "$(git -C "$REPO_DIR" status --short 2>/dev/null)" ]]; then
+    echo "error: git worktree must be clean before recording benchmark evidence" >&2
+    exit 2
+  fi
   require_revision_for_measured_rows
   heavy_task_guard
 fi

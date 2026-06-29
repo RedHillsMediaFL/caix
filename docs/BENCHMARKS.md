@@ -6,6 +6,7 @@ machine, and command.
 ## Rules
 
 - Run no benchmarks while `.agent-heavy-task.lock` exists or while a conversion/upload/verification is active.
+- Run publishable benchmark scripts only from a clean git worktree.
 - Use the same prompt, token budget, temperature, streaming mode, warmup count, and measured run count for every comparable model.
 - Record skipped models with the reason: missing local bundle, gated upstream access, host memory fit, runtime failure, or license limit.
 - Use median decode tok/s from measured warm runs for public tables. Keep prefill and load time separately.

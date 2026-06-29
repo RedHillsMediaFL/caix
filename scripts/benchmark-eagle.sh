@@ -120,6 +120,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/lib/caix-env.sh"
 
+if [[ -n "$(git -C "$REPO_DIR" status --short 2>/dev/null)" ]]; then
+  echo "error: git worktree must be clean before recording benchmark evidence" >&2
+  exit 2
+fi
+
 caix_bin="$(caix_env caix_bin BIN ./caix)"
 [[ -x "$caix_bin" ]] || caix_bin="./.build/release/caix"
 [[ -x "$caix_bin" ]] || { echo "error: no caix binary found; set caix_bin" >&2; exit 2; }
