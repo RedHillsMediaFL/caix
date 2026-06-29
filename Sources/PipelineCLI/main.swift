@@ -41,6 +41,9 @@ case "bench":
 case "catalog":
     catalogCommand(Array(args.dropFirst(2)))
 
+case "cluster":
+    clusterCommand(Array(args.dropFirst(2)))
+
 case "eagle":
     eagleCommand(Array(args.dropFirst(2)))
 
@@ -67,6 +70,7 @@ func printUsage() {
           caix inspect --model <bundle-dir>
           caix bench --model <bundle-dir> [options]
           caix catalog <owner/search|collection-slug> [options]
+          caix cluster plan --manifest <stage-manifest.json> [options]
           caix serve [--port 1237] [--host 127.0.0.1]
 
         serve OPTIONS:
@@ -117,6 +121,14 @@ func printUsage() {
 
         catalog OPTIONS:
           --limit <N>            Max repos to show (default: 25)
+          --json                 Emit machine-readable JSON
+
+        cluster plan OPTIONS:
+          --manifest <path>      Local stage manifest JSON
+          --model <bundle-dir>   Read cluster.stages from bundle metadata.json
+          --worker <name=GB>     Worker memory budget; repeat or use --workers a=64,b=32
+          --workers <list>       Comma-separated worker memory budgets
+          --dry-run              Accepted for clarity; planning is dry-run only
           --json                 Emit machine-readable JSON
 
         DIFFUSION (auto-detected from bundle metadata kind/diffusion block):

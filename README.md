@@ -49,6 +49,7 @@ publish speed numbers without the raw run directory, exact model repo revision, 
 hardware, OS build, and exact command.
 
 Planned work is tracked in [docs/ROADMAP.md](docs/ROADMAP.md).
+The dry-run staged-execution planner surface is documented in [docs/CLUSTER.md](docs/CLUSTER.md).
 
 ---
 

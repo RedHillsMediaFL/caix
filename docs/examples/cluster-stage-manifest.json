@@ -1,0 +1,27 @@
+{
+  "schema": "caix.cluster.stage_manifest.v0",
+  "model": "qwen3-0.6b-coreai",
+  "stages": [
+    {
+      "id": "embed",
+      "role": "embeddings",
+      "layers": "embeddings",
+      "bundle": "stages/00-embed.aimodel",
+      "memory_gb": 1.5
+    },
+    {
+      "id": "layers-00-13",
+      "role": "transformer_layers",
+      "layers": [0, 13],
+      "bundle": "stages/01-layers-00-13.aimodel",
+      "memory_gb": 5.0
+    },
+    {
+      "id": "head",
+      "role": "final_norm_head",
+      "layers": "norm+lm_head",
+      "bundle": "stages/02-head.aimodel",
+      "memory_gb": 1.0
+    }
+  ]
+}
