@@ -12,7 +12,6 @@ temperature, streaming mode, warmup count, measured run count, and chat-template
 | repo | revision | local dir | request | notes |
 |---|---|---|---|---|
 | `redhillsmediafl/rhm-ornith-1.0-9b-caix` | `06656dec7e8165ff714729307ed75eabc3b8c1b5` | `ornith-1.0-9b-coreai` | load, generation, benchmark | cataloged |
-| `redhillsmediafl/rhm-glm-4-32b-0414-caix` | `59bddf6e8d498fd991144c4d47ab3b259e9a9d0b` | `glm-4-32b-0414-coreai` | load, generation, benchmark | cataloged |
 | `redhillsmediafl/rhm-mixtral-8x7b-instruct-caix` | `ea180189c4266d8a0dde4e3238cf959789c0504f` | `mixtral-8x7b-instruct-coreai` | load, generation, benchmark | cataloged |
 | `redhillsmediafl/rhm-gemma-4-26b-a4b-mtp-caix` | `98793a039e2a548f04668acb4c254f57ff16f145` | `gemma-4-26b-a4b-mtp-coreai` | EAGLE MTP load, generation, benchmark | benchmark MTP package; compare against standalone target row |
 | `redhillsmediafl/rhm-gemma-4-31b-it-mtp-caix` | `0c68d17473cdc0fee45e4d27540d50897f81334a` | `gemma-4-31b-it-mtp-coreai` | EAGLE MTP load, generation, benchmark | benchmark MTP package; compare against standalone target row |
@@ -30,6 +29,7 @@ temperature, streaming mode, warmup count, measured run count, and chat-template
 | `redhillsmediafl/rhm-qwen3-14b-caix` | `62a1e52fd5a5b9c1b241243cb0903d80fb5ad624` | `qwen3-14b-coreai` | `decode` | 3 | `benchmarks/raw/20260628-223516-qwen3-14b-coreai` |
 | `redhillsmediafl/rhm-qwythos-9b-caix` | `d4783ebca55aa4bf52d9bb4b254266ac5260d9c2` | `qwythos-9b-coreai` | `decode` | 3 | `benchmarks/raw/20260628-224859-qwythos-9b-coreai` |
 | `redhillsmediafl/rhm-glm-4-9b-0414-caix` | `c759b1583693b3f051e62fd7082e4bc538ebb72c` | `glm-4-9b-0414-coreai` | `decode` | 3 | `benchmarks/raw/20260628-230705-glm-4-9b-0414-coreai` |
+| `redhillsmediafl/rhm-glm-4-32b-0414-caix` | `59bddf6e8d498fd991144c4d47ab3b259e9a9d0b` | `glm-4-32b-0414-coreai` | `decode` | 3 | `benchmarks/raw/20260629-030527-glm-4-32b-0414-coreai` |
 | `redhillsmediafl/rhm-gpt-oss-20b-caix` | `ae08b1c0dc03b6ddc53901adaa29e97d23b1cfdb` | `gpt-oss-20b-coreai` | `decode` | 3 | `benchmarks/raw/20260629-002744-gpt-oss-20b-coreai` |
 | `redhillsmediafl/rhm-mistral-7b-instruct-v0.3-caix` | `2014f4967181dcab32c75ffb89dbd714f8f89910` | `mistral-7b-instruct-v0.3-coreai` | `decode` | 3 | `benchmarks/raw/20260628-233234-mistral-7b-instruct-v0.3-coreai` |
 | `redhillsmediafl/rhm-mistral-nemo-instruct-2407-caix` | `9821a2de1f1029c0352b0d6311c6d399e9aac1fe` | `mistral-nemo-instruct-2407-coreai` | `decode` | 3 | `benchmarks/raw/20260628-234824-mistral-nemo-instruct-2407-coreai` |
