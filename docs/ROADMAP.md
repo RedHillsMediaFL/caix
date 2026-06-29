@@ -43,6 +43,7 @@ MacBook test gate:
 - Do not ask for Thunderbolt testing until steps 1-3 pass.
 - First external test is one MacBook stage over Thunderbolt Bridge.
 - Use the same staged Qwen3-0.6B manifest that passed loopback.
+- `scripts/check-distributed-readiness.sh --brew-caix "$(command -v caix)"` must pass first.
 
 Do not start with:
 

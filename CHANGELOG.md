@@ -9,6 +9,8 @@
 - Added a release-version guard so caix stays below `1.0.0` while Core AI is beta.
 - Added a version-sync guard for the CLI version, package script, and Homebrew formula.
 - Added a Brew distributed-surface check for future Thunderbolt inference tests.
+- Added a distributed readiness gate so Thunderbolt testing stays blocked until same-machine,
+  loopback, Brew install, `cluster join`, and `serve --cluster` are ready.
 - Published verified RHM Qwen2.5-0.5B-Instruct and Qwen2.5-3B-Instruct Core AI bundles and
   documented them in the README model table.
 - Published verified RHM Qwen3-8B Core AI bundle and documented it in the README model table.

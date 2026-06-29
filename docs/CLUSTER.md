@@ -34,6 +34,15 @@ After those pass, test one MacBook stage over Thunderbolt Bridge. Until then, ke
 Before the Thunderbolt test, install caix through Brew on the test machine and run
 `scripts/check-brew-distributed.sh`.
 
+Use the readiness gate before asking for hardware:
+
+```bash
+scripts/check-distributed-readiness.sh --brew-caix "$(command -v caix)"
+```
+
+It must print `distributed is ready for Thunderbolt testing`. If it prints `not ready`, keep work
+local.
+
 ## Stage Manifest Format
 
 Use top-level `stages` in a standalone manifest. A copyable example lives at

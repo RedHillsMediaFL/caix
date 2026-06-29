@@ -83,6 +83,7 @@ binary first:
 brew tap RedHillsMediaFL/caix
 brew reinstall caix
 scripts/check-brew-distributed.sh
+scripts/check-distributed-readiness.sh --brew-caix "$(command -v caix)"
 ```
 
 Then connect the second Mac and run the distributed smoke from the installed `caix`.

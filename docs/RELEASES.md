@@ -39,6 +39,7 @@ Distributed inference releases need a Brew install check before cross-Mac testin
 brew tap RedHillsMediaFL/caix
 brew reinstall caix
 scripts/check-brew-distributed.sh
+scripts/check-distributed-readiness.sh --brew-caix "$(command -v caix)"
 ```
 
 Use that installed binary for Thunderbolt tests, not a loose debug build.
