@@ -48,6 +48,8 @@ This is blunt on purpose. Where the current code cannot do something, it says so
     The `FORWARD` frame carries token ids or hidden-state metadata plus position ids; tensor bytes
     stay outside JSON. Worker frames validate through one runtime entry point before execution.
     `DistributedWorkerMessageCodec` writes and reads one JSON header line per frame.
+    `DistributedWorkerWireFrame` pairs that header with optional tensor bytes and rejects payload
+    sizes that do not match the header.
   - `DistributedStagePlan.integrityHash()` gives coordinator and workers the same SHA-256 plan
     identity for handshake rejection.
 - A dry-run planner CLI (`Sources/PipelineCLI/Cluster.swift`, wired in `main.swift`):
@@ -208,8 +210,8 @@ stages on one worker is a later optimization) plus that stage's graph, KV cache,
 
 ### 5.1 Control messages
 
-Control frames are JSON; the single tensor-bearing message (`FORWARD`) carries a
-`DistributedHiddenStatePacketMetadata` header followed by the raw payload (§4).
+Control frames are JSON. Tensor-bearing frames carry a `DistributedHiddenStatePacketMetadata`
+header followed by the raw payload (§4).
 
 - `HELLO` (worker → coordinator): stage id/role/layer_range, hidden_size, boundary dtype,
   cache contract, plan integrity hash, free memory, compute unit.
@@ -217,7 +219,7 @@ Control frames are JSON; the single tensor-bearing message (`FORWARD`) carries a
   or a missing stage.
 - `ALLOC` {request_id, kv_capacity}: worker allocates KV (floored to its KV floor) and resets
   `processedTokenCount = 0`. Mirrors `allocateKVCache`.
-- `FORWARD` — §5.2 (the only tensor-bearing message).
+- `FORWARD` — §5.2.
 - `RESET` {request_id}: worker rolls KV back to 0 (cheap; only the position counter moves —
   `LLMEngine.rollbackKV`, `:612-615`).
 - `FREE` {request_id}: worker drops the KV for that request.

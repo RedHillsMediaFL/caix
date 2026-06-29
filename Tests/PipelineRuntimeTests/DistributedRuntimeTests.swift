@@ -182,6 +182,88 @@ final class DistributedRuntimeTests: XCTestCase {
         }
     }
 
+    func testWorkerMessagePayloadExpectationUsesHiddenStateByteCount() throws {
+        let packet = try hiddenPacket(
+            requestID: "req-1",
+            source: "layers-0-16",
+            destination: "layers-16-32",
+            positionRange: DistributedSequenceRange(lowerBound: 4, upperBound: 7),
+            stepIndex: 1,
+            fill: 9)
+        let forward = DistributedWorkerMessage.forward(
+            DistributedStageForwardFrame(
+                stageID: "layers-16-32",
+                requestID: "req-1",
+                stepIndex: 1,
+                positionRange: DistributedSequenceRange(lowerBound: 4, upperBound: 7),
+                positionIDs: [4, 5, 6],
+                hiddenState: packet.metadata))
+        let forwardResult = DistributedWorkerMessage.forwardResult(
+            DistributedStageForwardResultFrame(
+                stageID: "layers-0-16",
+                requestID: "req-1",
+                stepIndex: 1,
+                hiddenState: packet.metadata))
+        let alloc = DistributedWorkerMessage.allocate(
+            DistributedStageAllocation(requestID: "req-1", kvCapacity: 128))
+
+        XCTAssertEqual(packet.metadata.byteCount, 12)
+        XCTAssertEqual(forward.expectedPayloadByteCount, 12)
+        XCTAssertTrue(forward.expectsPayload)
+        XCTAssertEqual(forwardResult.expectedPayloadByteCount, 12)
+        XCTAssertTrue(forwardResult.expectsPayload)
+        XCTAssertEqual(alloc.expectedPayloadByteCount, 0)
+        XCTAssertFalse(alloc.expectsPayload)
+    }
+
+    func testWireFrameValidatesPayloadLength() throws {
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 2], scalarType: .float16))
+        let packet = try hiddenPacket(
+            requestID: "req-1",
+            source: "layers-0-16",
+            destination: "layers-16-32",
+            positionRange: DistributedSequenceRange(lowerBound: 4, upperBound: 7),
+            stepIndex: 1,
+            fill: 9)
+        let message = DistributedWorkerMessage.forward(
+            DistributedStageForwardFrame(
+                stageID: "layers-16-32",
+                requestID: "req-1",
+                stepIndex: 1,
+                positionRange: DistributedSequenceRange(lowerBound: 4, upperBound: 7),
+                positionIDs: [4, 5, 6],
+                hiddenState: packet.metadata))
+
+        XCTAssertNoThrow(
+            try DistributedWorkerWireFrame(message: message, payload: packet.payload)
+                .validate(against: plan))
+        XCTAssertThrowsError(
+            try DistributedWorkerWireFrame(message: message, payload: Array(packet.payload.dropLast()))
+                .validate(against: plan)
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidWireFrame("payload byte count 11 does not match header 12"))
+        }
+    }
+
+    func testWireFrameRejectsUnexpectedControlPayload() throws {
+        let plan = makePlan()
+        let message = DistributedWorkerMessage.allocate(
+            DistributedStageAllocation(requestID: "req-1", kvCapacity: 128))
+
+        XCTAssertThrowsError(
+            try DistributedWorkerWireFrame(message: message, payload: [1])
+                .validate(against: plan)
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidWireFrame("payload byte count 1 does not match header 0"))
+        }
+    }
+
     func testWorkerHelloValidatesPlanIntegrityAndStageClaim() throws {
         let plan = makePlan(
             boundaryTensor: DistributedBoundaryTensorSpec(

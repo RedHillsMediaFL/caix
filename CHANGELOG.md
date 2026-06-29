@@ -32,6 +32,7 @@
   KV capacity.
 - Added whole-message validation for distributed worker frames, including ACK and error frames.
 - Added a JSON-line codec for distributed worker message headers.
+- Added payload byte-count validation for distributed worker wire frames.
 - Added same-machine pipeline guards for invalid position ranges and reset request IDs.
 - Added the cluster-plan contract check to publication gates.
 - Added fail-closed `caix cluster join` and `caix serve --cluster` CLI stubs for Brew surface tests.
@@ -92,6 +93,7 @@
   older `eagle` suite summaries readable.
 - Added a reusable disk-pressure guard and wired benchmark runners to fail before writing logs when
   the checked volume is below the configured free-space floor.
+- Added a disk-pressure guard check to publication gates so low-space preflights are exercised.
 - Added a disk preflight for dashboard RHM bundle downloads before launching `hf download`.
 - Added a disk preflight for dashboard HF and GGUF conversions before launching `convert.py`.
 - Let benchmark suite runs pass exact model repo revisions into raw logs through a revisions TSV.

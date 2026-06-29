@@ -1478,6 +1478,29 @@ public enum DistributedWorkerMessage: Codable, Hashable, Sendable {
             try frame.validate(against: plan)
         }
     }
+
+    public var expectedPayloadByteCount: Int {
+        switch self {
+        case .forward(let frame):
+            return frame.hiddenState?.byteCount ?? 0
+        case .forwardResult(let frame):
+            return frame.hiddenState?.byteCount ?? 0
+        case .hello, .helloAck, .allocate, .reset, .free, .error:
+            return 0
+        }
+    }
+
+    public var expectsPayload: Bool {
+        expectedPayloadByteCount > 0
+    }
+
+    public func validatePayloadByteCount(_ byteCount: Int) throws {
+        let expected = expectedPayloadByteCount
+        guard byteCount == expected else {
+            throw DistributedStageExecutionError.invalidWireFrame(
+                "payload byte count \(byteCount) does not match header \(expected)")
+        }
+    }
 }
 
 public enum DistributedWorkerMessageCodec {
@@ -1509,6 +1532,21 @@ public enum DistributedWorkerMessageCodec {
                 "worker message line contains multiple frames")
         }
         return try JSONDecoder().decode(DistributedWorkerMessage.self, from: Data(bytes))
+    }
+}
+
+public struct DistributedWorkerWireFrame: Hashable, Sendable {
+    public let message: DistributedWorkerMessage
+    public let payload: [UInt8]
+
+    public init(message: DistributedWorkerMessage, payload: [UInt8] = []) {
+        self.message = message
+        self.payload = payload
+    }
+
+    public func validate(against plan: DistributedStagePlan) throws {
+        try message.validate(against: plan)
+        try message.validatePayloadByteCount(payload.count)
     }
 }
 
