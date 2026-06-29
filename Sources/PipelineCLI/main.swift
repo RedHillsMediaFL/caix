@@ -1,5 +1,6 @@
 import CoreAIServer
 import PipelineRuntime
+import Darwin
 import Dispatch
 import Foundation
 import MachineStats
@@ -11,6 +12,12 @@ let args = CommandLine.arguments
 let command = args.count > 1 ? args[1] : "stats"
 
 switch command {
+case "-v", "--version", "version":
+    printVersion()
+
+case "doctor":
+    doctorCommand(Array(args.dropFirst(2)))
+
 case "stats":
     let snap = MachineStats.snapshot()
     let enc = JSONEncoder()
@@ -31,6 +38,9 @@ case "inspect":
 case "bench":
     benchCommand(Array(args.dropFirst(2)))
 
+case "catalog":
+    catalogCommand(Array(args.dropFirst(2)))
+
 case "eagle":
     eagleCommand(Array(args.dropFirst(2)))
 
@@ -47,16 +57,20 @@ default:
 
 func printUsage() {
     let usage = """
-        coreai-pipeline — native Apple Core AI serving pipeline
+        caix — native Apple Core AI serving pipeline
 
         USAGE:
-          coreai-pipeline stats
-          coreai-pipeline run --model <bundle-dir> --prompt "..." [options]
-          coreai-pipeline inspect --model <bundle-dir>
-          coreai-pipeline serve [--port 8080] [--host 127.0.0.1]
+          caix --version
+          caix doctor [--no-fail]
+          caix stats
+          caix run --model <bundle-dir> --prompt "..." [options]
+          caix inspect --model <bundle-dir>
+          caix bench --model <bundle-dir> [options]
+          caix catalog <owner/search|collection-slug> [options]
+          caix serve [--port 1237] [--host 127.0.0.1]
 
         serve OPTIONS:
-          --port <N>             Listen port (default: 8080)
+          --port <N>             Listen port (default: 1237)
           --host <H>             Bind host (default: 127.0.0.1)
           --exports <dir>        Exported bundles dir (default: ./exports)
           --registry <path>      Model registry JSON (default: ./models/registry.json)
@@ -94,6 +108,17 @@ func printUsage() {
           --kv-capacity <N>      Fixed KV cache capacity override (auto-floored per model)
           --verbose              Emit timing/diagnostics to stderr
 
+        bench OPTIONS:
+          --model <dir>          Exported .aimodel bundle directory (required)
+          --seqs <A,B,C>         Forward sequence lengths (default: 1,2,4,7,1)
+          --warmup <N>           Warmup forwards per sequence length (default: 4)
+          --iters <N>            Measured forwards per sequence length (default: 10)
+                                  This is a forward micro-benchmark, not decode tok/s.
+
+        catalog OPTIONS:
+          --limit <N>            Max repos to show (default: 25)
+          --json                 Emit machine-readable JSON
+
         DIFFUSION (auto-detected from bundle metadata kind/diffusion block):
           run routes diffusion bundles to the host denoise loop (random-canvas init →
           entropy/MI-bound accept+renoise with self-conditioning → adaptive stop → block
@@ -102,6 +127,121 @@ func printUsage() {
           env COREAI_DIFFUSION_CANVAS=<N>     cap canvas length (smoke/debug; default: metadata)
         """
     print(usage)
+}
+
+func printVersion() {
+    print("caix \(CaixBuildInfo.version)")
+}
+
+func doctorCommand(_ argv: [String]) {
+    var noFail = false
+    var i = 0
+    while i < argv.count {
+        switch argv[i] {
+        case "--no-fail":
+            noFail = true
+        case "-h", "--help":
+            print(
+                """
+                USAGE:
+                  caix doctor [--no-fail]
+
+                Checks Apple silicon, macOS 27+, CoreAI.framework, and a runtime-linked build.
+                """
+            )
+            exit(0)
+        default:
+            FileHandle.standardError.write(Data("unknown doctor option: \(argv[i])\n".utf8))
+            exit(2)
+        }
+        i += 1
+    }
+
+    struct Check {
+        let name: String
+        let ok: Bool
+        let required: Bool
+        let detail: String
+    }
+
+    let os = ProcessInfo.processInfo.operatingSystemVersion
+    let osString = "\(os.majorVersion).\(os.minorVersion).\(os.patchVersion)"
+    let arch = machineArchitecture()
+    let coreAIFramework = firstExistingPath([
+        "/System/Library/Frameworks/CoreAI.framework",
+        "/System/Library/PrivateFrameworks/CoreAI.framework",
+    ])
+    let swiftPath = findExecutable("swift")
+
+    let checks = [
+        Check(name: "caix version", ok: true, required: false, detail: CaixBuildInfo.version),
+        Check(name: "Apple silicon", ok: arch == "arm64", required: true, detail: arch),
+        Check(
+            name: "macOS \(CaixBuildInfo.requiredMacOSMajor)+",
+            ok: os.majorVersion >= CaixBuildInfo.requiredMacOSMajor,
+            required: true,
+            detail: osString),
+        Check(
+            name: "CoreAI.framework",
+            ok: coreAIFramework != nil,
+            required: true,
+            detail: coreAIFramework ?? "not found"),
+        Check(
+            name: "runtime-linked binary",
+            ok: CoreAIPipeline.isLinked,
+            required: true,
+            detail: CoreAIPipeline.isLinked ? "linked" : "not linked; rebuild with COREAI_RUNTIME=1"),
+        Check(
+            name: "Swift toolchain",
+            ok: swiftPath != nil,
+            required: false,
+            detail: swiftPath ?? "not found; only needed for source builds/conversion"),
+    ]
+
+    print("caix doctor")
+    var failures = 0
+    for check in checks {
+        let label: String
+        if check.ok {
+            label = "ok"
+        } else if check.required {
+            label = "fail"
+            failures += 1
+        } else {
+            label = "warn"
+        }
+        print("[\(label)] \(check.name): \(check.detail)")
+    }
+    if failures > 0 && !noFail {
+        exit(1)
+    }
+}
+
+func machineArchitecture() -> String {
+    var systemInfo = utsname()
+    uname(&systemInfo)
+    return withUnsafePointer(to: &systemInfo.machine) {
+        $0.withMemoryRebound(to: CChar.self, capacity: 1) {
+            String(cString: $0)
+        }
+    }
+}
+
+func firstExistingPath(_ paths: [String]) -> String? {
+    let fm = FileManager.default
+    return paths.first { fm.fileExists(atPath: $0) }
+}
+
+func findExecutable(_ name: String) -> String? {
+    let fm = FileManager.default
+    let path = ProcessInfo.processInfo.environment["PATH"] ?? ""
+    for dir in path.split(separator: ":") {
+        let candidate = "\(dir)/\(name)"
+        if fm.isExecutableFile(atPath: candidate) {
+            return candidate
+        }
+    }
+    return nil
 }
 
 // MARK: - inspect subcommand
@@ -425,6 +565,8 @@ func eagleCommand(_ argv: [String]) {
 func benchCommand(_ argv: [String]) {
     var model: String?
     var seqs: [Int] = [1, 2, 4, 7, 1]
+    var warmup = 4
+    var iters = 10
     var i = 0
     while i < argv.count {
         switch argv[i] {
@@ -436,6 +578,20 @@ func benchCommand(_ argv: [String]) {
             i += 1
             guard i < argv.count else { break }
             seqs = argv[i].split(separator: ",").compactMap { Int($0) }
+        case "--warmup":
+            i += 1
+            guard i < argv.count, let v = Int(argv[i]), v >= 0 else {
+                FileHandle.standardError.write(Data("error: --warmup needs a non-negative integer\n".utf8)); exit(2)
+            }
+            warmup = v
+        case "--iters":
+            i += 1
+            guard i < argv.count, let v = Int(argv[i]), v > 0 else {
+                FileHandle.standardError.write(Data("error: --iters needs a positive integer\n".utf8)); exit(2)
+            }
+            iters = v
+        case "-h", "--help":
+            printUsage(); exit(0)
         default:
             FileHandle.standardError.write(Data("unknown bench option: \(argv[i])\n".utf8)); exit(2)
         }
@@ -444,13 +600,17 @@ func benchCommand(_ argv: [String]) {
     guard let modelPath = model else {
         FileHandle.standardError.write(Data("error: bench requires --model <bundle>\n".utf8)); exit(2)
     }
+    guard !seqs.isEmpty, seqs.allSatisfy({ $0 > 0 }) else {
+        FileHandle.standardError.write(Data("error: --seqs must contain positive integers\n".utf8)); exit(2)
+    }
 
     let semaphore = DispatchSemaphore(value: 0)
     nonisolated(unsafe) var exitCode: Int32 = 0
     Task {
         defer { semaphore.signal() }
         do {
-            _ = try await CoreAIPipeline.benchForward(modelPath: modelPath, seqLengths: seqs)
+            _ = try await CoreAIPipeline.benchForward(
+                modelPath: modelPath, seqLengths: seqs, warmup: warmup, iters: iters)
         } catch {
             FileHandle.standardError.write(Data("bench error: \(error)\n".utf8))
             exitCode = 1
@@ -467,7 +627,7 @@ func benchCommand(_ argv: [String]) {
 func serveCommand(_ argv: [String]) {
     let cwd = FileManager.default.currentDirectoryPath
     var host = "127.0.0.1"
-    var port = 8080
+    var port = 1237
     var exportsDir = cwd + "/exports"
     var registryPath = cwd + "/models/registry.json"
     var webDir = cwd + "/web"

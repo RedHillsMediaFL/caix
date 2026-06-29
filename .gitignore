@@ -10,6 +10,13 @@ __pycache__/
 models/exports/*
 !models/exports/.gitkeep
 
+# local coordination / benchmark artifacts
+.agent-heavy-task.lock
+benchmarks/raw/
+benchmarks/reports/
+benchmarks/revisions.tsv
+benchmarks/revisions-details.tsv
+
 # prebuilt binary staged into a release (not committed to source)
 bin/
 

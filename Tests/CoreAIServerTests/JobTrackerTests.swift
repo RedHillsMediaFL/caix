@@ -3,19 +3,46 @@ import XCTest
 @testable import CoreAIServer
 
 final class JobTrackerTests: XCTestCase {
+    func testDiskSpaceGuardRejectsWhenPayloadWouldCrossReserve() {
+        let result = DiskSpaceGuard.evaluate(
+            availableBytes: 1_000,
+            incomingBytes: 300,
+            reserveBytes: 800)
+
+        guard case .reject(let message) = result else {
+            XCTFail("expected disk preflight rejection")
+            return
+        }
+        XCTAssertTrue(message.contains("insufficient disk"))
+    }
+
+    func testDiskSpaceGuardAllowsWhenPayloadFitsAboveReserve() {
+        XCTAssertEqual(
+            DiskSpaceGuard.evaluate(availableBytes: 1_000, incomingBytes: 200, reserveBytes: 800),
+            .allow)
+    }
+
+    func testStartDownloadRHMRejectsBeforeLaunchWhenReserveIsTooHigh() async throws {
+        let root = try makeTempDir()
+        let tracker = JobTracker()
+
+        let err = await tracker.startDownloadRHM(
+            name: "example-coreai",
+            hfRepo: "redhillsmediafl/example-caix",
+            exportsDir: root,
+            estimatedBytes: 1,
+            reserveBytes: Int64.max / 4)
+
+        XCTAssertTrue(err?.contains("insufficient disk") == true)
+        let jobs = await tracker.snapshot()
+        XCTAssertTrue(jobs.isEmpty)
+    }
+
     func testRunCheckSupportReturnsFastJSON() async throws {
         let root = try makeTempDir()
-        let script = root.appendingPathComponent("quick_check.py")
+        let script = root.appendingPathComponent("quick_check.sh")
         try """
-            import json
-            print(json.dumps({
-                "ok": True,
-                "supported": False,
-                "model_type": "qwen3_5_moe",
-                "support_status": "needs_coreai_authoring",
-                "requirements": ["author model"],
-                "reason": "authoring required"
-            }))
+            printf '%s\\n' '{"ok":true,"supported":false,"model_type":"qwen3_5_moe","support_status":"needs_coreai_authoring","requirements":["author model"],"reason":"authoring required"}'
             """.write(to: script, atomically: true, encoding: .utf8)
 
         let tracker = JobTracker()
@@ -23,7 +50,7 @@ final class JobTrackerTests: XCTestCase {
             hfRepo: "example/qwen3_5_moe",
             script: script.path,
             workingDir: root,
-            pythonExecutable: "/usr/bin/python3",
+            pythonExecutable: "/bin/sh",
             timeoutSeconds: 5)
 
         let data = try XCTUnwrap(json.data(using: .utf8))
@@ -36,10 +63,9 @@ final class JobTrackerTests: XCTestCase {
 
     func testRunCheckSupportTimesOutStuckProcess() async throws {
         let root = try makeTempDir()
-        let script = root.appendingPathComponent("sleep_check.py")
+        let script = root.appendingPathComponent("sleep_check.sh")
         try """
-            import time
-            time.sleep(5)
+            sleep 5
             """.write(to: script, atomically: true, encoding: .utf8)
 
         let tracker = JobTracker()
@@ -48,7 +74,7 @@ final class JobTrackerTests: XCTestCase {
             hfRepo: "example/glm-timeout",
             script: script.path,
             workingDir: root,
-            pythonExecutable: "/usr/bin/python3",
+            pythonExecutable: "/bin/sh",
             timeoutSeconds: 0.2)
         let elapsed = Date().timeIntervalSince(started)
 

@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: scripts/benchmark-model.sh --model <bundle-dir> --name <name> [options]
+
+Options:
+  --prompt <text>       Prompt text.
+  --prompt-file <path>  Prompt file. Overrides --prompt.
+  --max-tokens <n>      Max generated tokens. Default: 128.
+  --temperature <n>     Temperature. Default: 0.
+  --warmup <n>          Warmup runs. Default: 1.
+  --runs <n>            Measured runs. Default: 3.
+  --raw                 Skip chat template.
+  --repo <id>           Hugging Face repo id for this bundle.
+  --repo-revision <sha> Exact model repo commit for this bundle.
+  --out <dir>           Output root. Default: benchmarks/raw.
+  --force               Ignore an existing stale benchmark lock.
+
+Writes raw stdout/stderr and summary.tsv. Does not publish numbers.
+USAGE
+}
+
+MODEL=""
+NAME=""
+PROMPT="Write one factual sentence about local inference on Apple silicon."
+PROMPT_FILE=""
+MAX_TOKENS=128
+TEMPERATURE=0
+WARMUP=1
+RUNS=3
+RAW=0
+REPO=""
+REPO_REVISION="unknown"
+OUT_ROOT="benchmarks/raw"
+FORCE=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --model) MODEL="${2:?}"; shift 2 ;;
+    --name) NAME="${2:?}"; shift 2 ;;
+    --prompt) PROMPT="${2:?}"; shift 2 ;;
+    --prompt-file) PROMPT_FILE="${2:?}"; shift 2 ;;
+    --max-tokens) MAX_TOKENS="${2:?}"; shift 2 ;;
+    --temperature) TEMPERATURE="${2:?}"; shift 2 ;;
+    --warmup) WARMUP="${2:?}"; shift 2 ;;
+    --runs) RUNS="${2:?}"; shift 2 ;;
+    --raw) RAW=1; shift ;;
+    --repo) REPO="${2:?}"; shift 2 ;;
+    --repo-revision) REPO_REVISION="${2:?}"; shift 2 ;;
+    --out) OUT_ROOT="${2:?}"; shift 2 ;;
+    --force) FORCE=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+[[ -n "$MODEL" ]] || { echo "error: --model is required" >&2; exit 2; }
+[[ -n "$NAME" ]] || { echo "error: --name is required" >&2; exit 2; }
+[[ -d "$MODEL" ]] || { echo "error: model directory not found: $MODEL" >&2; exit 2; }
+[[ "$MAX_TOKENS" =~ ^[0-9]+$ ]] || { echo "error: --max-tokens must be an integer" >&2; exit 2; }
+[[ "$WARMUP" =~ ^[0-9]+$ ]] || { echo "error: --warmup must be an integer" >&2; exit 2; }
+[[ "$RUNS" =~ ^[1-9][0-9]*$ ]] || { echo "error: --runs must be a positive integer" >&2; exit 2; }
+
+if [[ -n "$PROMPT_FILE" ]]; then
+  [[ -f "$PROMPT_FILE" ]] || { echo "error: prompt file not found: $PROMPT_FILE" >&2; exit 2; }
+  PROMPT="$(<"$PROMPT_FILE")"
+fi
+
+CAIX_BIN="${CAIX_BIN:-./caix}"
+[[ -x "$CAIX_BIN" ]] || CAIX_BIN="./.build/release/caix"
+[[ -x "$CAIX_BIN" ]] || { echo "error: no caix binary found; set CAIX_BIN" >&2; exit 2; }
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DISK_FLOOR_GIB="${CAIX_STOP_FLOOR_GIB:-500}"
+"$SCRIPT_DIR/check-disk-pressure.sh" --path /Volumes/SSD --floor-gib "$DISK_FLOOR_GIB" --quiet
+
+LOCK=".agent-heavy-task.lock"
+if [[ -e "$LOCK" && "$FORCE" != "1" ]]; then
+  echo "error: heavy-task lock exists: $LOCK" >&2
+  exit 2
+fi
+if ps -axo command \
+  | grep -E 'coreai\.llm\.export|convert\.py|hf (download|upload)|\.build/(debug|release)/caix run|(^|/)(caix|coreai-pipeline) run|(^|/)swift (build|test)|swift-package|swiftc|swift-frontend|xctest' \
+  | grep -v grep >/dev/null; then
+  echo "error: another heavy build, conversion, upload, verification, or benchmark is active" >&2
+  exit 2
+fi
+
+STAMP="$(date '+%Y%m%d-%H%M%S')"
+SAFE_NAME="$(printf '%s' "$NAME" | tr -cs 'A-Za-z0-9._-' '-')"
+OUT_DIR="$OUT_ROOT/$STAMP-$SAFE_NAME"
+mkdir -p "$OUT_DIR"
+
+FREE_GIB="$(df -g /Volumes/SSD 2>/dev/null | awk 'NR==2 {print $4}')"
+{
+  echo "pid=$$"
+  echo "task=benchmark $NAME"
+  echo "est_peak_disk_gib=1"
+  echo "free_gib_at_acquire=${FREE_GIB:-unknown}"
+  echo "stop_floor_gib=$DISK_FLOOR_GIB"
+  echo "owner=benchmark-model.sh"
+  echo "started=$(date '+%Y-%m-%d %H:%M %Z')"
+} > "$LOCK"
+trap 'rm -f "$LOCK"' EXIT
+
+{
+  echo "name=$NAME"
+  echo "model=$MODEL"
+  echo "repo=$REPO"
+  echo "repo_revision=$REPO_REVISION"
+  echo "caix_bin=$CAIX_BIN"
+  echo "caix_commit=$(git rev-parse HEAD 2>/dev/null || true)"
+  echo "git_status=$(git status --short 2>/dev/null | wc -l | tr -d ' ') dirty entries"
+  echo "machine=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || true)"
+  echo "memory_bytes=$(sysctl -n hw.memsize 2>/dev/null || true)"
+  echo "os=$(sw_vers -productVersion 2>/dev/null || true) ($(sw_vers -buildVersion 2>/dev/null || true))"
+  echo "max_tokens=$MAX_TOKENS"
+  echo "temperature=$TEMPERATURE"
+  echo "warmup=$WARMUP"
+  echo "runs=$RUNS"
+  echo "raw=$RAW"
+  printf 'prompt=%s\n' "$PROMPT"
+} > "$OUT_DIR/metadata.txt"
+
+printf 'phase\trun\tstatus\tgenerated\tload_s\tprefill_s\tdecode_s\tdecode_tps\tstdout\tstderr\n' > "$OUT_DIR/summary.tsv"
+
+run_one() {
+  local phase="$1"
+  local idx="$2"
+  local stdout_file="$OUT_DIR/${phase}-${idx}.stdout.txt"
+  local stderr_file="$OUT_DIR/${phase}-${idx}.stderr.txt"
+  local args=(run --model "$MODEL" --prompt "$PROMPT" --max-tokens "$MAX_TOKENS" --temperature "$TEMPERATURE" --verbose)
+  [[ "$RAW" == "1" ]] && args+=(--raw)
+  local status="ok"
+  if ! "$CAIX_BIN" "${args[@]}" >"$stdout_file" 2>"$stderr_file"; then
+    status="fail"
+  fi
+  local summary
+  summary="$(grep -E '\[coreai\].*generated.*load=.*prefill=.*decode=.*tok/s' "$stderr_file" | tail -1 || true)"
+  local parsed
+  parsed="$(printf '%s\n' "$summary" | sed -E 's/.* ([0-9]+) generated,.*load=([0-9.]+)s prefill=([0-9.]+)s decode=([0-9.]+)s \(([0-9.]+) tok\/s\).*/\1\t\2\t\3\t\4\t\5/' || true)"
+  if [[ -z "$parsed" || "$parsed" == "$summary" ]]; then
+    parsed=$'-\t-\t-\t-\t-'
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$phase" "$idx" "$status" "$parsed" "$stdout_file" "$stderr_file" >> "$OUT_DIR/summary.tsv"
+  [[ "$status" == "ok" ]]
+}
+
+for ((i = 1; i <= WARMUP; i++)); do
+  run_one warmup "$i"
+done
+for ((i = 1; i <= RUNS; i++)); do
+  run_one measured "$i"
+done
+
+echo "$OUT_DIR"

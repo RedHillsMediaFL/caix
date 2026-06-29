@@ -135,7 +135,7 @@
       <label class="tog"><input type="checkbox" id="t_calc"/> calculator <span class="sub" style="color:var(--faint)">· math</span></label>
       <label class="tog"><input type="checkbox" id="t_clock"/> clock <span class="sub" style="color:var(--faint)">· date/time</span></label>
       <label class="tog"><input type="checkbox" id="t_fetch"/> fetch_url <span class="sub" style="color:var(--faint)">· read a web page</span></label>
-      <div class="hintbox" style="color:var(--faint)">the model calls these; each call + result shows inline. tool-calling works best with qwen-family models — the gemma MTP model is fast but a weak tool-caller.</div>
+      <div class="hintbox" style="color:var(--faint)">the model calls these; each call + result shows inline. use qwen-family models for tool-heavy chats; gemma MTP is fast but weak at tool calls.</div>
     </section>
 
     <section>
@@ -174,30 +174,42 @@ const api=(u,o)=>fetch(u,o).then(r=>r.json());
 marked.setOptions({breaks:true,gfm:true});
 function md(t){try{return DOMPurify.sanitize(marked.parse(t||''));}catch(e){return (t||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}}
 const isMTP=n=>/mtp|eagle|spec/i.test(n||'');
+const esc=s=>(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 
 // ---------- model management ----------
 let MODELS=[];
+const escA=s=>esc(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 async function loadModels(){
-  try{MODELS=await api('/api/models');}catch(e){return;}
-  const loaded=MODELS.filter(m=>m.status==='loaded').map(m=>m.name);
+  try{MODELS=await api('/api/models');}catch(e){
+    if(!MODELS.length)$('modellist').innerHTML='<div class="empty" style="padding:8px">server offline</div>';
+    return;
+  }
   // chat model picker
   const bundles=MODELS.filter(m=>m.bundle).map(m=>m.name).sort((a,b)=>(isMTP(b)?1:0)-(isMTP(a)?1:0));
   const sel=$('chatmodel');
   if(sel.dataset.opts!==bundles.join('|')){const cur=sel.value;
-    sel.innerHTML=bundles.map(n=>`<option value="${n}">${n}${isMTP(n)?'  · MTP':''}</option>`).join('');
+    sel.innerHTML=bundles.map(n=>`<option value="${escA(n)}">${esc(n)}${isMTP(n)?'  · MTP':''}</option>`).join('');
     sel.dataset.opts=bundles.join('|'); sel.value=(cur&&bundles.includes(cur))?cur:(bundles[0]||''); updateBadge();}
-  // sidebar list with lifecycle controls
+  // sidebar list with lifecycle controls — names are data-bound (no HTML/JS-string injection)
   $('modellist').innerHTML=MODELS.map(m=>{
-    const on=m.status==='loaded', active=m.name===sel.value;
+    const on=m.status==='loaded', active=m.name===sel.value, nm=escA(m.name);
     const right=m.bundle
-      ? `${on?`<button class="ico" onclick="act('offload','${m.name}')">Unload</button>`
-            :`<button class="ico go" onclick="act('load','${m.name}')">Load</button>`}
-         <button class="ico danger" onclick="del('${m.name}')" title="delete bundle">✕</button>`
-      : `<button class="ico go" onclick="convReg('${m.name}')" title="convert from registry">Convert</button>`;
+      ? `${on?`<button class="ico" data-act="offload" data-name="${nm}">Unload</button>`
+            :`<button class="ico go" data-act="load" data-name="${nm}">Load</button>`}
+         <button class="ico danger" data-act="del" data-name="${nm}" title="delete bundle">✕</button>`
+      : `<button class="ico go" data-act="conv" data-name="${nm}" title="convert from registry">Convert</button>`;
     return `<div class="mrow"><span class="dotst ${on?'on':''}"></span>
-      <span class="nm ${active?'active':''}" title="${m.name}" onclick="pick('${m.name}')">${m.name}</span>${right}</div>`;
+      <span class="nm ${active?'active':''}" title="${nm}" data-act="pick" data-name="${nm}">${esc(m.name)}</span>${right}</div>`;
   }).join('');
 }
+$('modellist').addEventListener('click',e=>{
+  const el=e.target.closest('[data-act]'); if(!el)return;
+  const n=el.dataset.name, a=el.dataset.act;
+  if(a==='load'||a==='offload')act(a,n);
+  else if(a==='del')del(n);
+  else if(a==='conv')convReg(n);
+  else if(a==='pick')pick(n);
+});
 function pick(n){const s=$('chatmodel'); if([...s.options].some(o=>o.value===n)){s.value=n;updateBadge();loadModels();}}
 async function act(a,name){try{await api('/api/'+a,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:name})});}catch(e){}loadModels();}
 async function convReg(name){try{await api('/api/convert',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:name})});}catch(e){}}
@@ -206,7 +218,7 @@ async function del(name){if(!confirm('Delete bundle '+name+' from disk? This can
     if(d.error)alert('Delete failed: '+(d.error.message||d.error));}catch(e){alert('Delete failed: '+e);}loadModels();}
 
 // ---------- download / convert from HF ----------
-function hfShow(h,c){$('hfresult').innerHTML=h;$('hfresult').className='hintbox '+(c||'');}
+function hfShow(h,c){$('hfresult').textContent=h;$('hfresult').className='hintbox '+(c||'');}
 $('hfcheck').onclick=async()=>{const repo=$('hfrepo').value.trim();if(!repo)return hfShow('paste a repo id','bad-txt');
   hfShow('checking…');try{const d=await api('/api/check-support',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({hf_repo:repo})});
     hfShow(d.supported?`✓ supported · ${d.model_type}${d.params_b?` · ~${d.params_b}B`:''}`:`⚑ needs authoring · ${d.reason||d.next_step||'model path not authored yet'}`,d.supported?'ok-txt':'bad-txt');}catch(e){hfShow('check failed','bad-txt');}};
@@ -285,7 +297,6 @@ function render(){
   wrap.querySelectorAll('pre').forEach(pre=>{if(!pre.querySelector('.copy')){const b=document.createElement('button');b.className='copy';b.textContent='copy';b.onclick=()=>copyCode(b);pre.appendChild(b);}});
   $('scroll').scrollTop=$('scroll').scrollHeight;
 }
-const esc=s=>(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 function buildMessages(){
   const msgs=[]; const sp=systemPrompt(); if(sp)msgs.push({role:'system',content:sp});
   for(const m of history){

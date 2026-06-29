@@ -382,6 +382,7 @@ public enum CoreAIPipeline {
     ) async throws -> [(seq: Int, medianMs: Double)] {
         #if COREAI_RUNTIME
         func emit(_ s: String) { FileHandle.standardError.write(Data((s + "\n").utf8)) }
+        emit("[bench] forward micro-benchmark; not decode tok/s")
         let bundle = try ResolvedBundle.load(at: modelPath)
         let engine = try await LLMEngine.load(bundle: bundle, verbose: true)
         let cap = (seqLengths.max() ?? 8) + 8
@@ -414,15 +415,6 @@ public enum CoreAIPipeline {
             emit("[bench] --- steady-state forward cost vs seq=1 ---")
             for (n, m) in out where n != 1 || out.filter({ $0.0 == 1 }).count == 1 {
                 emit(String(format: "[bench]   seq=%d: %.2fx  (%.1f ms)", n, m / base, m))
-            }
-            // EAGLE projection: one verify of seq=(K+1) per cycle, tau tokens accepted.
-            if let v = out.first(where: { $0.0 == 7 })?.1 {
-                emit("[bench] EAGLE K=6 projection (verify seq=7 + ~6 tiny draft steps):")
-                for tau in [2, 3, 4, 5, 6] {
-                    let cycleMs = v + 6.0 * 2.0
-                    emit(String(format: "[bench]   tau=%d accepted/cycle -> %.0f tok/s (baseline pipelined ~30)",
-                                tau, 1000.0 * Double(tau) / cycleMs))
-                }
             }
         }
         return out.map { (seq: $0.0, medianMs: $0.1) }

@@ -1,0 +1,113 @@
+# Benchmarks
+
+Benchmark numbers are publishable only when the raw run data is kept with the exact model, commit,
+machine, and command.
+
+## Rules
+
+- Run no benchmarks while `.agent-heavy-task.lock` exists or while a conversion/upload/verification is active.
+- Use the same prompt, token budget, temperature, streaming mode, warmup count, and measured run count for every comparable model.
+- Record skipped models with the reason: missing local bundle, gated upstream access, host memory fit, runtime failure, or license limit.
+- Use median decode tok/s from measured warm runs for public tables. Keep prefill and load time separately.
+- Do not mix chat-template runs with `--raw` runs in the same comparison.
+- Do not publish micro-benchmark results from `caix bench` as decode tok/s. That command measures forward-pass shape cost only.
+- Do not add a model-card benchmark row unless the raw logs for that exact model repo commit exist.
+
+## Default Decode Run
+
+Use this for plain text-generation comparisons unless a model requires a different prompt format:
+
+```bash
+scripts/benchmark-model.sh \
+  --model models/exports/qwen3-4b-coreai \
+  --name qwen3-4b-coreai \
+  --repo redhillsmediafl/rhm-qwen3-4b-caix \
+  --repo-revision <model-repo-commit> \
+  --prompt "Write one factual sentence about local inference on Apple silicon." \
+  --max-tokens 128 \
+  --warmup 1 \
+  --runs 3
+```
+
+Output goes under `benchmarks/raw/<timestamp>-<name>/`. That path is ignored by default so bulk
+local logs do not get committed by accident. Keep or publish raw run folders deliberately when adding
+public numbers.
+
+## Suite Run
+
+Use the suite manifest to account for every known RHM caix repo:
+
+```bash
+scripts/benchmark-suite.sh --dry-run
+scripts/collect-model-revisions.sh \
+  --out benchmarks/revisions.tsv \
+  --details benchmarks/revisions-details.tsv
+scripts/benchmark-suite.sh \
+  --exports models/exports \
+  --revisions benchmarks/revisions.tsv \
+  --warmup 1 \
+  --runs 3
+```
+
+The suite reads `benchmarks/MANIFEST.tsv`, does not download models, and writes one row per repo to
+`benchmarks/raw/<timestamp>-suite/summary.tsv`. Installed standalone bundles are measured with the
+same decode settings. Missing bundles, draft-only repos, and MTP repos without a paired command are
+recorded as skipped with the reason.
+
+Create `benchmarks/revisions.tsv` before a publishable run:
+
+```bash
+scripts/collect-model-revisions.sh \
+  --out benchmarks/revisions.tsv \
+  --details benchmarks/revisions-details.tsv
+```
+
+The revisions file is a local run artifact and is ignored by default. It contains:
+
+```text
+redhillsmediafl/rhm-qwen3-4b-caix<TAB><model-repo-commit>
+```
+
+Rows measured without a revision stay non-publishable in the report. Re-run the collection step
+immediately before measuring if any model repo was updated.
+
+## Report Gate
+
+Create a report from a completed suite run:
+
+```bash
+scripts/benchmark-report.sh \
+  --suite benchmarks/raw/<timestamp>-suite \
+  --out benchmarks/reports/<timestamp>.tsv
+```
+
+The report script reads the suite summary and each measured model's raw `summary.tsv` and
+`metadata.txt`. It refuses missing raw logs and failed measured rows. Rows without a recorded model
+repo revision are marked `publishable=no`; do not copy those numbers into public docs.
+
+## Public Table Fields
+
+Use these fields for any published benchmark table:
+
+| field | source |
+|---|---|
+| model repo | Hugging Face repo id and commit SHA |
+| caix commit | `git rev-parse HEAD` |
+| hardware | `sysctl -n machdep.cpu.brand_string`, unified memory, macOS build |
+| command | exact `caix run` or server request |
+| prompt | exact prompt text or fixture path |
+| max tokens | command value |
+| temperature | command value |
+| mode | chat template or raw; streaming or non-streaming |
+| load seconds | caix stderr summary |
+| prefill seconds | caix stderr summary |
+| decode seconds | caix stderr summary |
+| output tokens | caix stderr summary |
+| decode tok/s | output tokens divided by decode seconds; use median across measured runs |
+
+## Current Gaps
+
+- RHM model cards intentionally omit benchmark rows until measured public numbers exist.
+- `benchmarks/MANIFEST.tsv` is the current RHM caix benchmark coverage list.
+- Gemma 3 is blocked until Hugging Face access is approved.
+- Qwen3-32B and Qwen3-30B-A3B are skipped on this 64 GB host by conversion fit-check.

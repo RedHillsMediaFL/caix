@@ -253,7 +253,12 @@ final class ServerRuntime: Sendable {
         }
         let name = body.name?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
             ?? Self.defaultRHMDownloadName(for: body.repo)
-        if let err = await jobs.startDownloadRHM(name: name, hfRepo: body.repo, exportsDir: exportsDir) {
+        if let err = await jobs.startDownloadRHM(
+            name: name,
+            hfRepo: body.repo,
+            exportsDir: exportsDir,
+            estimatedBytes: layout?.usedStorageBytes)
+        {
             return JSONResponder.error(err, status: .badRequest)
         }
         return JSONResponder.encode([
@@ -539,7 +544,8 @@ final class ServerRuntime: Sendable {
             else { continue }
             let tags = row["tags"] as? [String] ?? []
             let siblings = (row["siblings"] as? [[String: Any]]) ?? []
-            let layout = Self.rhmRepoLayout(from: siblings)
+            var layout = Self.rhmRepoLayout(from: siblings)
+            layout.usedStorageBytes = Self.storageBytes(from: row)
             let meta: RHMBundleMetadata?
             if layout.hasMetadata {
                 meta = try? await fetchRHMBundleMetadata(repo: repo)
@@ -583,7 +589,9 @@ final class ServerRuntime: Sendable {
             let row = try JSONSerialization.jsonObject(with: data) as? [String: Any],
             let siblings = row["siblings"] as? [[String: Any]]
         else { return RHMRepoLayout() }
-        return Self.rhmRepoLayout(from: siblings)
+        var layout = Self.rhmRepoLayout(from: siblings)
+        layout.usedStorageBytes = Self.storageBytes(from: row)
+        return layout
     }
 
     private func fetchRHMBundleMetadata(repo: String) async throws -> RHMBundleMetadata? {
@@ -621,6 +629,15 @@ final class ServerRuntime: Sendable {
             hasEaglePackage: filenames.contains { $0.hasPrefix("eagle_target.aimodel/") }
                 && filenames.contains { $0.hasPrefix("eagle_draft.aimodel/") }
                 && filenames.contains { $0.hasPrefix("tokenizer/") })
+    }
+
+    private static func storageBytes(from row: [String: Any]) -> Int64? {
+        let value = row["usedStorage"] ?? row["used_storage"]
+        if let int = value as? Int { return Int64(int) }
+        if let int64 = value as? Int64 { return int64 }
+        if let double = value as? Double { return Int64(double) }
+        if let string = value as? String { return Int64(string) }
+        return nil
     }
 
     private static func baseModel(from tags: [String]) -> String? {
@@ -688,6 +705,9 @@ final class ServerRuntime: Sendable {
             return JSONResponder.error("invalid OpenAI chat request: \(error)", status: .badRequest)
         }
         let gen = req.toGeneration()
+        if let response = Self.rejectMultimodalIfNeeded(gen) {
+            return response
+        }
         let modelName = await resolveModelName(gen.model)
         log("request model=\(gen.model) resolved=\(modelName) messages=\(gen.messages.count) maxTokens=\(gen.maxTokens)")
         let handle: ModelHandle
@@ -745,6 +765,9 @@ final class ServerRuntime: Sendable {
             return JSONResponder.error("invalid Anthropic messages request: \(error)", status: .badRequest)
         }
         let gen = req.toGeneration()
+        if let response = Self.rejectMultimodalIfNeeded(gen) {
+            return response
+        }
         let modelName = await resolveModelName(gen.model)
         let handle: ModelHandle
         do {
@@ -800,6 +823,14 @@ final class ServerRuntime: Sendable {
 
     static func messagePayload(_ messages: [ChatMessage]) -> [[String: String]] {
         messages.map { ["role": $0.role, "content": $0.content] }
+    }
+
+    static func rejectMultimodalIfNeeded(_ gen: GenerationRequest) -> Response? {
+        guard gen.hasMultimodalContent else { return nil }
+        let modalities = gen.modalities.joined(separator: ", ")
+        return JSONResponder.error(
+            "multimodal input is parsed but not supported by any verified caix runtime bundle yet: \(modalities)",
+            status: .badRequest)
     }
 
     static func options(from gen: GenerationRequest) -> CoreAIPipeline.Options {
@@ -916,6 +947,7 @@ struct RHMRepoLayout: Sendable {
     var hasMetadata: Bool = false
     var hasDraftBundle: Bool = false
     var hasEaglePackage: Bool = false
+    var usedStorageBytes: Int64? = nil
 }
 
 struct RHMModelEntry: Codable, Sendable {

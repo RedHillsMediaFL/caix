@@ -4,6 +4,36 @@
 
 ### Added
 
+- Added `caix --version`, `caix doctor`, a Core AI runtime checker, and a tap-ready Homebrew formula
+  for the post-testing tap path.
+- Published verified RHM Qwen2.5-0.5B-Instruct and Qwen2.5-3B-Instruct Core AI bundles and
+  documented them in the README model table.
+- Published verified RHM Qwen3-8B Core AI bundle and documented it in the README model table.
+- Published verified RHM Qwen3-14B Core AI bundle and documented it in the README model table.
+- Published verified RHM Mistral-7B-Instruct-v0.3 Core AI bundle and documented it in the README
+  model table.
+- Published verified RHM Mistral-Nemo-Instruct-2407 Core AI bundle and documented it in the README
+  model table.
+- Published verified RHM Mistral-Small-Instruct-2409 Core AI bundle under the Mistral Research
+  License and documented it in the README model table.
+- Added a benchmark protocol and raw-log runner so future public speed numbers are reproducible.
+- Added a benchmark suite manifest so every known RHM caix repo is measured or skipped with a stated
+  reason.
+- Added a benchmark report gate that refuses missing raw logs and marks rows without model revisions
+  as non-publishable.
+- Added external tester instructions for verified load/generation reports and raw benchmark
+  submissions.
+- Added a public-copy guard script for benchmark placeholders, hype, unsupported support-product
+  wording, and vague model-size language.
+- Added a reusable disk-pressure guard and wired benchmark runners to fail before writing logs when
+  the checked volume is below the configured free-space floor.
+- Added a disk preflight for dashboard RHM bundle downloads before launching `hf download`.
+- Let benchmark suite runs pass exact model repo revisions into raw logs through a revisions TSV.
+- Added a metadata-only Hugging Face revision collector for benchmark manifests.
+- Added a generated tester request sheet for model verification and raw benchmark collection.
+- Added `caix catalog` for metadata-backed Hugging Face caix repo discovery.
+- Added exact Hub revisions to `caix catalog` install commands when the metadata includes a SHA.
+- Added explicit text-only errors for OpenAI/Anthropic requests that include multimodal content blocks.
 - Added server-side discovery for installable `redhillsmediafl/*-caix` Hugging Face model repos.
 - Added `POST /api/rhm-download` to install already-converted RHM Core AI bundles into the local exports directory.
 - Added persistent converter and support-check logs under `~/.caix/logs` and `~/.caix/support-logs`.
@@ -12,16 +42,16 @@
 - Added EAGLE/MTP serve and CLI flags for vocabulary, hidden size, sliding window, and max context so speculative targets are not hardcoded to one Gemma size.
 - Exposed speculative runtime dimensions in the dashboard's advanced server panel.
 - Added local discovery/loading and RHM installability for EAGLE target+draft package directories.
-- Added a user-focused usage dashboard with rolling tok/s, last-generation speed, total input/output tokens, rolling-window output, and visible per-model throughput.
+- Added a usage dashboard with rolling tok/s, last-generation speed, total input/output tokens, rolling-window output, and per-model throughput.
 - Added a one-line GitHub installer that clones or updates `~/caix`, builds the Core AI runtime binary, and links the `caix` launcher into `~/.local/bin`.
 - Added `scripts/refresh-export-index.sh` and `CAIX_EXPORT_INDEX` support for launchd/external-volume model discovery.
 - Added an OpenCode provider config that points OpenCode at the local OpenAI-compatible caix server.
 - Expanded the OpenCode provider config to expose the current caix bundle IDs for hot-loading through `/v1/chat/completions`.
-- Added README status badges for GitHub releases, stars, Apple silicon/Core AI, Swift, and RHM Hugging Face models.
+- Added README status badges for GitHub releases, Apple silicon/Core AI, Swift, and RHM Hugging Face models.
 - Published verified RHM GLM-4-9B-0414 and GLM-4-32B-0414 Core AI bundles and documented them in the README model table.
 - Published verified RHM Mixtral-8x7B-Instruct-v0.1 Core AI bundle and documented it in the README model table.
 - Documented the verified RHM GPT-OSS 20B Core AI bundle in the README model table.
-- Added structured Core AI authoring requirements for `qwen3_5_moe` support checks, covering the larger Ornith and Qwen3.6 MoE lane.
+- Added structured Core AI authoring requirements for `qwen3_5_moe` support checks, covering the heavier Ornith and Qwen3.6 MoE lane.
 - Added a lightweight stdlib support-check path so the dashboard can inspect HF configs without launching the external CoreAI Python checkout.
 - Added a native server-side HF config probe for dashboard support checks so launchd does not need to spawn converter subprocesses for quick architecture inspection.
 - Marked `qwen3_5_moe` as an authored conversion family after adding native Core AI support in the vendored model registry.
@@ -42,8 +72,14 @@
   resolved function inputs, outputs, states, scalar types, and shapes for runtime-contract
   debugging.
 
+### Changed
+
+- Tightened sampler hot paths by scanning logits and candidate buffers without enumerator overhead.
+
 ### Fixed
 
+- Fixed `caix serve` default port: the CLI bound `8080` while the README, launcher, installer, and
+  `opencode.json` all use `1237`. The default is now `1237` so a bare `caix serve` matches the docs.
 - Added explicit KV-cache input/output execution for unoptimized Core AI language exports whose
   functions expose `keyCache`/`valueCache` as regular inputs and outputs instead of Core AI states.
 - Routed qwen3_5/qwen3_5_moe bundles with packed recurrent-state KV floors to the explicit Core AI
@@ -56,7 +92,7 @@
 - Loaded optional `language.function_map` decode entrypoints in the sequential runtime and routed
   one-token forwards through them; added opt-in `COREAI_PREFILL_CHUNK`/`COREAI_PREFILL_MODE`
   diagnostics for prefill/decode shape investigation without changing the default batched prefill.
-- Loaded optional `assets.decode` split decode `.aimodel` packages so large hybrid bundles can keep
+- Loaded optional `assets.decode` split decode `.aimodel` packages so heavier hybrid bundles can keep
   prefill and one-token decode as separate Core AI assets when a combined multi-function export
   exceeds host memory.
 - Baked `language.min_kv_capacity` into future converted qwen3_5/qwen3_5_moe bundle metadata and
@@ -65,9 +101,9 @@
 - Fixed `convert.py <registry-key> --check` so it resolves registry keys to their Hugging Face repo before probing support.
 - Generalized converter chat-template postprocessing so Qwen3.5 hybrid/MoE exports with `enable_thinking` branches start OpenAI output in visible content.
 - Defaulted standard language-bundle serving to the stable one-shot CoreAILanguageModels path, with the older sequential engine available through `COREAI_LEGACY_ENGINE=1`.
-- Pointed the OpenCode default model at the installed `qwen3-0.6b-coreai` bundle so `opencode run` works on the current local server while larger bundle IDs remain available in the provider map.
+- Pointed the OpenCode default model at the installed `qwen3-0.6b-coreai` bundle so `opencode run` works on the current local server while heavier bundle IDs remain available in the provider map.
 - Inferred a conservative qwen3_5 hybrid KV-cache floor for converted bundles that do not yet carry `language.min_kv_capacity`, preventing under-sized cache allocation for Ornith-style bundles.
-- Inferred EAGLE target hidden size from Core AI model descriptors at load time, so larger targets can override the 26B default without source changes.
+- Inferred EAGLE target hidden size from Core AI model descriptors at load time, so wider targets can override the 26B default without source changes.
 - Updated diffusion denoiser tests to match the official entropy-bound sampler behavior already implemented in the runtime.
 - Listed all accepted EAGLE serve flags in CLI help.
 - Kept dashboard model listing responsive under launchd by using bounded model-index and registry reads instead of blocking indefinitely on inaccessible export paths.

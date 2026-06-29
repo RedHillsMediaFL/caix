@@ -30,6 +30,9 @@ fi
 
 echo "→ caix installer (beta)"
 echo "  checking toolchain…"
+if [ -x "$DIR/scripts/check-coreai-runtime.sh" ]; then
+  "$DIR/scripts/check-coreai-runtime.sh"
+fi
 if ! command -v swift >/dev/null 2>&1; then
   echo "  ✗ 'swift' not found. Install Xcode (beta) from the App Store / developer.apple.com, then:"
   echo "      sudo xcode-select -s /Applications/Xcode-beta.app   # or your Core AI–capable Xcode"

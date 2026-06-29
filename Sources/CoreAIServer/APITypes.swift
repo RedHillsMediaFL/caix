@@ -9,7 +9,48 @@ import Foundation
 public struct ChatMessage: Codable, Sendable {
     public var role: String          // system | user | assistant | tool
     public var content: String
-    public init(role: String, content: String) { self.role = role; self.content = content }
+    public var media: [MediaPart]
+
+    public init(role: String, content: String, media: [MediaPart] = []) {
+        self.role = role
+        self.content = content
+        self.media = media
+    }
+
+    private enum CodingKeys: String, CodingKey { case role, content }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.role = try c.decode(String.self, forKey: .role)
+        let parsed = try ContentParts.decode(from: c, forKey: .content)
+        self.content = parsed.text
+        self.media = parsed.media
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(role, forKey: .role)
+        try c.encode(content, forKey: .content)
+    }
+}
+
+public struct MediaPart: Codable, Sendable, Equatable {
+    public var type: String
+    public var payload: JSONAny
+
+    public init(type: String, payload: JSONAny) {
+        self.type = type
+        self.payload = payload
+    }
+
+    public var modality: String {
+        let lower = type.lowercased()
+        if lower.contains("image") { return "image" }
+        if lower.contains("audio") { return "audio" }
+        if lower.contains("video") { return "video" }
+        if lower.contains("document") || lower.contains("file") { return "file" }
+        return lower.isEmpty ? "unknown" : lower
+    }
 }
 
 public struct GenerationRequest: Sendable {
@@ -36,6 +77,12 @@ public struct GenerationRequest: Sendable {
         self.temperature = temperature; self.topP = topP; self.topK = topK; self.stop = stop
         self.stream = stream; self.applyChatTemplate = applyChatTemplate; self.kvCapacity = kvCapacity
         self.seed = seed; self.tools = tools
+    }
+
+    public var media: [MediaPart] { messages.flatMap(\.media) }
+    public var hasMultimodalContent: Bool { !media.isEmpty }
+    public var modalities: [String] {
+        Array(Set(media.map(\.modality))).sorted()
     }
 
     /// Tool specs projected to swift-transformers `ToolSpec` (`[String: any Sendable]`).
@@ -166,7 +213,9 @@ public struct AnthropicMessagesRequest: Codable, Sendable {
     public func toGeneration() -> GenerationRequest {
         var msgs: [ChatMessage] = []
         if let system { msgs.append(ChatMessage(role: "system", content: system)) }
-        for m in messages { msgs.append(ChatMessage(role: m.role, content: m.content.text)) }
+        for m in messages {
+            msgs.append(ChatMessage(role: m.role, content: m.content.text, media: m.content.media))
+        }
         return GenerationRequest(model: model, messages: msgs, maxTokens: max_tokens, temperature: temperature ?? 1.0,
                                  topP: top_p, topK: top_k, stop: stop_sequences ?? [], stream: stream ?? false,
                                  applyChatTemplate: apply_chat_template ?? true, kvCapacity: kv_capacity,
@@ -249,21 +298,84 @@ public enum StringOrArray: Codable, Sendable {
     }
 }
 
-/// Anthropic content is either a string or an array of typed blocks; we flatten to text.
+/// Anthropic content is either a string or an array of typed blocks. Text goes to the current
+/// text-only runtime path; non-text blocks are preserved so the server can reject them explicitly.
 public enum AnthropicContent: Codable, Sendable {
-    case text(String), blocks([[String: String]])
+    case text(String), blocks([JSONAny])
     public var text: String {
         switch self {
         case .text(let s): return s
-        case .blocks(let bs): return bs.compactMap { $0["text"] }.joined(separator: "\n")
+        case .blocks(let blocks): return ContentParts.parse(blocks).text
+        }
+    }
+    public var media: [MediaPart] {
+        switch self {
+        case .text: return []
+        case .blocks(let blocks): return ContentParts.parse(blocks).media
         }
     }
     public init(from d: Decoder) throws {
         let c = try d.singleValueContainer()
-        if let s = try? c.decode(String.self) { self = .text(s) } else { self = .blocks(try c.decode([[String: String]].self)) }
+        if let s = try? c.decode(String.self) {
+            self = .text(s)
+        } else {
+            self = .blocks(try c.decode([JSONAny].self))
+        }
     }
     public func encode(to e: Encoder) throws {
         var c = e.singleValueContainer()
         switch self { case .text(let s): try c.encode(s); case .blocks(let b): try c.encode(b) }
+    }
+}
+
+struct ContentParts {
+    var text: String
+    var media: [MediaPart]
+
+    static func decode<K: CodingKey>(
+        from container: KeyedDecodingContainer<K>,
+        forKey key: K
+    ) throws -> ContentParts {
+        if let text = try? container.decode(String.self, forKey: key) {
+            return ContentParts(text: text, media: [])
+        }
+        if let blocks = try? container.decode([JSONAny].self, forKey: key) {
+            return parse(blocks)
+        }
+        if (try? container.decodeNil(forKey: key)) == true {
+            return ContentParts(text: "", media: [])
+        }
+        throw DecodingError.dataCorruptedError(
+            forKey: key, in: container,
+            debugDescription: "content must be a string or an array of typed content blocks")
+    }
+
+    static func parse(_ blocks: [JSONAny]) -> ContentParts {
+        var texts: [String] = []
+        var media: [MediaPart] = []
+        for block in blocks {
+            guard case .object(let object) = block else { continue }
+            let type = stringValue(object["type"]) ?? ""
+            if isTextBlock(type), let text = textValue(object) {
+                texts.append(text)
+            } else {
+                media.append(MediaPart(type: type, payload: block))
+            }
+        }
+        return ContentParts(text: texts.joined(separator: "\n"), media: media)
+    }
+
+    private static func isTextBlock(_ type: String) -> Bool {
+        let lower = type.lowercased()
+        return lower == "text" || lower == "input_text"
+    }
+
+    private static func textValue(_ object: [String: JSONAny]) -> String? {
+        stringValue(object["text"]) ?? stringValue(object["content"])
+    }
+
+    private static func stringValue(_ value: JSONAny?) -> String? {
+        guard case .string(let s) = value else { return nil }
+        return s
     }
 }

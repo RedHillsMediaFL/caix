@@ -226,7 +226,13 @@ actor JobTracker {
 
     /// Download an already-converted caix bundle from Hugging Face into `exportsDir/name`.
     /// The repo must already contain root `metadata.json`; conversion is not run here.
-    func startDownloadRHM(name: String, hfRepo: String, exportsDir: URL) -> String? {
+    func startDownloadRHM(
+        name: String,
+        hfRepo: String,
+        exportsDir: URL,
+        estimatedBytes: Int64? = nil,
+        reserveBytes: Int64 = DiskSpaceGuard.reserveBytesFromEnvironment()
+    ) -> String? {
         if let existing = jobs[name], existing.state == .running {
             return "download already running for \(name)"
         }
@@ -237,6 +243,13 @@ actor JobTracker {
             try FileManager.default.createDirectory(at: exportsDir, withIntermediateDirectories: true)
         } catch {
             return "could not create exports directory: \(error.localizedDescription)"
+        }
+        if let err = DiskSpaceGuard.preflightInstall(
+            destinationRoot: exportsDir,
+            incomingBytes: estimatedBytes,
+            reserveBytes: reserveBytes)
+        {
+            return err
         }
 
         let destination = exportsDir.appendingPathComponent(name, isDirectory: true)
