@@ -18,14 +18,14 @@ caix serves Core AI `.aimodel` language bundles on Apple silicon (Neural Engine 
 
 OpenAI and Anthropic clients can point at the local server.
 
-For supported pairs, **MTP / speculative decoding** lets a small draft model propose tokens and the
-target model verify them. Output is unchanged; decode throughput can improve.
+caix supports classic speculative packages and EAGLE target+draft packages. Use the model-card flags
+for each package.
 
 ---
 
 ## Performance
 
-No public speed table is current in this checkout.
+No public speed table is current.
 
 Benchmark rules and raw-log requirements are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md). Do not
 publish speed numbers without the raw run directory, exact model repo revision, caix commit,
@@ -150,7 +150,7 @@ These are pre-converted Core AI `.aimodel` repos, named `rhm-...-caix`.
 |---|---|---|
 | [`rhm-qwen2.5-0.5b-instruct-caix`](https://huggingface.co/redhillsmediafl/rhm-qwen2.5-0.5b-instruct-caix) | Qwen2.5-0.5B-Instruct — verified | ~290 MB |
 | [`rhm-qwen2.5-3b-instruct-caix`](https://huggingface.co/redhillsmediafl/rhm-qwen2.5-3b-instruct-caix) | Qwen2.5-3B-Instruct — verified; Qwen Research License | ~1.7 GB |
-| [`rhm-qwen3-0.6b-caix`](https://huggingface.co/redhillsmediafl/rhm-qwen3-0.6b-caix) | Qwen3-0.6B — small edge/draft model | ~335 MB |
+| [`rhm-qwen3-0.6b-caix`](https://huggingface.co/redhillsmediafl/rhm-qwen3-0.6b-caix) | Qwen3-0.6B — edge/draft model | ~335 MB |
 | [`rhm-qwen3-4b-caix`](https://huggingface.co/redhillsmediafl/rhm-qwen3-4b-caix) | Qwen3-4B — general chat; tool calling | ~2.1 GB |
 | [`rhm-qwen3-8b-caix`](https://huggingface.co/redhillsmediafl/rhm-qwen3-8b-caix) | Qwen3-8B — verified | ~4.3 GB |
 | [`rhm-qwen3-14b-caix`](https://huggingface.co/redhillsmediafl/rhm-qwen3-14b-caix) | Qwen3-14B — verified | ~7.8 GB |
@@ -291,17 +291,15 @@ scripts/refresh-export-index.sh /Volumes/SSD/ai-dev/coreai-pipeline/exports \
   ~/coreai-server/export-index.json
 ```
 
-- **Greedy tool-calling.** The MTP/speculative path is greedy, so small models may not reliably emit
-  tool calls. Use a qwen-family model for tool-heavy chats.
+- **Greedy tool-calling.** The MTP/speculative path is greedy, so lower-parameter models may not
+  reliably emit tool calls. Use a qwen-family model for tool-heavy chats.
 - **Authored architectures.** Conversion support exists for gemma3/gemma4,
   qwen2/qwen3/qwen3_moe/qwen3_5/qwen3_5_moe, glm4, mistral, mixtral, and gpt_oss. New model types
   are flagged with their required Core AI authoring steps in the UI and support logs.
 - **Ornith-1.0-35B lane.** `ornith-1.0-35b` is registered for local conversion. The authored int4
-  path exports a 17 GB bundle, but runtime warmup is still blocked by an MPS reshape failure, so it
-  is not published to HF. Current depth probes pass generation through 13 layers and fail at the
-  14-layer decode shape. Next work: graph segmentation or a decode-shape workaround. The 397B
-  variant uses the same authored `qwen3_5_moe` path and needs the full 122-shard source download
-  first.
+  path exports a 17 GB bundle, but runtime warmup is blocked by an MPS reshape failure, so it is not
+  published to HF. The next fix is graph segmentation or a decode-shape workaround. The 397B variant
+  uses the same authored `qwen3_5_moe` path and needs the full 122-shard source download first.
 - **Diffusion models** are not in this beta.
 
 ---
@@ -340,7 +338,7 @@ caix can convert GGUF repos. If a repo ships only `.gguf` files, caix dequantize
 an HF checkpoint, then runs the normal export.
 
 ```bash
-# repo: caix picks the highest-quality quant present (F16 > Q8_0 > Q6_K > ...)
+# repo: caix picks the least-compressed quant present (F16 > Q8_0 > Q6_K > ...)
 python3 python/converter/convert.py --gguf unsloth/Qwen3-0.6B-GGUF --name qwen3-0.6b-coreai
 # or pin a specific file:
 python3 python/converter/convert.py --gguf unsloth/Qwen3-0.6B-GGUF --gguf-file Qwen3-0.6B-BF16.gguf
