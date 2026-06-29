@@ -2081,7 +2081,7 @@ public final class DistributedRemoteStageHandle: DistributedStageHandle {
     public func allocate(_ allocation: DistributedStageAllocation) async throws {
         let response = try await roundTrip(DistributedWorkerWireFrame(
             message: .allocate(allocation)))
-        try expectNoResponse(response, for: "alloc")
+        try expectNoResponse(response, for: "alloc", requestID: allocation.requestID)
     }
 
     public func forward(
@@ -2104,6 +2104,9 @@ public final class DistributedRemoteStageHandle: DistributedStageHandle {
                 "forward response is missing")
         }
         try response.validate(against: plan)
+        if case .error(let error) = response.message {
+            try throwWorkerError(error, operation: "forward", requestID: input.requestID)
+        }
         guard case .forwardResult(let result) = response.message else {
             throw DistributedStageExecutionError.invalidStageOutput(
                 "expected forward_result response")
@@ -2134,7 +2137,7 @@ public final class DistributedRemoteStageHandle: DistributedStageHandle {
         let response = try await roundTrip(DistributedWorkerWireFrame(
             message: .reset(DistributedRequestControl(
                 requestID: requestID, stageID: descriptor.id))))
-        try expectNoResponse(response, for: "reset")
+        try expectNoResponse(response, for: "reset", requestID: requestID)
     }
 
     public func free(requestID: String) async {
@@ -2145,12 +2148,33 @@ public final class DistributedRemoteStageHandle: DistributedStageHandle {
 
     private func expectNoResponse(
         _ response: DistributedWorkerWireFrame?,
-        for operation: String
+        for operation: String,
+        requestID: String
     ) throws {
-        guard response == nil else {
-            throw DistributedStageExecutionError.invalidControlFrame(
-                "\(operation) must not return a response")
+        guard let response else { return }
+        try response.validate(against: plan)
+        if case .error(let error) = response.message {
+            try throwWorkerError(error, operation: operation, requestID: requestID)
         }
+        throw DistributedStageExecutionError.invalidControlFrame(
+            "\(operation) must not return a response")
+    }
+
+    private func throwWorkerError(
+        _ error: DistributedWorkerErrorFrame,
+        operation: String,
+        requestID: String
+    ) throws -> Never {
+        if let errorRequestID = error.requestID, errorRequestID != requestID {
+            throw DistributedStageExecutionError.invalidControlFrame(
+                "\(operation) worker error request_id \(errorRequestID) does not match request \(requestID)")
+        }
+        if let errorStageID = error.stageID, errorStageID != descriptor.id {
+            throw DistributedStageExecutionError.invalidControlFrame(
+                "\(operation) worker error stage_id \(errorStageID) does not match remote stage \(descriptor.id)")
+        }
+        throw DistributedStageExecutionError.invalidControlFrame(
+            "\(operation) worker error \(error.code): \(error.detail)")
     }
 }
 

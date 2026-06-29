@@ -538,6 +538,40 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertEqual(handle.freeRequests, ["req-1"])
     }
 
+    func testWorkerFrameExecutorRejectsDuplicateAllocateAndAllowsReallocateAfterFree() async throws {
+        let plan = makePlan()
+        let handle = makeFakeHandles(for: plan)[1]
+        let executor = try DistributedWorkerFrameExecutor(plan: plan, handle: handle)
+
+        let firstAllocateResponse = try await executor.process(DistributedWorkerWireFrame(
+            message: .allocate(DistributedStageAllocation(requestID: "req-1", kvCapacity: 128)))
+        )
+        XCTAssertNil(firstAllocateResponse)
+        await XCTAssertThrowsErrorAsync(
+            try await executor.process(DistributedWorkerWireFrame(
+                message: .allocate(DistributedStageAllocation(
+                    requestID: "req-1", kvCapacity: 128))))
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidControlFrame("request_id req-1 is already allocated"))
+        }
+        XCTAssertEqual(handle.allocatedRequests, ["req-1"])
+
+        let freeResponse = try await executor.process(DistributedWorkerWireFrame(
+            message: .free(DistributedRequestControl(
+                requestID: "req-1", stageID: handle.descriptor.id)))
+        )
+        let secondAllocateResponse = try await executor.process(DistributedWorkerWireFrame(
+            message: .allocate(DistributedStageAllocation(requestID: "req-1", kvCapacity: 64)))
+        )
+        XCTAssertNil(freeResponse)
+        XCTAssertNil(secondAllocateResponse)
+
+        XCTAssertEqual(handle.freeRequests, ["req-1"])
+        XCTAssertEqual(handle.allocatedRequests, ["req-1", "req-1"])
+    }
+
     func testWorkerFrameExecutorProcessesForwardFrame() async throws {
         let plan = makePlan(
             boundaryTensor: DistributedBoundaryTensorSpec(
@@ -1090,14 +1124,17 @@ final class DistributedRuntimeTests: XCTestCase {
         }
     }
 
-    func testRemoteStageHandleRejectsUnexpectedControlResponse() async throws {
+    func testRemoteStageHandlePropagatesWorkerErrorResponse() async throws {
         let plan = makePlan()
         let remote = try DistributedRemoteStageHandle(
             plan: plan,
             descriptor: try XCTUnwrap(plan.stage(id: "layers-0-16"))
         ) { _ in
             DistributedWorkerWireFrame(message: .error(DistributedWorkerErrorFrame(
-                code: "bad_request", detail: "unexpected response")))
+                code: "bad_request",
+                detail: "unexpected response",
+                requestID: "req-1",
+                stageID: "layers-0-16")))
         }
 
         await XCTAssertThrowsErrorAsync(
@@ -1106,7 +1143,78 @@ final class DistributedRuntimeTests: XCTestCase {
         ) { error in
             XCTAssertEqual(
                 error as? DistributedStageExecutionError,
-                .invalidControlFrame("alloc must not return a response"))
+                .invalidControlFrame("alloc worker error bad_request: unexpected response"))
+        }
+    }
+
+    func testRemoteStageHandlePropagatesForwardWorkerErrorResponse() async throws {
+        let plan = makePlan()
+        let remote = try DistributedRemoteStageHandle(
+            plan: plan,
+            descriptor: try XCTUnwrap(plan.stage(id: "embed"))
+        ) { _ in
+            DistributedWorkerWireFrame(message: .error(DistributedWorkerErrorFrame(
+                code: "kv_exhausted",
+                detail: "capacity exceeded",
+                requestID: "req-1",
+                stageID: "embed")))
+        }
+
+        await XCTAssertThrowsErrorAsync(
+            try await remote.forward(DistributedStageForwardInput(
+                requestID: "req-1",
+                stepIndex: 0,
+                positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+                positionIDs: [0],
+                tokenIDs: [7]))
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidControlFrame("forward worker error kv_exhausted: capacity exceeded"))
+        }
+    }
+
+    func testRemoteStageHandleRejectsMismatchedWorkerErrorEnvelope() async throws {
+        let plan = makePlan()
+        let wrongRequest = try DistributedRemoteStageHandle(
+            plan: plan,
+            descriptor: try XCTUnwrap(plan.stage(id: "layers-0-16"))
+        ) { _ in
+            DistributedWorkerWireFrame(message: .error(DistributedWorkerErrorFrame(
+                code: "bad_request",
+                detail: "wrong request",
+                requestID: "other-req",
+                stageID: "layers-0-16")))
+        }
+        let wrongStage = try DistributedRemoteStageHandle(
+            plan: plan,
+            descriptor: try XCTUnwrap(plan.stage(id: "layers-0-16"))
+        ) { _ in
+            DistributedWorkerWireFrame(message: .error(DistributedWorkerErrorFrame(
+                code: "bad_request",
+                detail: "wrong stage",
+                requestID: "req-1",
+                stageID: "layers-16-32")))
+        }
+
+        await XCTAssertThrowsErrorAsync(
+            try await wrongRequest.allocate(DistributedStageAllocation(
+                requestID: "req-1", kvCapacity: 16))
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidControlFrame(
+                    "alloc worker error request_id other-req does not match request req-1"))
+        }
+
+        await XCTAssertThrowsErrorAsync(
+            try await wrongStage.allocate(DistributedStageAllocation(
+                requestID: "req-1", kvCapacity: 16))
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidControlFrame(
+                    "alloc worker error stage_id layers-16-32 does not match remote stage layers-0-16"))
         }
     }
 

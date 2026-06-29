@@ -48,6 +48,8 @@
 - Threaded `HELLO`/ACK through the loopback worker transport so handshake frames use the same
   stream decoder contract as worker requests.
 - Added a remote distributed stage handle for coordinator-to-worker frame round trips.
+- Tightened remote distributed stage handles so worker `ERROR` frames preserve code/detail and
+  reject mismatched request or stage envelopes.
 - Added same-machine pipeline guards for invalid position ranges and reset request IDs.
 - Added the cluster-plan contract check to publication gates.
 - Added fail-closed `caix cluster join` and `caix serve --cluster` CLI stubs for Brew surface tests.

@@ -63,7 +63,9 @@ This is blunt on purpose. Where the current code cannot do something, it says so
     frame encoder, stream decoder, executor, and response path in-process. It is the socket
     contract before there is a socket.
   - `DistributedRemoteStageHandle` wraps a worker frame round trip so the coordinator can mix local
-    and remote stages through the same `DistributedStageHandle` interface.
+    and remote stages through the same `DistributedStageHandle` interface. Worker `ERROR` frames
+    preserve their code/detail and must match the active request and remote stage before the
+    coordinator reports them.
   - `DistributedStagePlan.integrityHash()` gives coordinator and workers the same SHA-256 plan
     identity for handshake rejection.
 - A dry-run planner CLI (`Sources/PipelineCLI/Cluster.swift`, wired in `main.swift`):
