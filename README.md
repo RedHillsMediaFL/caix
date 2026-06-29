@@ -48,6 +48,8 @@ Benchmark rules and raw-log requirements are in [docs/BENCHMARKS.md](docs/BENCHM
 publish speed numbers without the raw run directory, exact model repo revision, caix commit,
 hardware, OS build, and exact command.
 
+Planned work is tracked in [docs/ROADMAP.md](docs/ROADMAP.md).
+
 ---
 
 ## Requirements
