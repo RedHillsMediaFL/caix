@@ -19,6 +19,7 @@ Options:
   --runs <n>            Measured runs. Default: 3.
   --raw                 Skip chat template for every run.
   --dry-run             Write the suite summary without launching caix.
+  --force               Hand an existing benchmark lock to the child runner.
 
 Every manifest row is recorded as measured, planned, or skipped with a reason.
 This script does not download models and does not publish numbers.
@@ -44,6 +45,7 @@ WARMUP=1
 RUNS=3
 RAW=0
 DRY_RUN=0
+FORCE=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -60,6 +62,7 @@ while [[ $# -gt 0 ]]; do
     --runs) RUNS="${2:?}"; shift 2 ;;
     --raw) RAW=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
+    --force) FORCE=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -106,7 +109,7 @@ canonical_benchmark_mode() {
 
 heavy_task_guard() {
   local lock="$REPO_DIR/.agent-heavy-task.lock"
-  if [[ -e "$lock" ]]; then
+  if [[ -e "$lock" && "$FORCE" != "1" ]]; then
     echo "error: heavy-task lock exists: $lock" >&2
     return 2
   fi
@@ -139,6 +142,7 @@ SUMMARY="$SUITE_DIR/summary.tsv"
   echo "runs=$RUNS"
   echo "raw=$RAW"
   echo "dry_run=$DRY_RUN"
+  echo "force=$FORCE"
   printf 'prompt=%s\n' "$PROMPT"
 } > "$SUITE_DIR/metadata.txt"
 
@@ -219,6 +223,7 @@ while IFS=$'\t' read -r repo local_dir kind mode status notes; do
       [[ "$canonical_mode" == "speculative" ]] && cmd+=(--draft "$bundle/draft" --draft-tokens 4)
     fi
     [[ "$RAW" == "1" ]] && cmd+=(--raw)
+    [[ "$FORCE" == "1" ]] && cmd+=(--force)
 
     if output="$("${cmd[@]}")"; then
       row_status="measured"
