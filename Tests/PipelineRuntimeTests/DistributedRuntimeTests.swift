@@ -2373,6 +2373,7 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertEqual(result.promptTokenCount, 2)
         XCTAssertEqual(result.stopReason, .maxTokens)
         XCTAssertEqual(result.kvCapacity, 13)
+        XCTAssertEqual(handles.map(\.allocatedKVCaps), [[13], [13], [13], [13]])
         XCTAssertTrue(handles.allSatisfy { $0.inputs.count == 3 })
         XCTAssertEqual(handles[0].inputs.map(\.stepIndex), [0, 1, 2])
         XCTAssertEqual(
@@ -2473,6 +2474,41 @@ final class DistributedRuntimeTests: XCTestCase {
             options: DistributedStagedGenerationOptions(maxTokens: 1),
             requestID: "req-overflow")
         XCTAssertEqual(result.generatedTokenIDs, [42])
+    }
+
+    func testStagedEngineAppliesMinimumKVCapacityFloor() async throws {
+        let plan = makePlan()
+        let handles = makeFakeHandles(for: plan)
+        let pipeline = try DistributedSameMachinePipeline(plan: plan, stages: handles)
+        let engine = try DistributedStagedEngine(
+            pipeline: pipeline,
+            maxContextLength: 64,
+            minKVCapacity: 32)
+
+        let result = try await engine.generate(
+            promptTokens: [10, 11],
+            options: DistributedStagedGenerationOptions(maxTokens: 3, kvCapacity: 4),
+            requestID: "req-floor")
+
+        XCTAssertEqual(result.kvCapacity, 35)
+        XCTAssertEqual(handles.map(\.allocatedKVCaps), [[35], [35], [35], [35]])
+    }
+
+    func testStagedEngineRejectsNegativeMinimumKVCapacity() throws {
+        let plan = makePlan()
+        let handles = makeFakeHandles(for: plan)
+        let pipeline = try DistributedSameMachinePipeline(plan: plan, stages: handles)
+
+        XCTAssertThrowsError(
+            try DistributedStagedEngine(
+                pipeline: pipeline,
+                maxContextLength: 16,
+                minKVCapacity: -1)
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidForwardInput("min_kv_capacity must be non-negative"))
+        }
     }
 
     func testSameMachinePipelineRejectsEmptyResetRequestIDBeforeForwarding() async throws {
@@ -2651,6 +2687,7 @@ final class DistributedRuntimeTests: XCTestCase {
 private final class FakeDistributedStageHandle: DistributedStageHandle {
     let descriptor: DistributedStageDescriptor
     var allocatedRequests: [String] = []
+    var allocatedKVCaps: [Int] = []
     var inputs: [DistributedStageForwardInput] = []
     var resetRequests: [String] = []
     var freeRequests: [String] = []
@@ -2666,6 +2703,7 @@ private final class FakeDistributedStageHandle: DistributedStageHandle {
 
     func allocate(_ allocation: DistributedStageAllocation) async throws {
         allocatedRequests.append(allocation.requestID)
+        allocatedKVCaps.append(allocation.kvCapacity)
     }
 
     func forward(_ input: DistributedStageForwardInput) async throws -> DistributedStageForwardOutput {

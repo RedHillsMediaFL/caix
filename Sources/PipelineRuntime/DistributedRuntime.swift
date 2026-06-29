@@ -2650,17 +2650,24 @@ public struct DistributedStagedGenerationResult: Hashable, Sendable {
 public final class DistributedStagedEngine {
     public let pipeline: DistributedSameMachinePipeline
     public let maxContextLength: Int
+    public let minKVCapacity: Int
 
     public init(
         pipeline: DistributedSameMachinePipeline,
-        maxContextLength: Int
+        maxContextLength: Int,
+        minKVCapacity: Int = 0
     ) throws {
         guard maxContextLength > 0 else {
             throw DistributedStageExecutionError.invalidForwardInput(
                 "max_context_length must be positive")
         }
+        guard minKVCapacity >= 0 else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "min_kv_capacity must be non-negative")
+        }
         self.pipeline = pipeline
         self.maxContextLength = maxContextLength
+        self.minKVCapacity = minKVCapacity
     }
 
     public func generate(
@@ -2764,7 +2771,8 @@ public final class DistributedStagedEngine {
             throw DistributedStageExecutionError.invalidForwardInput(
                 "kv_capacity must be positive")
         }
-        let capacity = min(requested, maxContextLength)
+        let floored = max(requested, minKVCapacity + maxTokens)
+        let capacity = min(floored, maxContextLength)
         guard capacity >= promptCount else {
             throw DistributedStageExecutionError.invalidForwardInput(
                 "kv_capacity is smaller than prompt")

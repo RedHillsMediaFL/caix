@@ -45,6 +45,7 @@
   processed-token position, KV capacity, reset, and free handling.
 - Added a compile-only distributed staged engine wrapper for same-machine prefill/decode lifecycle
   tests.
+- Aligned the distributed staged engine KV capacity floor with monolithic Core AI runtime sizing.
 - Tightened distributed worker `FREE` handling so unknown request IDs are rejected before stage
   teardown runs.
 - Threaded `HELLO`/ACK through the loopback worker transport so handshake frames use the same
