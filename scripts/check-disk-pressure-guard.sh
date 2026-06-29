@@ -64,4 +64,20 @@ if "$SCRIPT_DIR/check-disk-pressure.sh" --path "$tmpdir/missing" --quiet >/dev/n
   exit 1
 fi
 
+mkdir -p "$tmpdir/bin"
+cat > "$tmpdir/bin/df" <<'SH'
+#!/usr/bin/env bash
+printf 'Filesystem 1G-blocks Used Available Capacity Mounted on\n'
+printf '/dev/test 100 1 not-a-number 1%% /tmp\n'
+SH
+chmod +x "$tmpdir/bin/df"
+if PATH="$tmpdir/bin:$PATH" "$SCRIPT_DIR/check-disk-pressure.sh" --path "$tmpdir" --quiet >"$tmpdir/bad-df.txt" 2>&1; then
+  echo "error: disk-pressure guard accepted malformed df output" >&2
+  exit 1
+fi
+if ! grep -F "error: could not read numeric filesystem free space" "$tmpdir/bad-df.txt" >/dev/null; then
+  echo "error: disk-pressure guard did not report malformed df output" >&2
+  exit 1
+fi
+
 echo "disk pressure guard ok"

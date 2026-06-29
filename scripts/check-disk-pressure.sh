@@ -67,6 +67,12 @@ if [ -z "$free_gib" ]; then
   echo "error: could not read filesystem free space for $PATH_TO_CHECK" >&2
   exit 2
 fi
+case "$free_gib" in
+  *[!0-9]*)
+    echo "error: could not read numeric filesystem free space for $PATH_TO_CHECK" >&2
+    exit 2
+    ;;
+esac
 
 status="ok"
 rc=0
