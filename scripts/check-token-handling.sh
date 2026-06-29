@@ -7,7 +7,7 @@ usage() {
 Usage: scripts/check-token-handling.sh [path ...]
 
 Default paths:
-  Sources scripts python docs README.md Tests Package.swift
+  Sources scripts python docs web Formula README.md Tests Package.swift
 
 Fails when repo code/docs reintroduce direct HF token env reads, Bearer auth headers,
 or token argv. This does not inspect local auth files.
@@ -22,7 +22,7 @@ fi
 if [[ "$#" -gt 0 ]]; then
   paths=("$@")
 else
-  paths=(Sources scripts python docs README.md Tests Package.swift)
+  paths=(Sources scripts python docs web Formula README.md Tests Package.swift)
 fi
 
 existing=()
