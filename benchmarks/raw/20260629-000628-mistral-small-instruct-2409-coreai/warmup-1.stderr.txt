@@ -1,0 +1,7 @@
+[fast] language bundle ok: mistral-small-instruct-2409-coreai
+[fast] creating engine (auto→pipelined) …
+[fast] engine + tokenizer ready
+[fast] warming up engine …
+[fast] warmup done; generating 128 tokens …
+[fast] generate done in 33.98s
+[coreai] 8 prompt tok, 129 generated, stop=maxTokens, load=158.52s prefill=0.00s decode=33.98s (3.8 tok/s)
