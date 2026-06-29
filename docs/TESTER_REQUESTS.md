@@ -5,7 +5,7 @@ Revision source: `benchmarks/revisions.tsv`.
 Raw evidence source: `benchmarks/raw`.
 
 No speed claims without raw logs. Use the exact revision in the table. Keep prompts, token budget,
-temperature, streaming mode, warmup count, measured run count, and chat-template mode unchanged.
+temperature, seed, streaming mode, warmup count, measured run count, and chat-template mode unchanged.
 
 ## Ready Benchmark Requests
 

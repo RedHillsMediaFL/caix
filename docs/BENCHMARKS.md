@@ -7,7 +7,8 @@ machine, and command.
 
 - Run no benchmarks while `.agent-heavy-task.lock` exists or while a conversion/upload/verification is active.
 - Run publishable benchmark scripts only from a clean git worktree.
-- Use the same prompt, token budget, temperature, streaming mode, warmup count, and measured run count for every comparable model.
+- Use the same prompt, token budget, temperature, seed, streaming mode, warmup count, and measured
+  run count for every comparable model.
 - Record skipped models with the reason: missing local bundle, gated upstream access, host memory fit, runtime failure, or license limit.
 - Use median decode tok/s from measured warm runs for public tables. Keep prefill and load time separately.
 - Do not mix chat-template runs with `--raw` runs in the same comparison.
@@ -149,6 +150,7 @@ Use these fields for any published benchmark table:
 | prompt | exact prompt text or fixture path |
 | max tokens | command value |
 | temperature | command value |
+| seed | command value; blank means no seed |
 | mode | chat template or raw; streaming or non-streaming |
 | load seconds | caix stderr summary |
 | prefill seconds | caix stderr summary |

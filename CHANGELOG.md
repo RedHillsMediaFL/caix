@@ -30,6 +30,7 @@
 - Added benchmark runner guards for active resumable Hub payload upload jobs.
 - Added direct benchmark-runner checks for stable measured stdout and generated-token counts.
 - Added standalone benchmark-runner seed support for reproducible caix runs.
+- Documented benchmark seed as a comparable run setting.
 - Added a benchmark report gate that refuses missing raw logs and marks rows without model revisions
   as non-publishable.
 - Added a single publication-gates script for local and Hub metadata/card checks.

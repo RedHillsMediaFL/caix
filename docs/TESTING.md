@@ -3,7 +3,7 @@
 Use this when testing a converted `redhillsmediafl/*-caix` bundle on hardware we do not have.
 
 Do not submit speed claims without raw logs. Do not compare runs that use different prompts, token
-budgets, temperature, streaming mode, or chat-template mode.
+budgets, temperature, seed, streaming mode, or chat-template mode.
 
 ## Pick a Target
 

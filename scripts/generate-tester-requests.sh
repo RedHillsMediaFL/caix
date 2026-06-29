@@ -152,7 +152,7 @@ Revision source: \`$revisions_label\`.
 Raw evidence source: \`$raw_label\`.
 
 No speed claims without raw logs. Use the exact revision in the table. Keep prompts, token budget,
-temperature, streaming mode, warmup count, measured run count, and chat-template mode unchanged.
+temperature, seed, streaming mode, warmup count, measured run count, and chat-template mode unchanged.
 
 ## Ready Benchmark Requests
 
