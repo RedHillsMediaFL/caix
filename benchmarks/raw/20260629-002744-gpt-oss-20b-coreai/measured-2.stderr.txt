@@ -1,0 +1,7 @@
+[fast] language bundle ok: gpt-oss-20b-coreai
+[fast] creating engine (auto→pipelined) …
+[fast] engine + tokenizer ready
+[fast] warming up engine …
+[fast] warmup done; generating 128 tokens …
+[fast] generate done in 19.14s
+[coreai] 80 prompt tok, 128 generated, stop=maxTokens, load=43.51s prefill=0.00s decode=19.14s (6.7 tok/s)
