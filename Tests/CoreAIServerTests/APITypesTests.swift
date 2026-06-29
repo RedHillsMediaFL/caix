@@ -83,4 +83,33 @@ final class APITypesTests: XCTestCase {
         XCTAssertFalse(generation.hasMultimodalContent)
         XCTAssertEqual(generation.modalities, [])
     }
+
+    func testServerRejectsMultimodalGenerationBeforeRuntime() throws {
+        let generation = GenerationRequest(
+            model: "local",
+            messages: [
+                ChatMessage(
+                    role: "user",
+                    content: "Describe this.",
+                    media: [
+                        MediaPart(
+                            type: "image_url",
+                            payload: .object([
+                                "type": .string("image_url"),
+                                "image_url": .object(["url": .string("data:image/png;base64,abc")]),
+                            ]))
+                    ])
+            ])
+
+        let response = try XCTUnwrap(ServerRuntime.rejectMultimodalIfNeeded(generation))
+        XCTAssertEqual(response.status.code, 400)
+    }
+
+    func testServerAllowsTextOnlyGenerationToRuntime() {
+        let generation = GenerationRequest(
+            model: "local",
+            messages: [ChatMessage(role: "user", content: "Plain text.")])
+
+        XCTAssertNil(ServerRuntime.rejectMultimodalIfNeeded(generation))
+    }
 }

@@ -7,7 +7,7 @@ usage() {
 Usage: scripts/check-token-handling.sh [path ...]
 
 Default paths:
-  Sources scripts docs README.md Tests Package.swift
+  Sources scripts python docs README.md Tests Package.swift
 
 Fails when repo code/docs reintroduce direct HF token env reads, Bearer auth headers,
 or token argv. This does not inspect local auth files.
@@ -22,7 +22,7 @@ fi
 if [[ "$#" -gt 0 ]]; then
   paths=("$@")
 else
-  paths=(Sources scripts docs README.md Tests Package.swift)
+  paths=(Sources scripts python docs README.md Tests Package.swift)
 fi
 
 existing=()
@@ -58,7 +58,9 @@ scan "Bearer Authorization header" \
 scan "token passed as argv" \
   '(^|[[:space:]])--token([[:space:]=]|$)'
 scan "stale HF cache default; use /Volumes/SSD/hf-cache" \
-  '<checkout-parent>/hf-cache|converter default is[^[:cntrl:]]*hf-cache'
+  '<checkout-parent>/hf-cache|converter default is[^[:cntrl:]]*hf-cache|PIPELINE_ROOT[.]parent[[:space:]]*/[[:space:]]*"hf-cache"'
+scan "stale converter tmp default; use /Volumes/SSD/coreai-tmp" \
+  '<checkout-parent>/coreai-tmp|PIPELINE_ROOT[.]parent[[:space:]]*/[[:space:]]*"coreai-tmp"'
 
 if [[ "$fail" -ne 0 ]]; then
   exit 1

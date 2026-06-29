@@ -40,7 +40,6 @@ def main() -> int:
     ap.add_argument("--out", required=True, help="output HF directory")
     args = ap.parse_args()
 
-    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
     try:
         from transformers import AutoModelForCausalLM, AutoTokenizer
     except Exception as e:
@@ -51,7 +50,7 @@ def main() -> int:
     else:
         try:
             from huggingface_hub import HfApi
-            files = list(HfApi(token=token).list_repo_files(args.repo))
+            files = list(HfApi().list_repo_files(args.repo))
         except Exception as e:
             print(json.dumps({"ok": False, "reason": f"could not list repo: {e}"})); return 1
         gfile = args.gguf_file or pick_gguf(files)
@@ -61,8 +60,8 @@ def main() -> int:
 
     try:
         print(f"[gguf] dequantizing {repo} :: {gfile} (this loads the full model into RAM)...", flush=True)
-        model = AutoModelForCausalLM.from_pretrained(repo, gguf_file=gfile, token=token)
-        tok = AutoTokenizer.from_pretrained(repo, gguf_file=gfile, token=token)
+        model = AutoModelForCausalLM.from_pretrained(repo, gguf_file=gfile)
+        tok = AutoTokenizer.from_pretrained(repo, gguf_file=gfile)
     except Exception as e:
         print(json.dumps({"ok": False, "reason": f"dequant failed ({type(e).__name__}: {e}). "
                           "The architecture may not be GGUF-loadable by transformers."})); return 1

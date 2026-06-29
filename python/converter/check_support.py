@@ -20,7 +20,7 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 PIPELINE_ROOT = Path(__file__).resolve().parents[2]
-os.environ.setdefault("HF_HOME", str(PIPELINE_ROOT.parent / "hf-cache"))
+os.environ.setdefault("HF_HOME", "/Volumes/SSD/hf-cache")
 
 BF16_TYPES = {"gemma4", "gemma4_assistant", "diffusion_gemma", "qwen3_5", "qwen3_5_moe", "glm4"}
 STATIC_SUPPORTED_TYPES = [
@@ -57,18 +57,11 @@ def emit(d: dict) -> int:
     return 0
 
 
-def _hf_token() -> str | None:
-    return os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
-
-
 def _download_config_stdlib(hf_id: str) -> dict:
     endpoint = os.environ.get("HF_ENDPOINT", "https://huggingface.co").rstrip("/")
     encoded = quote(hf_id.strip("/"), safe="/")
     url = f"{endpoint}/{encoded}/resolve/main/config.json"
     headers = {"user-agent": "caix-support-check"}
-    token = _hf_token()
-    if token:
-        headers["authorization"] = f"Bearer {token}"
     with urlopen(Request(url, headers=headers), timeout=20) as response:
         return json.loads(response.read().decode("utf-8"))
 
@@ -79,7 +72,7 @@ def _load_config(hf_id: str) -> tuple[dict | None, str | None]:
             return json.load(f), None
     try:
         from huggingface_hub import hf_hub_download
-        cfg_path = hf_hub_download(hf_id, "config.json", token=_hf_token())
+        cfg_path = hf_hub_download(hf_id, "config.json")
         with open(cfg_path) as f:
             return json.load(f), None
     except Exception as hub_error:
@@ -89,7 +82,7 @@ def _load_config(hf_id: str) -> tuple[dict | None, str | None]:
             return None, (
                 f"could not fetch config.json ({type(hub_error).__name__}: {hub_error}; "
                 f"stdlib fallback {type(std_error).__name__}: {std_error}). "
-                "Check the repo id and access (gated repos need HF_TOKEN)."
+                "Check the repo id and local Hugging Face auth."
             )
 
 

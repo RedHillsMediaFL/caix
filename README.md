@@ -382,7 +382,7 @@ confirms the architecture after dequant.
 |---|---|
 | Models | `models/exports/<name>/` (override with `CAIX_EXPORTS` or `--exports`) |
 | HF cache | `$HF_HOME`; caix defaults it to `/Volumes/SSD/hf-cache` when unset |
-| Converter tmp | `$CAIX_TMPDIR`; converter default is `<checkout-parent>/coreai-tmp` |
+| Converter tmp | `$CAIX_TMPDIR`; converter default is `/Volumes/SSD/coreai-tmp` |
 | Export index | optional JSON from `scripts/refresh-export-index.sh` (set `CAIX_EXPORT_INDEX`) |
 | Web UI | `web/` (served at `/` and `/chat`) |
 | Usage stats | `~/.caix/usage.json` (override with `--stats-file`) — survives restarts |
