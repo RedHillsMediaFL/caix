@@ -120,8 +120,8 @@ def redact(command):
             flags=re.IGNORECASE,
         )
     command = re.sub(
-        r"(\b[A-Za-z_][A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY|PRIVATE_KEY)\s*=\s*)(\S+)",
-        r"\1[redacted]",
+        r"(^|[ \t])([A-Za-z_][A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY|PRIVATE_KEY)\s*=\s*)(\S+)",
+        r"\1\2[redacted]",
         command,
         flags=re.IGNORECASE,
     )
@@ -133,6 +133,11 @@ def redact(command):
     command = re.sub(
         r"(?i)\b([a-z][a-z0-9+.-]*://)([^/\s:@]+):([^/\s@]+)@",
         r"\1[redacted]@",
+        command,
+    )
+    command = re.sub(
+        r"(?i)([?&][^=\s&]*(?:token|secret|password|api[_-]?key|access[_-]?key|signature)[^=\s&]*=)([^&\s]+)",
+        r"\1[redacted]",
         command,
     )
     return command

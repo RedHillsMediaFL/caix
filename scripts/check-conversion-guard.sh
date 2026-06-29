@@ -104,17 +104,17 @@ for expected in "/usr/bin/curl" "/usr/bin/rsync" "/usr/bin/tar" "/usr/bin/zip"; 
   fi
 done
 
-fake_jobs=$'123 1 00:01 0.0 0.1 hf download repo --api-key exposed-key CAIX_SECRET=exposed-secret Bearer exposed-bearer https://user:exposed-url@example.test/repo'
+fake_jobs=$'123 1 00:01 0.0 0.1 hf download repo --api-key exposed-key CAIX_SECRET=exposed-secret Bearer exposed-bearer https://user:exposed-url@example.test/repo?access_token=exposed-query&X-Amz-Signature=exposed-sig'
 if env caix_heavy_task_lock="$tmpdir/no-lock" caix_test_active_jobs="$fake_jobs" \
     "$SCRIPT_DIR/conversion-guard.sh" >"$tmpdir/redacted.txt" 2>&1; then
   echo "error: conversion-guard ignored injected active job" >&2
   exit 1
 fi
-if rg -q 'exposed-(key|secret|bearer|url)' "$tmpdir/redacted.txt"; then
+if rg -q 'exposed-(key|secret|bearer|url|query|sig)' "$tmpdir/redacted.txt"; then
   echo "error: conversion-guard leaked sensitive command text" >&2
   exit 1
 fi
-for expected in "--api-key [redacted]" "CAIX_SECRET=[redacted]" "Bearer [redacted]" "https://[redacted]@example.test/repo"; do
+for expected in "--api-key [redacted]" "CAIX_SECRET=[redacted]" "Bearer [redacted]" "https://[redacted]@example.test/repo?access_token=[redacted]&X-Amz-Signature=[redacted]"; do
   if ! grep -F -- "$expected" "$tmpdir/redacted.txt" >/dev/null; then
     echo "error: conversion-guard missing redaction marker: $expected" >&2
     exit 1
@@ -139,7 +139,7 @@ for expected in [
     "--api-key [redacted]",
     "CAIX_SECRET=[redacted]",
     "Bearer [redacted]",
-    "https://[redacted]@example.test/repo",
+    "https://[redacted]@example.test/repo?access_token=[redacted]&X-Amz-Signature=[redacted]",
 ]:
     if expected not in commands:
         sys.exit(f"missing redaction marker in JSON: {expected}")

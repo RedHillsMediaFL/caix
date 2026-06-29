@@ -62,6 +62,7 @@
   shared heavy-job guard.
 - Rejected zero or malformed `scripts/conversion-guard.sh --wait --interval` values.
 - Redacted URL-embedded credentials from `scripts/conversion-guard.sh` process reports.
+- Redacted sensitive URL query parameters from `scripts/conversion-guard.sh` process reports.
 - Treated direct `curl`, `rsync`, `tar`, and `zip` processes as heavy activity in the shared guard.
 - Added same-machine pipeline guards for invalid position ranges and reset request IDs.
 - Added the cluster-plan contract check to publication gates.
