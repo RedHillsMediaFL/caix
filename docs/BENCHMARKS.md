@@ -130,8 +130,8 @@ includes `benchmark_mode` and refuses suite/model setting drift; do not compare 
 and prompt settings match.
 
 Run `scripts/check-benchmark-raw.sh` before committing raw benchmark logs. It checks clean run-start
-git status for new or changed raw dirs, pinned model repo revisions, suite/model metadata consistency,
-measured row counts, failed rows, and deterministic measured stdout.
+git status for new or changed raw dirs, pinned model repo revisions, recorded caix commits,
+suite/model metadata consistency, measured row counts, failed rows, and deterministic measured stdout.
 Publication gates run it with `--require-tracked` so public checks cannot pass from local probe logs
 that were not committed.
 

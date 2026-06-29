@@ -66,6 +66,7 @@
 - Treated direct `curl`, `rsync`, `tar`, and `zip` processes as heavy activity in the shared guard.
 - Emitted disk-pressure JSON through a real encoder so paths with quotes remain valid JSON.
 - Rejected malformed non-numeric filesystem free-space readings in the disk-pressure guard.
+- Added raw benchmark evidence checks for recorded caix commits and suite/model commit drift.
 - Added same-machine pipeline guards for invalid position ranges and reset request IDs.
 - Added the cluster-plan contract check to publication gates.
 - Added fail-closed `caix cluster join` and `caix serve --cluster` CLI stubs for Brew surface tests.

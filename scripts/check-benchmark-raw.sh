@@ -12,8 +12,8 @@ Options:
 
 Does not run models, download payloads, or contact Hugging Face.
 Fails when committed suite/model raw logs are missing metadata, new or changed raw dirs have dirty
-run-start git status, measured rows fail, pinned model repo revisions are missing, suite/model
-settings drift, or deterministic measured stdout differs.
+run-start git status, measured rows fail, pinned model repo revisions are missing, caix commits are
+not present in the repository, suite/model settings drift, or deterministic measured stdout differs.
 USAGE
 }
 
@@ -106,6 +106,20 @@ require_tracked_file() {
   fi
 }
 
+require_repo_commit() {
+  local label="$1"
+  local commit="$2"
+
+  if [[ ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "error: invalid caix commit for $label: $commit" >&2
+    return 1
+  fi
+  if ! git -C "$REPO_DIR" cat-file -e "$commit^{commit}" 2>/dev/null; then
+    echo "error: caix commit for $label is not present in this repository: $commit" >&2
+    return 1
+  fi
+}
+
 raw_dir_has_git_changes() {
   local raw_dir="$1"
   local rel
@@ -147,6 +161,16 @@ check_model_dir() {
   repo_revision="$(metadata_value repo_revision "$output/metadata.txt")"
   if [[ ! "$repo_revision" =~ ^[0-9a-f]{40}$ ]]; then
     echo "error: missing pinned repo revision for $repo: $repo_revision" >&2
+    return 1
+  fi
+
+  local suite_caix_commit model_caix_commit
+  suite_caix_commit="$(metadata_value caix_commit "$suite/metadata.txt")"
+  model_caix_commit="$(metadata_value caix_commit "$output/metadata.txt")"
+  require_repo_commit "$repo suite metadata" "$suite_caix_commit" || return 1
+  require_repo_commit "$repo model metadata" "$model_caix_commit" || return 1
+  if [[ "$model_caix_commit" != "$suite_caix_commit" ]]; then
+    echo "error: suite/model caix commit drift for $repo: suite=$suite_caix_commit model=$model_caix_commit" >&2
     return 1
   fi
 
@@ -256,6 +280,9 @@ while IFS= read -r suite; do
       exit 1
     fi
   fi
+
+  suite_caix_commit="$(metadata_value caix_commit "$suite/metadata.txt")"
+  require_repo_commit "$suite suite metadata" "$suite_caix_commit" || exit 1
 
   read -r rows measured_rows skipped_rows failed_rows < <(
     awk -F '\t' '
