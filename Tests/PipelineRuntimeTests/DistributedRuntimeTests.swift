@@ -51,6 +51,19 @@ final class DistributedRuntimeTests: XCTestCase {
         }
     }
 
+    func testStagePlanRejectsInvalidBoundaryTensor() {
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, 0, 4096], scalarType: .float16))
+
+        XCTAssertThrowsError(try plan.validate()) { error in
+            XCTAssertEqual(
+                error as? DistributedRuntimeValidationError,
+                .invalidBoundaryTensor(
+                    "boundary hidden_state sequence dimension must be positive or -1"))
+        }
+    }
+
     func testWorkerEndpointRejectsInvalidPort() {
         let endpoint = DistributedWorkerEndpoint(id: "worker-a", host: "127.0.0.1", port: 0)
 
@@ -110,6 +123,28 @@ final class DistributedRuntimeTests: XCTestCase {
             XCTAssertEqual(
                 error as? DistributedRuntimeValidationError,
                 .packetRouteMismatch(sourceStageID: "embed", destinationStageID: "layers-16-32"))
+        }
+    }
+
+    func testHiddenStatePacketRejectsBoundaryTensorScalarTypeMismatch() {
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 2], scalarType: .float16))
+        let packet = DistributedHiddenStatePacketMetadata(
+            requestID: "req-1",
+            sourceStageID: "layers-0-16",
+            destinationStageID: "layers-16-32",
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+            shape: [1, 1, 2],
+            scalarType: .float32,
+            byteCount: 8,
+            stepIndex: 0)
+
+        XCTAssertThrowsError(try plan.validate(hiddenStatePacket: packet)) { error in
+            XCTAssertEqual(
+                error as? DistributedRuntimeValidationError,
+                .invalidPacket(
+                    "hidden-state packet scalar_type float32 does not match boundary tensor float16"))
         }
     }
 
@@ -254,7 +289,9 @@ final class DistributedRuntimeTests: XCTestCase {
     }
 
     func testSameMachinePipelineForwardsThroughOrderedStageHandles() async throws {
-        let plan = makePlan()
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 2], scalarType: .float16))
         let handles = makeFakeHandles(for: plan)
         let pipeline = try DistributedSameMachinePipeline(plan: plan, stages: handles)
 
@@ -275,6 +312,48 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertEqual(handles[1].inputs.first?.hiddenState?.metadata.sourceStageID, "embed")
         XCTAssertEqual(handles[2].inputs.first?.hiddenState?.metadata.sourceStageID, "layers-0-16")
         XCTAssertEqual(handles[3].inputs.first?.hiddenState?.metadata.sourceStageID, "layers-16-32")
+    }
+
+    func testSameMachinePipelineBuildsFromManifestHandleMap() async throws {
+        let manifest = try DistributedStageManifest.decode(
+            from: Data(stageManifestJSON(modelKey: "model", includeTotalLayerCount: true).utf8),
+            baseURL: URL(fileURLWithPath: "/tmp/caix-manifest", isDirectory: true))
+        let handles = makeFakeHandles(for: manifest.runtimePlan)
+        let handlesByStageID = Dictionary(uniqueKeysWithValues: handles.reversed().map {
+            ($0.descriptor.id, $0)
+        })
+
+        let pipeline = try DistributedSameMachinePipeline(
+            manifest: manifest, handlesByStageID: handlesByStageID)
+        try await pipeline.allocate(requestID: "req-manifest", kvCapacity: 8)
+        let output = try await pipeline.forward(
+            requestID: "req-manifest",
+            stepIndex: 0,
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 2),
+            tokenIDs: [11, 12])
+
+        XCTAssertEqual(output.stageID, "head")
+        XCTAssertEqual(output.tokenID, 42)
+        XCTAssertEqual(handles[1].inputs.first?.hiddenState?.metadata.shape, [1, 2, 1024])
+    }
+
+    func testSameMachinePipelineRejectsMissingManifestHandle() throws {
+        let manifest = try DistributedStageManifest.decode(
+            from: Data(stageManifestJSON(modelKey: "model", includeTotalLayerCount: true).utf8),
+            baseURL: URL(fileURLWithPath: "/tmp/caix-manifest", isDirectory: true))
+        var handlesByStageID = Dictionary(uniqueKeysWithValues: makeFakeHandles(for: manifest.runtimePlan).map {
+            ($0.descriptor.id, $0)
+        })
+        handlesByStageID.removeValue(forKey: "layers-14-28")
+
+        XCTAssertThrowsError(
+            try DistributedSameMachinePipeline(
+                manifest: manifest, handlesByStageID: handlesByStageID)
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .missingStageHandle("layers-14-28"))
+        }
     }
 
     func testSameMachinePipelineRejectsOutOfOrderHandles() throws {
@@ -419,7 +498,8 @@ final class DistributedRuntimeTests: XCTestCase {
         for plan: DistributedStagePlan,
         badFirstRoute: Bool = false
     ) -> [FakeDistributedStageHandle] {
-        plan.stages.enumerated().map { index, descriptor in
+        let hiddenWidth = plan.boundaryTensor?.shape[2] ?? 2
+        return plan.stages.enumerated().map { index, descriptor in
             let nextID = plan.stages.indices.contains(index + 1) ? plan.stages[index + 1].id : nil
             let output: (DistributedStageForwardInput) throws -> DistributedStageForwardOutput = { input in
                 if descriptor.role == .finalNormHead {
@@ -433,6 +513,7 @@ final class DistributedRuntimeTests: XCTestCase {
                     destination: destination,
                     positionRange: input.positionRange,
                     stepIndex: input.stepIndex,
+                    hiddenWidth: hiddenWidth,
                     fill: UInt8(index + 1))
                 return DistributedStageForwardOutput(
                     stageID: descriptor.id, stepIndex: input.stepIndex, hiddenState: packet)
@@ -447,9 +528,10 @@ final class DistributedRuntimeTests: XCTestCase {
         destination: String,
         positionRange: DistributedSequenceRange,
         stepIndex: Int,
+        hiddenWidth: Int = 2,
         fill: UInt8
     ) throws -> DistributedHiddenStatePacket {
-        let shape = [1, positionRange.count, 2]
+        let shape = [1, positionRange.count, hiddenWidth]
         let byteCount = shape.reduce(DistributedTensorScalarType.float16.byteWidth, *)
         return try DistributedHiddenStatePacket(
             metadata: DistributedHiddenStatePacketMetadata(

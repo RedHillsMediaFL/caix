@@ -1028,6 +1028,7 @@ public enum DistributedStageExecutionError: Error, Equatable, Sendable, CustomSt
     case stageCountMismatch(expected: Int, actual: Int)
     case stageDescriptorMismatch(expected: String, actual: String)
     case duplicateStageHandle(String)
+    case missingStageHandle(String)
     case invalidForwardInput(String)
     case invalidStageOutput(String)
 
@@ -1039,6 +1040,8 @@ public enum DistributedStageExecutionError: Error, Equatable, Sendable, CustomSt
             return "Stage handle descriptor mismatch: expected \(expected), got \(actual)"
         case .duplicateStageHandle(let id):
             return "Duplicate stage handle: \(id)"
+        case .missingStageHandle(let id):
+            return "Missing stage handle: \(id)"
         case .invalidForwardInput(let message):
             return "Invalid distributed forward input: \(message)"
         case .invalidStageOutput(let message):
@@ -1073,6 +1076,19 @@ public final class DistributedSameMachinePipeline {
 
         self.plan = plan
         self.stages = stages
+    }
+
+    public convenience init(
+        manifest: DistributedStageManifest,
+        handlesByStageID: [String: DistributedStageHandle]
+    ) throws {
+        let orderedHandles = try manifest.runtimePlan.stages.map { descriptor in
+            guard let handle = handlesByStageID[descriptor.id] else {
+                throw DistributedStageExecutionError.missingStageHandle(descriptor.id)
+            }
+            return handle
+        }
+        try self.init(plan: manifest.runtimePlan, stages: orderedHandles)
     }
 
     public func allocate(requestID: String, kvCapacity: Int) async throws {
