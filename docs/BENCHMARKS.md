@@ -79,6 +79,7 @@ published, component-only, or blocked with a next step.
 
 Run `scripts/audit-conversion-gaps.sh --out docs/CONVERSION_GAP_AUDIT.tsv` to refresh source
 metadata for active conversion lanes. It reads Hub metadata only.
+Run `scripts/check-conversion-gap-audit.sh` before committing the refreshed TSV.
 
 Create `benchmarks/revisions.tsv` before a publishable run:
 
