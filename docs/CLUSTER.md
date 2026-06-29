@@ -4,6 +4,8 @@ Planned feature. This page documents the first user-visible dry-run surface only
 
 `caix cluster plan` reads local staged-bundle metadata and prints a placement plan. It does not
 load Core AI models, start workers, transfer tensors, benchmark, download, or upload anything.
+JSON output includes a `runtime_plan` object using the same `DistributedStagePlan` contract that
+the runtime validates.
 
 ## Commands
 
@@ -39,26 +41,34 @@ Use top-level `stages` in a standalone manifest. A copyable example lives at
 {
   "schema": "caix.cluster.stage_manifest.v0",
   "model": "qwen3-0.6b-coreai",
+  "total_layer_count": 28,
   "stages": [
     {
       "id": "embed",
       "role": "embeddings",
       "layers": "embeddings",
       "bundle": "stages/00-embed.aimodel",
-      "memory_gb": 1.5
+      "memory_gb": 1.0
     },
     {
-      "id": "layers-00-13",
+      "id": "layers-00-14",
       "role": "transformer_layers",
-      "layers": [0, 13],
-      "bundle": "stages/01-layers-00-13.aimodel",
-      "memory_gb": 5.0
+      "layers": [0, 14],
+      "bundle": "stages/01-layers-00-14.aimodel",
+      "memory_gb": 2.0
+    },
+    {
+      "id": "layers-14-28",
+      "role": "transformer_layers",
+      "layers": [14, 28],
+      "bundle": "stages/02-layers-14-28.aimodel",
+      "memory_gb": 2.0
     },
     {
       "id": "head",
       "role": "final_norm_head",
       "layers": "norm+lm_head",
-      "bundle": "stages/02-head.aimodel",
+      "bundle": "stages/03-head.aimodel",
       "memory_gb": 1.0
     }
   ]
@@ -75,15 +85,18 @@ Or put the same `stages` array under `cluster` in a bundle `metadata.json`:
   "assets": {"main": "model.aimodel"},
   "cluster": {
     "schema": "caix.cluster.stage_manifest.v0",
+    "total_layer_count": 28,
     "stages": []
   }
 }
 ```
 
-Each stage currently needs `id`, `role`, `layers`, `bundle`, and `memory_gb`. Use the runtime role
-names `embeddings`, `transformer_layers`, and `final_norm_head`. For `transformer_layers`,
-`layers` is a half-open `[lower, upper]` range. Bundle paths are resolved relative to the manifest
-file, or relative to the model bundle when using `--model`.
+Each manifest needs `model` and stage rows with `id`, `role`, `layers`, `bundle`, and `memory_gb`.
+Set `total_layer_count` explicitly for runtime handoff. The dry-run planner can derive it from the
+last transformer layer range and will warn when it does. Use the runtime role names `embeddings`,
+`transformer_layers`, and `final_norm_head`. For `transformer_layers`, `layers` is a half-open
+`[lower, upper]` range. Bundle paths are resolved relative to the manifest file, or relative to the
+model bundle when using `--model`.
 
 ## Current TODOs
 

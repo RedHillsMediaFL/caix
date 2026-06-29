@@ -36,15 +36,13 @@ This is blunt on purpose. Where the current code cannot do something, it says so
     adjacency-only packet routing (`destination == source + 1`).
 - A dry-run planner CLI (`Sources/PipelineCLI/Cluster.swift`, wired in `main.swift`):
   `caix cluster plan --manifest … | --model …` with greedy worker assignment. Manifest schema
-  `caix.cluster.stage_manifest.v0` documented in `docs/CLUSTER.md`. It does not load Core AI
-  models, start workers, or move tensors.
+  `caix.cluster.stage_manifest.v0` documented in `docs/CLUSTER.md`. JSON output includes a
+  `runtime_plan` validated with `DistributedStagePlan`. It does not load Core AI models, start
+  workers, or move tensors.
 
 **Gap:** there is no execution path. Nothing produces a per-stage `.aimodel`, nothing emits an
 intermediate hidden state from a graph or feeds one back in, and there is no cross-process
-forward. The planner validates the canonical role names and half-open layer ranges, but it still
-uses its own lightweight manifest structs until staged exports include enough metadata to decode
-straight into `DistributedStagePlan`. v0 is mostly net-new runtime; the monolithic path stays as
-the oracle.
+forward. v0 is mostly net-new runtime; the monolithic path stays as the oracle.
 
 ---
 
@@ -368,10 +366,10 @@ add transport, per §4/§5/§7.
 - **Boundary dtype export policy (§4).** `DistributedTensorScalarType` is float16/float32 only.
   The exporter still needs to record the actual boundary dtype in staged metadata and, for
   internally bfloat16 graphs, materialize a host-readable boundary.
-- **Planner/runtime manifest split.** `caix cluster plan` now validates canonical roles and
-  contiguous half-open layer ranges, but it still uses lightweight CLI structs. Unify the planner
-  onto `DistributedStagePlan` once staged exports record `total_layer_count`, `asset_name`, and
-  optional `worker_id`.
+- **Staged exporter handoff.** `caix cluster plan` emits a validated `DistributedStagePlan`, but
+  current exports still do not record staged metadata. The exporter must write `cluster.stages`,
+  `total_layer_count`, stage asset names, and boundary tensor metadata before same-machine staged
+  equivalence can run.
 - **`AIModel.specialize` cache keying.** Does the `.default` compile cache key cleanly per
   stage graph, or do same-named functions (`main`/`decode`) across stage bundles collide?
   Settle during 9.2.

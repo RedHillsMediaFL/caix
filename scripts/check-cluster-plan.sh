@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+CAIX_BIN="${CAIX_BIN:-$REPO_DIR/.build/debug/caix}"
+MANIFEST="${1:-$REPO_DIR/docs/examples/cluster-stage-manifest.json}"
+
+if [[ ! -x "$CAIX_BIN" ]]; then
+  swift build --product caix >/dev/null
+fi
+
+json="$("$CAIX_BIN" cluster plan \
+  --manifest "$MANIFEST" \
+  --workers main=4,mini=2 \
+  --json)"
+
+CLUSTER_PLAN_JSON="$json" python3 - <<'PY'
+import json
+import os
+import sys
+
+doc = json.loads(os.environ["CLUSTER_PLAN_JSON"])
+
+def fail(message: str) -> None:
+    print(f"error: {message}", file=sys.stderr)
+    sys.exit(1)
+
+if doc.get("dry_run") is not True:
+    fail("cluster plan must be dry_run")
+if doc.get("model_name") != "qwen3-0.6b-coreai":
+    fail("unexpected model_name")
+if doc.get("total_layer_count") != 28:
+    fail("unexpected total_layer_count")
+
+runtime = doc.get("runtime_plan")
+if not isinstance(runtime, dict):
+    fail("missing runtime_plan")
+if runtime.get("model_name") != doc["model_name"]:
+    fail("runtime_plan model_name drift")
+if runtime.get("total_layer_count") != doc["total_layer_count"]:
+    fail("runtime_plan total_layer_count drift")
+
+stages = runtime.get("stages")
+if not isinstance(stages, list) or len(stages) != 4:
+    fail("runtime_plan stages must contain four rows")
+roles = [stage.get("role") for stage in stages]
+if roles != ["embeddings", "transformer_layers", "transformer_layers", "final_norm_head"]:
+    fail(f"unexpected stage roles: {roles}")
+if stages[1].get("layer_range") != {"lower_bound": 0, "upper_bound": 14}:
+    fail("first layer range mismatch")
+if stages[2].get("layer_range") != {"lower_bound": 14, "upper_bound": 28}:
+    fail("second layer range mismatch")
+if any("Derived" in warning for warning in doc.get("warnings", [])):
+    fail("example manifest should use explicit total_layer_count")
+
+print("cluster plan ok")
+PY

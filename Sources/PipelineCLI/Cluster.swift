@@ -31,6 +31,13 @@ struct ClusterWorkerBudget: Codable {
     }
 }
 
+private struct ClusterPlanSource {
+    var modelName: String
+    var totalLayerCount: Int
+    var totalLayerCountDerived: Bool
+    var stages: [ClusterPlanStage]
+}
+
 struct ClusterAssignment: Codable {
     var stage: String
     var worker: String?
@@ -40,18 +47,24 @@ struct ClusterAssignment: Codable {
 struct ClusterPlanOutput: Codable {
     var dryRun: Bool
     var source: String
+    var modelName: String
+    var totalLayerCount: Int
     var stages: [ClusterPlanStage]
     var workers: [ClusterWorkerBudget]
     var assignments: [ClusterAssignment]
+    var runtimePlan: DistributedStagePlan
     var warnings: [String]
     var notes: [String]
 
     enum CodingKeys: String, CodingKey {
         case dryRun = "dry_run"
         case source
+        case modelName = "model_name"
+        case totalLayerCount = "total_layer_count"
         case stages
         case workers
         case assignments
+        case runtimePlan = "runtime_plan"
         case warnings
         case notes
     }
@@ -141,31 +154,45 @@ private func clusterPlanCommand(_ argv: [String]) {
     do {
         let source: String
         let baseURL: URL
-        let stages: [ClusterPlanStage]
+        let planSource: ClusterPlanSource
         if let manifestPath {
             let manifestURL = URL(fileURLWithPath: expandPath(manifestPath)).standardizedFileURL
             source = manifestURL.path
             baseURL = manifestURL.deletingLastPathComponent()
-            stages = try loadClusterStages(from: manifestURL, baseURL: baseURL, metadataMode: false)
+            planSource = try loadClusterPlanSource(
+                from: manifestURL, baseURL: baseURL, metadataMode: false)
         } else {
             let root = URL(fileURLWithPath: expandPath(modelPath!), isDirectory: true)
                 .standardizedFileURL
             source = root.appendingPathComponent("metadata.json").path
             baseURL = root
-            stages = try loadClusterStages(
+            planSource = try loadClusterPlanSource(
                 from: root.appendingPathComponent("metadata.json"), baseURL: baseURL,
                 metadataMode: true)
         }
 
         let workers = try workerSpecs.map(parseWorkerBudget)
+        let stages = planSource.stages
         let assignments = assignClusterStages(stages, workers: workers)
+        let runtimePlan = try makeDistributedStagePlan(
+            modelName: planSource.modelName,
+            totalLayerCount: planSource.totalLayerCount,
+            stages: stages)
+        var warnings = clusterWarnings(stages: stages, workers: workers, assignments: assignments)
+        if planSource.totalLayerCountDerived {
+            warnings.append(
+                "Manifest has no total_layer_count. Derived \(planSource.totalLayerCount) from layer ranges.")
+        }
         let output = ClusterPlanOutput(
             dryRun: true,
             source: source,
+            modelName: planSource.modelName,
+            totalLayerCount: planSource.totalLayerCount,
             stages: stages,
             workers: workers,
             assignments: assignments,
-            warnings: clusterWarnings(stages: stages, workers: workers, assignments: assignments),
+            runtimePlan: runtimePlan,
+            warnings: warnings,
             notes: clusterNotes())
 
         if emitJSON {
@@ -185,11 +212,11 @@ private func clusterPlanCommand(_ argv: [String]) {
     }
 }
 
-private func loadClusterStages(
+private func loadClusterPlanSource(
     from url: URL,
     baseURL: URL,
     metadataMode: Bool
-) throws -> [ClusterPlanStage] {
+) throws -> ClusterPlanSource {
     guard FileManager.default.fileExists(atPath: url.path) else {
         if metadataMode {
             throw ClusterPlanError("missing metadata.json in \(baseURL.path)")
@@ -211,6 +238,10 @@ private func loadClusterStages(
     } else {
         container = root
     }
+    let modelName =
+        stringValue(container, keys: ["model_name", "model"])
+        ?? stringValue(root, keys: ["name", "model_name", "model"])
+        ?? baseURL.lastPathComponent
     guard let rows = container["stages"] as? [[String: Any]], !rows.isEmpty else {
         throw ClusterPlanTodo(
             "\(url.path) has no stage metadata; expected a non-empty stages array with id, "
@@ -249,8 +280,24 @@ private func loadClusterStages(
             layers: layers,
             memoryGB: memoryGB)
     }
-    try validateClusterStageOrder(stages)
-    return stages
+    let explicitTotalLayerCount =
+        intValue(container, keys: ["total_layer_count", "total_layers"])
+        ?? intValue(root, keys: ["total_layer_count", "total_layers"])
+    if let explicitTotalLayerCount, explicitTotalLayerCount <= 0 {
+        throw ClusterPlanError("total_layer_count must be positive")
+    }
+    let totalLayerCount: Int
+    if let explicitTotalLayerCount {
+        totalLayerCount = explicitTotalLayerCount
+    } else {
+        totalLayerCount = try deriveTotalLayerCount(from: stages)
+    }
+    try validateClusterStageOrder(stages, totalLayerCount: totalLayerCount)
+    return ClusterPlanSource(
+        modelName: modelName,
+        totalLayerCount: totalLayerCount,
+        totalLayerCountDerived: explicitTotalLayerCount == nil,
+        stages: stages)
 }
 
 private func parseWorkerBudget(_ spec: String) throws -> ClusterWorkerBudget {
@@ -306,7 +353,7 @@ private func clusterWarnings(
     if !missing.isEmpty {
         warnings.append("Missing local stage bundle paths: \(missing.joined(separator: ", ")).")
     }
-    if assignments.contains(where: { $0.worker == nil }) {
+    if !workers.isEmpty && assignments.contains(where: { $0.worker == nil }) {
         warnings.append("One or more stages could not be placed with the supplied worker budgets.")
     }
     return warnings
@@ -315,13 +362,19 @@ private func clusterWarnings(
 private func clusterNotes() -> [String] {
     [
         "dry-run only; caix cluster join and caix serve --cluster are not implemented yet",
+        "runtime_plan is validated with the same DistributedStagePlan contract used by PipelineRuntime",
         "KV cache ownership stays with the worker assigned to each stage",
         "hidden-state activations flow between adjacent stages in manifest order",
     ]
 }
 
 private func renderClusterPlan(_ output: ClusterPlanOutput) -> String {
-    var lines = ["cluster plan (dry-run): \(output.source)", "stages: \(output.stages.count)"]
+    var lines = [
+        "cluster plan (dry-run): \(output.source)",
+        "model: \(output.modelName)",
+        "total layers: \(output.totalLayerCount)",
+        "stages: \(output.stages.count)",
+    ]
     if output.workers.isEmpty {
         lines.append("workers: none")
     } else {
@@ -357,6 +410,33 @@ private func renderClusterPlan(_ output: ClusterPlanOutput) -> String {
         lines += output.notes.map { "note: \($0)" }
     }
     return lines.joined(separator: "\n")
+}
+
+private func makeDistributedStagePlan(
+    modelName: String,
+    totalLayerCount: Int,
+    stages: [ClusterPlanStage]
+) throws -> DistributedStagePlan {
+    let descriptors = try stages.map { stage in
+        guard let rawRole = stage.role, let role = DistributedStageRole(rawValue: rawRole) else {
+            throw ClusterPlanError("stage \(stage.name) role is missing or invalid")
+        }
+        let layerRange = try distributedLayerRange(
+            stage.layers, role: role, stageName: stage.name)
+        return DistributedStageDescriptor(
+            id: stage.name,
+            role: role,
+            layerRange: layerRange,
+            assetName: stage.path ?? stage.name,
+            workerID: nil)
+    }
+    let plan = DistributedStagePlan(
+        modelName: modelName,
+        totalLayerCount: totalLayerCount,
+        stages: descriptors,
+        workers: [])
+    try plan.validate()
+    return plan
 }
 
 private func stringValue(_ dict: [String: Any], keys: [String]) -> String? {
@@ -478,7 +558,33 @@ private func validateLayerRange(_ values: [Int], stageName: String) throws -> (l
     return (lower, upper)
 }
 
-private func validateClusterStageOrder(_ stages: [ClusterPlanStage]) throws {
+private func deriveTotalLayerCount(from stages: [ClusterPlanStage]) throws -> Int {
+    let ranges = try stages.compactMap { stage -> (lower: Int, upper: Int)? in
+        guard stage.role == DistributedStageRole.transformerLayers.rawValue else { return nil }
+        guard let range = parseNormalizedLayerRange(stage.layers) else {
+            throw ClusterPlanError("stage \(stage.name) transformer_layers needs layers [lower, upper]")
+        }
+        return range
+    }
+    guard let last = ranges.last else {
+        throw ClusterPlanError("cluster plan needs at least one transformer_layers stage")
+    }
+    return last.upper
+}
+
+private func distributedLayerRange(
+    _ value: String?,
+    role: DistributedStageRole,
+    stageName: String
+) throws -> DistributedLayerRange? {
+    guard role == .transformerLayers else { return nil }
+    guard let range = parseNormalizedLayerRange(value) else {
+        throw ClusterPlanError("stage \(stageName) transformer_layers needs layers [lower, upper]")
+    }
+    return DistributedLayerRange(lowerBound: range.lower, upperBound: range.upper)
+}
+
+private func validateClusterStageOrder(_ stages: [ClusterPlanStage], totalLayerCount: Int) throws {
     guard stages.first?.role == DistributedStageRole.embeddings.rawValue else {
         throw ClusterPlanError("first stage role must be embeddings")
     }
@@ -503,6 +609,9 @@ private func validateClusterStageOrder(_ stages: [ClusterPlanStage]) throws {
                 "stage \(stage.name) layer range starts at \(range.lower); expected \(expectedStart)")
         }
         expectedStart = range.upper
+    }
+    guard expectedStart == totalLayerCount else {
+        throw ClusterPlanError("layer coverage ends at \(expectedStart); expected \(totalLayerCount)")
     }
 }
 
