@@ -61,7 +61,7 @@ scan "benchmark placeholder or unsupported public speed claim" \
 scan "raw benchmark speed number in public copy" \
   '[0-9]+([.][0-9]+)?[[:space:]]*tok/s'
 scan "marketing/hype wording" \
-  'revolutionary|game[- ]changer|world[- ]class|best[- ]in[- ]class|magic|gimmick'
+  'revolutionary|game[- ]chang(er|ing)|world[- ]class|best[- ]in[- ]class|cutting[- ]edge|state[- ]of[- ]the[- ]art|next[- ]gen|breakthrough|magic|seamless|effortless|supercharge|turbocharge|unleash|gimmick'
 scan "support gimmick wording" \
   'donat(e|ion)?|sticker'
 scan_exact "uppercase caix brand wording" \

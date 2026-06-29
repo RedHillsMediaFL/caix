@@ -181,6 +181,7 @@
 
 ### Changed
 
+- Tightened the public-copy guard to reject more promotional wording before README/card publication.
 - Tightened sampler hot paths by scanning logits and candidate buffers without enumerator overhead.
 
 ### Fixed
