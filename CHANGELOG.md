@@ -27,6 +27,7 @@
 - Added a benchmark-suite guard that refuses measured rows without an exact model repo revision.
 - Added a benchmark report gate that refuses missing raw logs and marks rows without model revisions
   as non-publishable.
+- Added a single publication-gates script for local and Hub metadata/card checks.
 - Added external tester instructions for verified load/generation reports and raw benchmark
   submissions.
 - Added a public-copy guard script for benchmark placeholders, hype, unsupported support-product

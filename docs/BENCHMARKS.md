@@ -127,6 +127,12 @@ Run `scripts/check-benchmark-raw.sh` before committing raw benchmark logs. It ch
 git status for new or changed raw dirs, pinned model repo revisions, suite/model metadata consistency,
 measured row counts, failed rows, and deterministic measured stdout.
 
+Before publishing docs, model cards, or benchmark reports, run:
+
+```bash
+scripts/check-publication-gates.sh --hub
+```
+
 ## Public Table Fields
 
 Use these fields for any published benchmark table:

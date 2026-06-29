@@ -34,6 +34,7 @@ done
 command -v hf >/dev/null 2>&1 || { echo "error: hf CLI is required" >&2; exit 2; }
 
 export HF_HOME="${HF_HOME:-/Volumes/SSD/hf-cache}"
+export PYTHONWARNINGS="${PYTHONWARNINGS:-ignore:Cannot enable progress bars}"
 
 tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/caix-hf-model-cards.XXXXXX")"
 trap 'rm -rf "$tmpdir"' EXIT

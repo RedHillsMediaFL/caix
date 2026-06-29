@@ -13,9 +13,7 @@ benchmark logs. Check the model card and `benchmarks/MANIFEST.tsv` first.
 Generate a current request sheet when assigning external tests:
 
 ```bash
-scripts/check-benchmark-coverage.sh
-scripts/check-hf-collections.sh
-scripts/check-conversion-ledger.sh
+scripts/check-publication-gates.sh --hub
 scripts/check-token-handling.sh
 scripts/generate-tester-requests.sh \
   --revisions benchmarks/revisions.tsv \
