@@ -56,6 +56,8 @@
   instead of generic worker errors.
 - Routed benchmark heavy-job preflights through `scripts/conversion-guard.sh` so lock/process
   detection stays in one place.
+- Redacted sensitive-looking values from `scripts/conversion-guard.sh` process reports before text
+  or JSON output.
 - Added same-machine pipeline guards for invalid position ranges and reset request IDs.
 - Added the cluster-plan contract check to publication gates.
 - Added fail-closed `caix cluster join` and `caix serve --cluster` CLI stubs for Brew surface tests.

@@ -55,6 +55,10 @@ EOF
 done
 
 active_jobs() {
+  if [ -n "${caix_test_active_jobs-}" ]; then
+    printf '%s\n' "$caix_test_active_jobs"
+    return 0
+  fi
   ps -axo pid=,ppid=,etime=,pcpu=,pmem=,command= | awk '
     /awk / { next }
     /conversion-guard\.sh/ { next }
@@ -65,6 +69,55 @@ active_jobs() {
     /(^|\/)(caix|coreai-pipeline) (run|eagle)/ { print; next }
     /(^|\/)swift (build|test)|swift-package|swiftc|swift-frontend|xctest/ { print; next }
   '
+}
+
+redact_job_commands() {
+  python3 -c '
+import re
+import sys
+
+options = [
+    "--" + "token",
+    "--" + "auth-token",
+    "--hf-" + "token",
+    "--api-key",
+    "--access-key",
+    "--secret",
+    "--password",
+]
+
+def redact(command):
+    for option in options:
+        command = re.sub(
+            rf"({re.escape(option)}=)(\S+)",
+            r"\1[redacted]",
+            command,
+            flags=re.IGNORECASE,
+        )
+        command = re.sub(
+            rf"({re.escape(option)})([ \t]+)(\S+)",
+            r"\1\2[redacted]",
+            command,
+            flags=re.IGNORECASE,
+        )
+    command = re.sub(
+        r"(\b[A-Za-z_][A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY|PRIVATE_KEY)\s*=\s*)(\S+)",
+        r"\1[redacted]",
+        command,
+        flags=re.IGNORECASE,
+    )
+    command = re.sub(
+        r"(?i)(Bearer[ \t]+)(\S+)",
+        r"\1[redacted]",
+        command,
+    )
+    return command
+
+for line in sys.stdin:
+    parts = line.rstrip("\n").split(None, 5)
+    if len(parts) == 6:
+        print("{} {} {} {} {} {}".format(*parts[:5], redact(parts[5])))
+'
 }
 
 print_status() {
@@ -105,7 +158,7 @@ while true; do
   if [ "$ignore_lock" -eq 0 ] && [ -e "$LOCK" ]; then
     lock_busy=1
   fi
-  jobs="$(active_jobs || true)"
+  jobs="$(active_jobs | redact_job_commands || true)"
   if [ "$lock_busy" -eq 0 ] && [ -z "$jobs" ]; then
     if [ "$json" -eq 1 ]; then
       printf '{"busy":false,"jobs":[]}\n'

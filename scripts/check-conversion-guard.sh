@@ -67,4 +67,40 @@ if ! grep -F "idle" "$tmpdir/ignore-lock.txt" >/dev/null; then
   exit 1
 fi
 
+fake_jobs=$'123 1 00:01 0.0 0.1 hf download repo --api-key exposed-key CAIX_SECRET=exposed-secret Bearer exposed-bearer'
+if env caix_heavy_task_lock="$tmpdir/no-lock" caix_test_active_jobs="$fake_jobs" \
+    "$SCRIPT_DIR/conversion-guard.sh" >"$tmpdir/redacted.txt" 2>&1; then
+  echo "error: conversion-guard ignored injected active job" >&2
+  exit 1
+fi
+if rg -q 'exposed-(key|secret|bearer)' "$tmpdir/redacted.txt"; then
+  echo "error: conversion-guard leaked sensitive command text" >&2
+  exit 1
+fi
+for expected in "--api-key [redacted]" "CAIX_SECRET=[redacted]" "Bearer [redacted]"; do
+  if ! grep -F -- "$expected" "$tmpdir/redacted.txt" >/dev/null; then
+    echo "error: conversion-guard missing redaction marker: $expected" >&2
+    exit 1
+  fi
+done
+
+if env caix_heavy_task_lock="$tmpdir/no-lock" caix_test_active_jobs="$fake_jobs" \
+    "$SCRIPT_DIR/conversion-guard.sh" --json >"$tmpdir/redacted.json"; then
+  echo "error: conversion-guard JSON ignored injected active job" >&2
+  exit 1
+fi
+JSON="$(<"$tmpdir/redacted.json")" python3 - <<'PY'
+import json
+import os
+import sys
+
+doc = json.loads(os.environ["JSON"])
+commands = "\n".join(job.get("command", "") for job in doc.get("jobs", []))
+if "exposed-" in commands:
+    sys.exit("sensitive command text leaked in JSON")
+for expected in ["--api-key [redacted]", "CAIX_SECRET=[redacted]", "Bearer [redacted]"]:
+    if expected not in commands:
+        sys.exit(f"missing redaction marker in JSON: {expected}")
+PY
+
 echo "conversion guard ok"
