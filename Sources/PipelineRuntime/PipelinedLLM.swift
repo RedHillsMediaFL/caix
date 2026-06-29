@@ -82,13 +82,6 @@ enum PipelinedLLM {
                 ? .greedy
                 : SamplingConfiguration(temperature: options.temperature, topK: options.topK, topP: nil)
 
-            let generator = try await TextGeneratorBuilder()
-                .withInferenceEngine(engine)
-                .withSampling(configuration: sampling)
-                .withDecoding(type: .vanilla, parameters: DecodingParameters())
-                .withTokenizer(tokenizer)
-                .build()
-
             let input: Input
             let promptTokenCount: Int
             if options.applyChatTemplate {
@@ -110,28 +103,17 @@ enum PipelinedLLM {
             try await engine.warmup(queryLength: 0, sampling: sampling)
             requestDbg("warmup done; generating \(options.maxTokens) tokens ...")
 
-            let genStart = Date()
-            var text = try await generator.generate(input: input, maxTokens: options.maxTokens)
-            var stopReason: CoreAIPipeline.StopReason = .maxTokens
-            if let stopRange = CoreAIPipeline.firstStopRange(
-                in: text, stopSequences: options.stopSequences)
-            {
-                text = String(text[..<stopRange.lowerBound])
-                stopReason = .stopSequence
-            }
-            let decodeSeconds = Date().timeIntervalSince(genStart)
-            onToken?(text)
-            let generatedTokenCount = tokenizer.encode(text: text).count
-            requestDbg("generate done in \(String(format: "%.2f", decodeSeconds))s")
-
-            return CoreAIPipeline.Result(
-                text: text,
+            let result = try await decodeWithVanillaStrategy(
+                input: input,
+                tokenizer: tokenizer,
+                inferenceEngine: engine,
+                samplingConfiguration: sampling,
+                options: options,
                 promptTokenCount: promptTokenCount,
-                generatedTokenCount: generatedTokenCount,
-                stopReason: stopReason,
                 modelLoadSeconds: loadSeconds,
-                prefillSeconds: 0,
-                decodeSeconds: decodeSeconds)
+                onToken: onToken)
+            requestDbg("generate done in \(String(format: "%.2f", result.decodeSeconds))s")
+            return result
         }
 
         return PipelinedLanguageHandle(
@@ -159,9 +141,8 @@ enum PipelinedLLM {
     }
 
     /// One-shot fast generation for server requests. This intentionally creates a fresh Apple
-    /// pipelined engine per call; on current macOS 27 betas, reusing a kept-hot
-    /// `TextGenerator`/engine can suspend indefinitely under server workloads, while the same
-    /// one-shot path is the stable path used by the CLI.
+    /// pipelined engine per call; the `/api/load` path uses ``loadPersistent`` when callers want a
+    /// kept-hot handle.
     static func runIfLanguageMessages(
         modelPath: String,
         messages: [[String: String]],
@@ -210,12 +191,6 @@ enum PipelinedLLM {
             ? .greedy
             : SamplingConfiguration(temperature: options.temperature, topK: options.topK, topP: nil)
 
-        let generator = try await TextGeneratorBuilder()
-            .withInferenceEngine(engine)
-            .withSampling(configuration: sampling)
-            .withDecoding(type: .vanilla, parameters: DecodingParameters())
-            .withTokenizer(tokenizer)
-            .build()
         let modelLoadSeconds = Date().timeIntervalSince(loadStart)
 
         // Apply the chat template ourselves via a proper messages array and pass PRE-TOKENIZED ids
@@ -242,28 +217,92 @@ enum PipelinedLLM {
         dbg("warming up engine …")
         try await engine.warmup(queryLength: 0, sampling: sampling)
         dbg("warmup done; generating \(options.maxTokens) tokens …")
-        let genStart = Date()
-        var text = try await generator.generate(input: input, maxTokens: options.maxTokens)
-        var stopReason: CoreAIPipeline.StopReason = .maxTokens
-        if let stopRange = CoreAIPipeline.firstStopRange(
-            in: text, stopSequences: options.stopSequences)
-        {
-            text = String(text[..<stopRange.lowerBound])
-            stopReason = .stopSequence
-        }
-        let decodeSeconds = Date().timeIntervalSince(genStart)
-        dbg("generate done in \(String(format: "%.2f", decodeSeconds))s")
-        onToken?(text)
-
-        let generatedTokenCount = tokenizer.encode(text: text).count
-        return CoreAIPipeline.Result(
-            text: text,
+        let result = try await decodeWithVanillaStrategy(
+            input: input,
+            tokenizer: tokenizer,
+            inferenceEngine: engine,
+            samplingConfiguration: sampling,
+            options: options,
             promptTokenCount: promptTokenCount,
-            generatedTokenCount: generatedTokenCount,
+            modelLoadSeconds: modelLoadSeconds,
+            onToken: onToken)
+        dbg("generate done in \(String(format: "%.2f", result.decodeSeconds))s")
+        return result
+    }
+
+    private static func decodeWithVanillaStrategy(
+        input: Input,
+        tokenizer: any Tokenizer,
+        inferenceEngine: any InferenceEngine,
+        samplingConfiguration: SamplingConfiguration,
+        options: CoreAIPipeline.Options,
+        promptTokenCount: Int,
+        modelLoadSeconds: Double,
+        onToken: ((String) -> Void)?
+    ) async throws -> CoreAIPipeline.Result {
+        let maxTokens = max(0, options.maxTokens)
+        let stopSequences = options.stopSequences.filter { !$0.isEmpty }
+        let stream = try VanillaDecodingStrategy().decode(
+            from: input,
+            tokenizer: tokenizer,
+            inferenceEngine: inferenceEngine,
+            samplingConfiguration: samplingConfiguration,
+            options: InferenceOptions(maxTokens: maxTokens),
+            stopSequences: StopSequences(for: tokenizer))
+
+        let decodeStart = Date()
+        var text = ""
+        var streamedText = ""
+        var finalTextOverride: String?
+        var stopReason: CoreAIPipeline.StopReason = .maxTokens
+
+        func emitVisibleText(_ visible: String) {
+            guard let onToken else {
+                streamedText = visible
+                return
+            }
+            if visible.hasPrefix(streamedText) {
+                let delta = String(visible.dropFirst(streamedText.count))
+                if !delta.isEmpty { onToken(delta) }
+            }
+            streamedText = visible
+        }
+
+        for try await chunk in stream {
+            text += chunk.text
+
+            if let stopRange = CoreAIPipeline.firstStopRange(
+                in: text, stopSequences: stopSequences)
+            {
+                let visible = String(text[..<stopRange.lowerBound])
+                emitVisibleText(visible)
+                finalTextOverride = visible
+                stopReason = .stopSequence
+                break
+            }
+
+            if onToken != nil || !stopSequences.isEmpty {
+                let visible = stopSequences.isEmpty
+                    ? text
+                    : CoreAIPipeline.visibleTextAvoidingPartialStop(
+                        text, stopSequences: stopSequences)
+                emitVisibleText(visible)
+            }
+        }
+
+        let finalText = finalTextOverride ?? text
+        if finalTextOverride == nil, onToken != nil {
+            emitVisibleText(finalText)
+        }
+
+        return CoreAIPipeline.Result(
+            text: finalText,
+            promptTokenCount: promptTokenCount,
+            generatedTokenCount: tokenizer.encode(text: finalText).count,
             stopReason: stopReason,
             modelLoadSeconds: modelLoadSeconds,
             prefillSeconds: 0,
-            decodeSeconds: decodeSeconds)
+            decodeSeconds: Date().timeIntervalSince(decodeStart))
     }
 }
 
