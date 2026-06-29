@@ -47,6 +47,15 @@ scan() {
   fi
 }
 
+scan_exact() {
+  local label="$1"
+  local pattern="$2"
+  if rg -n --glob '!benchmarks/raw/**' --glob '!benchmarks/reports/**' "$pattern" "${existing[@]}"; then
+    echo "error: $label" >&2
+    fail=1
+  fi
+}
+
 scan "benchmark placeholder or unsupported public speed claim" \
   'benchmark pending|coming soon|fastest|blazing|guaranteed|100%[[:space:]]+(compatible|support(ed)?|coverage|accurate|accuracy|working|faster|speed|safe|verified)'
 scan "raw benchmark speed number in public copy" \
@@ -55,6 +64,8 @@ scan "marketing/hype wording" \
   'revolutionary|game[- ]changer|world[- ]class|best[- ]in[- ]class|magic|gimmick'
 scan "support gimmick wording" \
   'donat(e|ion)?|sticker'
+scan_exact "uppercase caix brand wording" \
+  '\bCAIX\b'
 scan "vague model-size wording" \
   'large model|large chat|dense large|\blarger\b|\blargest\b'
 scan "bare large wording; use parameter count, disk size, memory, and license instead" \

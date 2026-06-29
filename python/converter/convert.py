@@ -158,7 +158,7 @@ def _log_convert_event(target: str, kind: str, reason: str, model_type) -> None:
 
 
 def patch_chat_templates(bundle: Path, hf_id: str) -> list[str]:
-    """Apply CAIX runtime compatibility patches to exported tokenizer templates.
+    """Apply caix runtime compatibility patches to exported tokenizer templates.
 
     Apple's CoreAILanguageModels tokenizer API currently lets us pass messages/tools, but not
     arbitrary chat-template kwargs. Several Qwen3.5 hybrid/MoE templates expose the right

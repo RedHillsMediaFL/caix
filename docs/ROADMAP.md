@@ -26,7 +26,7 @@ Why this path:
 - Core AI exposes local `AIModel` / `InferenceFunction` execution with caller-owned input buffers,
   output views, and mutable KV state.
 - The current public Core AI language runtime is local-device only.
-- MLX/exo prove multi-Mac inference is practical, but CAIX needs a Core AI-native path for
+- MLX/exo prove multi-Mac inference is practical, but caix needs a Core AI-native path for
   converted `.aimodel` bundles.
 
 Do first:
