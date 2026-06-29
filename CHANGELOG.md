@@ -66,6 +66,7 @@
 - Treated direct `curl`, `rsync`, `tar`, and `zip` processes as heavy activity in the shared guard.
 - Emitted disk-pressure JSON through a real encoder so paths with quotes remain valid JSON.
 - Rejected malformed non-numeric filesystem free-space readings in the disk-pressure guard.
+- Marked GLM-Z1 benchmark evidence blocked on measured stdout stability.
 - Made benchmark report generation reject out-of-tree raw outputs and missing captured stdout/stderr.
 - Required raw benchmark outputs and measured stdout/stderr files to stay inside the raw evidence tree.
 - Added raw benchmark evidence checks for recorded caix commits and suite/model commit drift.

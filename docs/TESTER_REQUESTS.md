@@ -11,7 +11,7 @@ temperature, seed, streaming mode, warmup count, measured run count, and chat-te
 
 | repo | revision | local dir | request | notes |
 |---|---|---|---|---|
-| `redhillsmediafl/rhm-glm-z1-9b-0414-caix` | `995b04ba06b75fb9cb76ab7adf45f0c014f11274` | `glm-z1-9b-0414-coreai` | load, generation, benchmark | cataloged |
+| `redhillsmediafl/rhm-glm-z1-9b-0414-caix` | `995b04ba06b75fb9cb76ab7adf45f0c014f11274` | `glm-z1-9b-0414-coreai` | load, generation, benchmark | local stdout instability; publish only if stability gate passes |
 
 ## Existing Raw Evidence
 
