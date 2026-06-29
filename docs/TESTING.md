@@ -35,6 +35,7 @@ Use the exact model repo commit in every report:
 
 ```bash
 REPO=redhillsmediafl/rhm-qwen3-4b-caix
+export HF_HOME=${HF_HOME:-/Volumes/SSD/hf-cache}
 hf models info "$REPO" --format json > model-info.json
 ```
 
@@ -57,6 +58,7 @@ REPO=redhillsmediafl/rhm-qwen3-4b-caix
 REVISION=<model-repo-commit>
 NAME=qwen3-4b-coreai
 
+export HF_HOME=${HF_HOME:-/Volumes/SSD/hf-cache}
 mkdir -p models/exports
 hf download "$REPO" \
   --revision "$REVISION" \

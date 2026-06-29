@@ -8,7 +8,7 @@ Usage: scripts/check-tester-requests.sh [options]
 
 Options:
   --manifest <path>   TSV manifest. Default: benchmarks/MANIFEST.tsv.
-  --revisions <path>  Optional repo<TAB>revision TSV. Default: generator default.
+  --revisions <path>  Optional repo<TAB>revision TSV. Default: source declared in doc.
   --raw-dir <path>    Raw benchmark root. Default: benchmarks/raw.
   --doc <path>        Tester request markdown. Default: docs/TESTER_REQUESTS.md.
 
@@ -36,6 +36,23 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -f "$DOC" ]] || { echo "error: tester request doc not found: $DOC" >&2; exit 2; }
+
+if [[ -z "$REVISIONS" ]]; then
+  doc_revision_source="$(sed -n 's/^Revision source: `\([^`]*\)`\.$/\1/p' "$DOC" | head -n 1)"
+  if [[ -n "$doc_revision_source" && "$doc_revision_source" != "none" ]]; then
+    if [[ "$doc_revision_source" = /* ]]; then
+      inferred_revisions="$doc_revision_source"
+    else
+      inferred_revisions="$REPO_DIR/$doc_revision_source"
+    fi
+    if [[ ! -f "$inferred_revisions" ]]; then
+      echo "error: tester request doc declares missing revision source: $doc_revision_source" >&2
+      echo "run scripts/collect-model-revisions.sh --out $doc_revision_source or pass --revisions <path>" >&2
+      exit 1
+    fi
+    REVISIONS="$inferred_revisions"
+  fi
+fi
 
 tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/caix-tester-requests.XXXXXX")"
 trap 'rm -rf "$tmpdir"' EXIT

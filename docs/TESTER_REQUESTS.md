@@ -59,6 +59,7 @@ NAME=<local-dir-from-table>
 Install one payload:
 
 ```bash
+export HF_HOME=${HF_HOME:-/Volumes/SSD/hf-cache}
 scripts/check-disk-pressure.sh --path /Volumes/SSD --floor-gib 500
 mkdir -p models/exports
 hf download "$REPO" \

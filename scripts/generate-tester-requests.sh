@@ -7,7 +7,7 @@ Usage: scripts/generate-tester-requests.sh [options]
 
 Options:
   --manifest <path>   TSV manifest. Default: benchmarks/MANIFEST.tsv.
-  --revisions <path>  Optional repo<TAB>revision TSV. Default: benchmarks/revisions.tsv when present.
+  --revisions <path>  Optional repo<TAB>revision TSV. Default: none.
   --raw-dir <path>    Raw benchmark root. Default: benchmarks/raw.
   --out <path>        Markdown output path. Default: stdout.
 
@@ -36,9 +36,6 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -f "$MANIFEST" ]] || { echo "error: manifest not found: $MANIFEST" >&2; exit 2; }
-if [[ -z "$REVISIONS" && -f "$REPO_DIR/benchmarks/revisions.tsv" ]]; then
-  REVISIONS="$REPO_DIR/benchmarks/revisions.tsv"
-fi
 if [[ -n "$REVISIONS" ]]; then
   [[ -f "$REVISIONS" ]] || { echo "error: revisions file not found: $REVISIONS" >&2; exit 2; }
 fi
@@ -300,6 +297,7 @@ NAME=<local-dir-from-table>
 Install one payload:
 
 ```bash
+export HF_HOME=${HF_HOME:-/Volumes/SSD/hf-cache}
 scripts/check-disk-pressure.sh --path /Volumes/SSD --floor-gib 500
 mkdir -p models/exports
 hf download "$REPO" \
