@@ -40,6 +40,8 @@
   as non-publishable.
 - Added a single publication-gates script for local and Hub metadata/card checks.
 - Added whitespace and shell syntax checks to the publication-gates script.
+- Added a cleanup-safety gate so export removal keeps respecting dry-run, lock, and bundle-name
+  guards.
 - Added external tester instructions for verified load/generation reports and raw benchmark
   submissions.
 - Added a public-copy guard script for benchmark placeholders, hype, unsupported support-product

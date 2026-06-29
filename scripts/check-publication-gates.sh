@@ -48,6 +48,7 @@ fi
 run "$SCRIPT_DIR/check-token-handling.sh"
 run "$SCRIPT_DIR/check-public-copy.sh"
 run "$SCRIPT_DIR/check-version-sync.sh"
+run "$SCRIPT_DIR/check-cleanup-safety.sh"
 run "$SCRIPT_DIR/check-conversion-ledger.sh"
 run "$SCRIPT_DIR/check-conversion-gap-audit.sh"
 run "$SCRIPT_DIR/check-benchmark-raw.sh"
