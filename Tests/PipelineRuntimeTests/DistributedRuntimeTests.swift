@@ -1758,6 +1758,193 @@ final class DistributedRuntimeTests: XCTestCase {
         }
     }
 
+    func testStageIOContractValidatesRoleSpecificShapes() throws {
+        let boundary = DistributedBoundaryTensorSpec(
+            name: "hidden_states", shape: [1, -1, 2], scalarType: .float16)
+        let plan = makePlan(boundaryTensor: boundary)
+
+        for descriptor in plan.stages {
+            let contract = validIOContract(for: descriptor.role, hiddenWidth: 2, vocabSize: 151_936)
+            XCTAssertNoThrow(
+                try contract.validate(
+                    for: descriptor,
+                    boundaryTensor: boundary,
+                    vocabSize: 151_936))
+        }
+    }
+
+    func testStageHandleContextValidatesStageIOContractAgainstManifestBoundary() throws {
+        let manifest = try DistributedStageManifest.decode(
+            from: Data(stageManifestJSON(modelKey: "model", includeTotalLayerCount: true).utf8),
+            baseURL: URL(fileURLWithPath: "/tmp/caix-manifest", isDirectory: true))
+        let stage = manifest.stages[0]
+        let context = try XCTUnwrap(makeContext(manifest: manifest, stage: stage))
+        let contract = validIOContract(for: stage.role, hiddenWidth: 1024, vocabSize: 151_936)
+
+        XCTAssertNoThrow(try context.validateStageIOContract(contract, vocabSize: 151_936))
+    }
+
+    func testStageIOContractRejectsMissingEmbeddingInput() {
+        let boundary = DistributedBoundaryTensorSpec(
+            name: "hidden_states", shape: [1, -1, 2], scalarType: .float16)
+        let descriptor = stage("embed", .embeddings, assetName: "embeddings")
+        let contract = DistributedStageIOContract(
+            inputs: [
+                ioTensor(.positionIDs, .int32, [1, -1])
+            ],
+            outputs: [
+                ioTensor(.hiddenStates, .float16, [1, -1, 2])
+            ])
+
+        XCTAssertThrowsError(
+            try contract.validate(for: descriptor, boundaryTensor: boundary)
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidStageIOContract(stageID: "embed", reason: "input input_ids is required"))
+        }
+    }
+
+    func testStageIOContractRejectsBoundaryScalarMismatch() {
+        let boundary = DistributedBoundaryTensorSpec(
+            name: "hidden_states", shape: [1, -1, 2], scalarType: .float16)
+        let descriptor = stage(
+            "layers-0-16", .transformerLayers,
+            range: DistributedLayerRange(lowerBound: 0, upperBound: 16),
+            assetName: "layers_0_16")
+        let contract = DistributedStageIOContract(
+            inputs: [
+                ioTensor(.hiddenStates, .float32, [1, -1, 2]),
+                ioTensor(.positionIDs, .int32, [1, -1]),
+            ],
+            outputs: [
+                ioTensor(.hiddenStates, .float16, [1, -1, 2])
+            ])
+
+        XCTAssertThrowsError(
+            try contract.validate(for: descriptor, boundaryTensor: boundary)
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidStageIOContract(
+                    stageID: "layers-0-16",
+                    reason: "input hidden_states scalar_type float32 does not match float16"))
+        }
+    }
+
+    func testStageIOContractRejectsFinalHiddenOutput() {
+        let boundary = DistributedBoundaryTensorSpec(
+            name: "hidden_states", shape: [1, -1, 2], scalarType: .float16)
+        let descriptor = stage("final", .finalNormHead, assetName: "final")
+        let contract = DistributedStageIOContract(
+            inputs: [
+                ioTensor(.hiddenStates, .float16, [1, -1, 2]),
+                ioTensor(.positionIDs, .int32, [1, -1]),
+            ],
+            outputs: [
+                ioTensor(.hiddenStates, .float16, [1, -1, 2])
+            ])
+
+        XCTAssertThrowsError(
+            try contract.validate(for: descriptor, boundaryTensor: boundary, vocabSize: 151_936)
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidStageIOContract(
+                    stageID: "final",
+                    reason: "final_norm_head stage must not declare output hidden_states"))
+        }
+    }
+
+    func testStageIOContractRejectsLogitsVocabMismatch() {
+        let boundary = DistributedBoundaryTensorSpec(
+            name: "hidden_states", shape: [1, -1, 2], scalarType: .float16)
+        let descriptor = stage("final", .finalNormHead, assetName: "final")
+        let contract = DistributedStageIOContract(
+            inputs: [
+                ioTensor(.hiddenStates, .float16, [1, -1, 2]),
+                ioTensor(.positionIDs, .int32, [1, -1]),
+            ],
+            outputs: [
+                ioTensor(.logits, .float16, [1, -1, 32_000])
+            ])
+
+        XCTAssertThrowsError(
+            try contract.validate(for: descriptor, boundaryTensor: boundary, vocabSize: 151_936)
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidStageIOContract(
+                    stageID: "final",
+                    reason: "output logits shape [1, -1, 32000] does not match [1, -1, 151936]"))
+        }
+    }
+
+    func testStageIOContractRejectsUnexpectedTensor() {
+        let boundary = DistributedBoundaryTensorSpec(
+            name: "hidden_states", shape: [1, -1, 2], scalarType: .float16)
+        let descriptor = stage(
+            "layers-0-16", .transformerLayers,
+            range: DistributedLayerRange(lowerBound: 0, upperBound: 16),
+            assetName: "layers_0_16")
+        let contract = DistributedStageIOContract(
+            inputs: [
+                ioTensor(.hiddenStates, .float16, [1, -1, 2]),
+                ioTensor(.positionIDs, .int32, [1, -1]),
+                DistributedStageIOTensor(
+                    name: "attention_mask",
+                    shape: [1, -1],
+                    scalarType: .int32),
+            ],
+            outputs: [
+                ioTensor(.hiddenStates, .float16, [1, -1, 2])
+            ])
+
+        XCTAssertThrowsError(
+            try contract.validate(for: descriptor, boundaryTensor: boundary)
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidStageIOContract(
+                    stageID: "layers-0-16",
+                    reason: "transformer_layers stage must not declare input attention_mask"))
+        }
+    }
+
+    func testStageIOContractRejectsDuplicateStateNames() {
+        let boundary = DistributedBoundaryTensorSpec(
+            name: "hidden_states", shape: [1, -1, 2], scalarType: .float16)
+        let descriptor = stage("embed", .embeddings, assetName: "embeddings")
+        let contract = DistributedStageIOContract(
+            inputs: [
+                ioTensor(.inputIDs, .int32, [1, -1]),
+                ioTensor(.positionIDs, .int32, [1, -1]),
+            ],
+            outputs: [
+                ioTensor(.hiddenStates, .float16, [1, -1, 2])
+            ],
+            stateNames: ["keyCache", "keyCache"])
+
+        XCTAssertThrowsError(
+            try contract.validate(for: descriptor, boundaryTensor: boundary)
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidStageIOContract(stageID: "embed", reason: "state keyCache is duplicated"))
+        }
+    }
+
+    func testStageIOContractCodableUsesStableKeys() throws {
+        let contract = validIOContract(for: .embeddings, hiddenWidth: 2, vocabSize: 151_936)
+        let data = try JSONEncoder().encode(contract)
+        let json = String(decoding: data, as: UTF8.self)
+
+        XCTAssertTrue(json.contains(#""function_name""#))
+        XCTAssertTrue(json.contains(#""scalar_type""#))
+        XCTAssertTrue(json.contains(#""input_ids""#))
+        XCTAssertEqual(try JSONDecoder().decode(DistributedStageIOContract.self, from: data), contract)
+    }
+
     func testHiddenStatePacketValidatesShapeByteCountAndRoute() throws {
         let packet = DistributedHiddenStatePacketMetadata(
             requestID: "req-1",
@@ -2580,6 +2767,44 @@ final class DistributedRuntimeTests: XCTestCase {
             ],
             boundaryTensor: boundaryTensor,
             positionMode: positionMode)
+    }
+
+    private func validIOContract(
+        for role: DistributedStageRole,
+        hiddenWidth: Int = 2,
+        vocabSize: Int = 151_936
+    ) -> DistributedStageIOContract {
+        let position = ioTensor(.positionIDs, .int32, [1, -1])
+        let hidden = ioTensor(.hiddenStates, .float16, [1, -1, hiddenWidth])
+
+        switch role {
+        case .embeddings:
+            return DistributedStageIOContract(
+                inputs: [
+                    ioTensor(.inputIDs, .int32, [1, -1]),
+                    position,
+                ],
+                outputs: [hidden],
+                stateNames: ["keyCache", "valueCache"])
+        case .transformerLayers:
+            return DistributedStageIOContract(
+                inputs: [hidden, position],
+                outputs: [hidden],
+                stateNames: ["keyCache", "valueCache"])
+        case .finalNormHead:
+            return DistributedStageIOContract(
+                inputs: [hidden, position],
+                outputs: [ioTensor(.logits, .float16, [1, -1, vocabSize])],
+                stateNames: ["keyCache", "valueCache"])
+        }
+    }
+
+    private func ioTensor(
+        _ name: DistributedStageIOTensorName,
+        _ scalarType: DistributedStageIOScalarType,
+        _ shape: [Int]
+    ) -> DistributedStageIOTensor {
+        DistributedStageIOTensor(name, shape: shape, scalarType: scalarType)
     }
 
     private func stage(

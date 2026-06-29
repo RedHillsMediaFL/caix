@@ -323,6 +323,377 @@ public struct DistributedBoundaryTensorSpec: Codable, Hashable, Sendable {
     }
 }
 
+/// Scalar types allowed in declared stage function inputs and outputs.
+///
+/// Boundary packets stay limited to ``DistributedTensorScalarType`` because those bytes must be
+/// host-readable float tensors. Stage function contracts also need Int32 token/position inputs.
+public enum DistributedStageIOScalarType: String, Codable, CaseIterable, Sendable {
+    case int32
+    case float16
+    case float32
+
+    public init(boundaryScalarType: DistributedTensorScalarType) {
+        switch boundaryScalarType {
+        case .float16:
+            self = .float16
+        case .float32:
+            self = .float32
+        }
+    }
+
+    public var isFloatingPoint: Bool {
+        switch self {
+        case .float16, .float32:
+            return true
+        case .int32:
+            return false
+        }
+    }
+}
+
+/// Canonical staged-function tensor names.
+public enum DistributedStageIOTensorName: String, Codable, CaseIterable, Sendable {
+    case inputIDs = "input_ids"
+    case positionIDs = "position_ids"
+    case hiddenStates = "hidden_states"
+    case logits
+}
+
+/// One declared tensor in a staged Core AI function contract.
+public struct DistributedStageIOTensor: Codable, Hashable, Sendable {
+    public let name: String
+    public let shape: [Int]
+    public let scalarType: DistributedStageIOScalarType
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case shape
+        case scalarType = "scalar_type"
+    }
+
+    public init(
+        name: String,
+        shape: [Int],
+        scalarType: DistributedStageIOScalarType
+    ) {
+        self.name = name
+        self.shape = shape
+        self.scalarType = scalarType
+    }
+
+    public init(
+        _ name: DistributedStageIOTensorName,
+        shape: [Int],
+        scalarType: DistributedStageIOScalarType
+    ) {
+        self.init(name: name.rawValue, shape: shape, scalarType: scalarType)
+    }
+}
+
+/// Declared input/output contract for one exported stage function.
+///
+/// This is intentionally runtime-agnostic. A Core AI stage handle can build this from function
+/// descriptors, then validate it against the manifest stage role and boundary tensor before
+/// accepting any hidden-state packets.
+public struct DistributedStageIOContract: Codable, Hashable, Sendable {
+    public let functionName: String
+    public let inputs: [DistributedStageIOTensor]
+    public let outputs: [DistributedStageIOTensor]
+    public let stateNames: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case functionName = "function_name"
+        case inputs
+        case outputs
+        case stateNames = "state_names"
+    }
+
+    public init(
+        functionName: String = "main",
+        inputs: [DistributedStageIOTensor],
+        outputs: [DistributedStageIOTensor],
+        stateNames: [String] = []
+    ) {
+        self.functionName = functionName
+        self.inputs = inputs
+        self.outputs = outputs
+        self.stateNames = stateNames
+    }
+
+    public func validate(
+        for stage: DistributedStageDescriptor,
+        boundaryTensor: DistributedBoundaryTensorSpec?,
+        vocabSize: Int? = nil
+    ) throws {
+        guard !Self.trimmed(functionName).isEmpty else {
+            throw Self.error(stageID: stage.id, "function_name is empty")
+        }
+        if let vocabSize, vocabSize <= 0 {
+            throw Self.error(stageID: stage.id, "vocab_size must be positive")
+        }
+        try Self.validateStateNames(stateNames, stageID: stage.id)
+
+        let inputByName = try Self.uniqueTensors(inputs, kind: "input", stageID: stage.id)
+        let outputByName = try Self.uniqueTensors(outputs, kind: "output", stageID: stage.id)
+
+        _ = try Self.requireTensor(
+            .positionIDs,
+            in: inputByName,
+            kind: "input",
+            stageID: stage.id,
+            scalarType: .int32,
+            shape: [1, -1])
+
+        switch stage.role {
+        case .embeddings:
+            try Self.requireOnlyTensors(
+                [.inputIDs, .positionIDs],
+                in: inputByName,
+                kind: "input",
+                stage: stage)
+            try Self.requireOnlyTensors(
+                [.hiddenStates],
+                in: outputByName,
+                kind: "output",
+                stage: stage)
+            _ = try Self.requireTensor(
+                .inputIDs,
+                in: inputByName,
+                kind: "input",
+                stageID: stage.id,
+                scalarType: .int32,
+                shape: [1, -1])
+            let hiddenOutput = try Self.requireTensor(
+                .hiddenStates,
+                in: outputByName,
+                kind: "output",
+                stageID: stage.id)
+            try Self.validateHiddenStateTensor(
+                hiddenOutput,
+                kind: "output",
+                stageID: stage.id,
+                boundaryTensor: boundaryTensor)
+
+        case .transformerLayers:
+            try Self.requireOnlyTensors(
+                [.hiddenStates, .positionIDs],
+                in: inputByName,
+                kind: "input",
+                stage: stage)
+            try Self.requireOnlyTensors(
+                [.hiddenStates],
+                in: outputByName,
+                kind: "output",
+                stage: stage)
+            let hiddenInput = try Self.requireTensor(
+                .hiddenStates,
+                in: inputByName,
+                kind: "input",
+                stageID: stage.id)
+            let hiddenOutput = try Self.requireTensor(
+                .hiddenStates,
+                in: outputByName,
+                kind: "output",
+                stageID: stage.id)
+            try Self.validateHiddenStateTensor(
+                hiddenInput,
+                kind: "input",
+                stageID: stage.id,
+                boundaryTensor: boundaryTensor)
+            try Self.validateHiddenStateTensor(
+                hiddenOutput,
+                kind: "output",
+                stageID: stage.id,
+                boundaryTensor: boundaryTensor)
+
+        case .finalNormHead:
+            try Self.requireOnlyTensors(
+                [.hiddenStates, .positionIDs],
+                in: inputByName,
+                kind: "input",
+                stage: stage)
+            try Self.requireOnlyTensors(
+                [.logits],
+                in: outputByName,
+                kind: "output",
+                stage: stage)
+            let hiddenInput = try Self.requireTensor(
+                .hiddenStates,
+                in: inputByName,
+                kind: "input",
+                stageID: stage.id)
+            let logits = try Self.requireTensor(
+                .logits,
+                in: outputByName,
+                kind: "output",
+                stageID: stage.id)
+            try Self.validateHiddenStateTensor(
+                hiddenInput,
+                kind: "input",
+                stageID: stage.id,
+                boundaryTensor: boundaryTensor)
+            try Self.validateLogitsTensor(logits, stageID: stage.id, vocabSize: vocabSize)
+        }
+    }
+
+    private static func validateHiddenStateTensor(
+        _ tensor: DistributedStageIOTensor,
+        kind: String,
+        stageID: String,
+        boundaryTensor: DistributedBoundaryTensorSpec?
+    ) throws {
+        let expectedScalar = boundaryTensor.map {
+            DistributedStageIOScalarType(boundaryScalarType: $0.scalarType)
+        }
+        if let expectedScalar {
+            guard tensor.scalarType == expectedScalar else {
+                throw error(
+                    stageID: stageID,
+                    "\(kind) hidden_states scalar_type \(tensor.scalarType.rawValue) does not match \(expectedScalar.rawValue)")
+            }
+        } else {
+            guard tensor.scalarType.isFloatingPoint else {
+                throw error(
+                    stageID: stageID,
+                    "\(kind) hidden_states scalar_type \(tensor.scalarType.rawValue) is not floating-point")
+            }
+        }
+
+        let expectedShape = boundaryTensor?.shape ?? [1, -1, -1]
+        guard shape(tensor.shape, matches: expectedShape) else {
+            throw error(
+                stageID: stageID,
+                "\(kind) hidden_states shape \(tensor.shape) does not match \(expectedShape)")
+        }
+    }
+
+    private static func validateLogitsTensor(
+        _ tensor: DistributedStageIOTensor,
+        stageID: String,
+        vocabSize: Int?
+    ) throws {
+        guard tensor.scalarType.isFloatingPoint else {
+            throw error(
+                stageID: stageID,
+                "output logits scalar_type \(tensor.scalarType.rawValue) is not floating-point")
+        }
+        let expectedShape = [1, -1, vocabSize ?? -1]
+        guard shape(tensor.shape, matches: expectedShape) else {
+            throw error(
+                stageID: stageID,
+                "output logits shape \(tensor.shape) does not match \(expectedShape)")
+        }
+    }
+
+    private static func uniqueTensors(
+        _ tensors: [DistributedStageIOTensor],
+        kind: String,
+        stageID: String
+    ) throws -> [String: DistributedStageIOTensor] {
+        var byName: [String: DistributedStageIOTensor] = [:]
+        for tensor in tensors {
+            let name = trimmed(tensor.name)
+            guard !name.isEmpty else {
+                throw error(stageID: stageID, "\(kind) tensor name is empty")
+            }
+            guard !tensor.shape.isEmpty else {
+                throw error(stageID: stageID, "\(kind) \(name) shape is empty")
+            }
+            guard tensor.shape.allSatisfy({ $0 == -1 || $0 > 0 }) else {
+                throw error(
+                    stageID: stageID,
+                    "\(kind) \(name) shape dimensions must be positive or -1")
+            }
+            guard byName[name] == nil else {
+                throw error(stageID: stageID, "\(kind) \(name) is duplicated")
+            }
+            byName[name] = tensor
+        }
+        return byName
+    }
+
+    private static func validateStateNames(
+        _ stateNames: [String],
+        stageID: String
+    ) throws {
+        var seen: Set<String> = []
+        for stateName in stateNames {
+            let name = trimmed(stateName)
+            guard !name.isEmpty else {
+                throw error(stageID: stageID, "state name is empty")
+            }
+            guard seen.insert(name).inserted else {
+                throw error(stageID: stageID, "state \(name) is duplicated")
+            }
+        }
+    }
+
+    private static func requireOnlyTensors(
+        _ allowedNames: [DistributedStageIOTensorName],
+        in tensors: [String: DistributedStageIOTensor],
+        kind: String,
+        stage: DistributedStageDescriptor
+    ) throws {
+        let allowed = Set(allowedNames.map(\.rawValue))
+        for name in tensors.keys.sorted() where !allowed.contains(name) {
+            throw error(
+                stageID: stage.id,
+                "\(stage.role.rawValue) stage must not declare \(kind) \(name)")
+        }
+    }
+
+    private static func requireTensor(
+        _ name: DistributedStageIOTensorName,
+        in tensors: [String: DistributedStageIOTensor],
+        kind: String,
+        stageID: String,
+        scalarType: DistributedStageIOScalarType? = nil,
+        shape: [Int]? = nil
+    ) throws -> DistributedStageIOTensor {
+        guard let tensor = tensors[name.rawValue] else {
+            throw error(stageID: stageID, "\(kind) \(name.rawValue) is required")
+        }
+        if let scalarType {
+            guard tensor.scalarType == scalarType else {
+                throw error(
+                    stageID: stageID,
+                    "\(kind) \(name.rawValue) scalar_type \(tensor.scalarType.rawValue) does not match \(scalarType.rawValue)")
+            }
+        }
+        if let shape {
+            guard Self.shape(tensor.shape, matches: shape) else {
+                throw error(
+                    stageID: stageID,
+                    "\(kind) \(name.rawValue) shape \(tensor.shape) does not match \(shape)")
+            }
+        }
+        return tensor
+    }
+
+    private static func shape(_ actual: [Int], matches expected: [Int]) -> Bool {
+        guard actual.count == expected.count else { return false }
+        for (actualDim, expectedDim) in zip(actual, expected) {
+            if expectedDim == -1 {
+                guard actualDim == -1 || actualDim > 0 else { return false }
+            } else if actualDim != expectedDim {
+                return false
+            }
+        }
+        return true
+    }
+
+    private static func error(
+        stageID: String,
+        _ reason: String
+    ) -> DistributedStageExecutionError {
+        .invalidStageIOContract(stageID: stageID, reason: reason)
+    }
+
+    private static func trimmed(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
 /// Normalized staged manifest used by the CLI planner, same-machine harness, and future workers.
 public struct DistributedStageManifest: Hashable, Sendable {
     public static let currentSchema = "caix.cluster.stage_manifest.v0"
@@ -2019,6 +2390,8 @@ public final class DistributedWorkerFrameExecutor {
             return "invalid_forward_input"
         case .invalidStageOutput:
             return "invalid_stage_output"
+        case .invalidStageIOContract:
+            return "invalid_stage_io_contract"
         default:
             return "worker_error"
         }
@@ -2038,6 +2411,8 @@ public final class DistributedWorkerFrameExecutor {
             .invalidForwardInput(let message),
             .invalidStageOutput(let message):
             return message
+        case .invalidStageIOContract(_, let reason):
+            return reason
         default:
             return executionError.description
         }
@@ -2400,6 +2775,16 @@ public struct DistributedStageHandleFactoryContext: Hashable, Sendable {
         }
         return url
     }
+
+    public func validateStageIOContract(
+        _ contract: DistributedStageIOContract,
+        vocabSize: Int? = nil
+    ) throws {
+        try contract.validate(
+            for: descriptor,
+            boundaryTensor: boundaryTensor,
+            vocabSize: vocabSize)
+    }
 }
 
 public protocol DistributedStageHandleFactory {
@@ -2420,6 +2805,7 @@ public enum DistributedStageExecutionError: Error, Equatable, Sendable, CustomSt
     case invalidWireFrame(String)
     case invalidForwardInput(String)
     case invalidStageOutput(String)
+    case invalidStageIOContract(stageID: String, reason: String)
 
     public var description: String {
         switch self {
@@ -2445,6 +2831,8 @@ public enum DistributedStageExecutionError: Error, Equatable, Sendable, CustomSt
             return "Invalid distributed forward input: \(message)"
         case .invalidStageOutput(let message):
             return "Invalid distributed stage output: \(message)"
+        case .invalidStageIOContract(let stageID, let reason):
+            return "Invalid distributed stage IO contract for \(stageID): \(reason)"
         }
     }
 }
