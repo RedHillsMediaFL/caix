@@ -77,6 +77,9 @@ Run `scripts/check-conversion-ledger.sh` after changing `models/registry.json`,
 `docs/CONVERSION_LEDGER.tsv`, or the benchmark manifest. It keeps active conversion lanes explicit:
 published, component-only, or blocked with a next step.
 
+Run `scripts/audit-conversion-gaps.sh --out docs/CONVERSION_GAP_AUDIT.tsv` to refresh source
+metadata for active conversion lanes. It reads Hub metadata only.
+
 Create `benchmarks/revisions.tsv` before a publishable run:
 
 ```bash

@@ -44,9 +44,9 @@ temperature, streaming mode, warmup count, measured run count, and chat-template
 Set one row's values:
 
 ```bash
-REPO=redhillsmediafl/rhm-qwen3-4b-caix
-REVISION=85159782da417ce077fad5948a09f654b8d81675
-NAME=qwen3-4b-coreai
+REPO=<repo-from-table>
+REVISION=<revision-from-table>
+NAME=<local-dir-from-table>
 ```
 
 Install one payload:
