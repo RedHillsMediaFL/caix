@@ -1,0 +1,2 @@
+
+Local inference on Apple Silicon can leverage the hardware's Neural Engine for processing AI workloads directly on the device.
