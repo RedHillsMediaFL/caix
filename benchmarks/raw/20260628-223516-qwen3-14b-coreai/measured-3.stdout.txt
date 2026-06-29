@@ -1,0 +1,3 @@
+ here. The new Local Inference API allows you to run inference on your own devices, without sending data to the cloud. This means you can run models on your own hardware, with full control over your data and privacy. The Local Inference API is available for all models in the Hugging Face Hub, including the latest and most advanced models. This is a major step forward for on-device AI, and opens up new possibilities for developers and users alike.
+
+The Local Inference API is built on top of the Transformers library, which is the de facto standard for natural language processing (NLP) and other machine learning tasks. This means
