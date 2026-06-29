@@ -51,6 +51,8 @@ This is blunt on purpose. Where the current code cannot do something, it says so
     `DistributedWorkerWireFrame` pairs that header with optional tensor bytes and rejects payload
     sizes that do not match the header. Full wire-frame encoding is `JSON header line` followed by
     the raw tensor payload.
+  - `DistributedWorkerWireFrameStreamDecoder` incrementally parses socket reads into complete
+    worker wire frames without treating tensor bytes as JSON.
   - `DistributedWorkerFrameExecutor` dispatches validated request frames to one
     `DistributedStageHandle` and returns `forward_result` frames. It is transport-independent
     worker logic for the loopback and Thunderbolt paths.

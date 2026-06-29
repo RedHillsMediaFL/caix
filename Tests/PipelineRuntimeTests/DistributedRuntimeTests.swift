@@ -315,6 +315,72 @@ final class DistributedRuntimeTests: XCTestCase {
         }
     }
 
+    func testWireFrameStreamDecoderWaitsForCompleteHeaderAndPayload() throws {
+        let packet = try hiddenPacket(
+            requestID: "req-1",
+            source: "layers-0-16",
+            destination: "layers-16-32",
+            positionRange: DistributedSequenceRange(lowerBound: 4, upperBound: 7),
+            stepIndex: 1,
+            fill: 9)
+        let frame = DistributedWorkerWireFrame(
+            message: .forward(DistributedStageForwardFrame(
+                stageID: "layers-16-32",
+                requestID: "req-1",
+                stepIndex: 1,
+                positionRange: DistributedSequenceRange(lowerBound: 4, upperBound: 7),
+                positionIDs: [4, 5, 6],
+                hiddenState: packet.metadata)),
+            payload: packet.payload)
+        let encoded = try DistributedWorkerMessageCodec.encodeWireFrame(frame)
+        let headerEnd = try XCTUnwrap(encoded.firstIndex(of: 0x0A))
+        var decoder = DistributedWorkerWireFrameStreamDecoder()
+
+        decoder.append(encoded.prefix(headerEnd))
+        XCTAssertNil(try decoder.nextFrame())
+        decoder.append(encoded[headerEnd...headerEnd])
+        XCTAssertNil(try decoder.nextFrame())
+        decoder.append(encoded[(headerEnd + 1)..<(encoded.count - 1)])
+        XCTAssertNil(try decoder.nextFrame())
+        decoder.append(encoded[(encoded.count - 1)..<encoded.count])
+
+        XCTAssertEqual(try decoder.nextFrame(), frame)
+        XCTAssertEqual(decoder.bufferedByteCount, 0)
+        XCTAssertNoThrow(try decoder.finish())
+    }
+
+    func testWireFrameStreamDecoderDrainsSequentialFrames() throws {
+        let alloc = DistributedWorkerWireFrame(
+            message: .allocate(DistributedStageAllocation(requestID: "req-1", kvCapacity: 128)))
+        let free = DistributedWorkerWireFrame(
+            message: .free(DistributedRequestControl(requestID: "req-1", stageID: "layers-0-16")))
+        let encoded = try DistributedWorkerMessageCodec.encodeWireFrame(alloc)
+            + DistributedWorkerMessageCodec.encodeWireFrame(free)
+        var decoder = DistributedWorkerWireFrameStreamDecoder()
+
+        decoder.append(encoded)
+
+        XCTAssertEqual(try decoder.drainFrames(), [alloc, free])
+        XCTAssertNoThrow(try decoder.finish())
+    }
+
+    func testWireFrameStreamDecoderReportsPartialTrailingBytes() throws {
+        let alloc = DistributedWorkerWireFrame(
+            message: .allocate(DistributedStageAllocation(requestID: "req-1", kvCapacity: 128)))
+        let encoded = try DistributedWorkerMessageCodec.encodeWireFrame(alloc)
+        var decoder = DistributedWorkerWireFrameStreamDecoder()
+
+        decoder.append(encoded.dropLast())
+
+        XCTAssertNil(try decoder.nextFrame())
+        XCTAssertThrowsError(try decoder.finish()) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidWireFrame(
+                    "worker wire frame stream ended with \(encoded.count - 1) buffered bytes"))
+        }
+    }
+
     func testWorkerFrameExecutorBuildsValidatedHello() throws {
         let plan = makePlan(
             boundaryTensor: DistributedBoundaryTensorSpec(
@@ -515,6 +581,76 @@ final class DistributedRuntimeTests: XCTestCase {
             XCTAssertEqual(
                 error as? DistributedStageExecutionError,
                 .invalidControlFrame("alloc must not return a response"))
+        }
+    }
+
+    func testRemoteStageHandleRejectsMismatchedForwardResponseRequest() async throws {
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 2], scalarType: .float16))
+        let descriptor = try XCTUnwrap(plan.stage(id: "final"))
+        let packet = try hiddenPacket(
+            requestID: "req-1",
+            source: "layers-16-32",
+            destination: "final",
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+            stepIndex: 0,
+            fill: 7)
+        let remote = try DistributedRemoteStageHandle(plan: plan, descriptor: descriptor) { _ in
+            DistributedWorkerWireFrame(message: .forwardResult(DistributedStageForwardResultFrame(
+                stageID: descriptor.id,
+                requestID: "other-req",
+                stepIndex: 0,
+                hiddenState: nil,
+                tokenID: 42)))
+        }
+
+        await XCTAssertThrowsErrorAsync(
+            try await remote.forward(DistributedStageForwardInput(
+                requestID: "req-1",
+                stepIndex: 0,
+                positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+                positionIDs: [0],
+                hiddenState: packet))
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidStageOutput("response request_id does not match request"))
+        }
+    }
+
+    func testRemoteStageHandleRejectsMismatchedForwardResponseStep() async throws {
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 2], scalarType: .float16))
+        let descriptor = try XCTUnwrap(plan.stage(id: "final"))
+        let packet = try hiddenPacket(
+            requestID: "req-1",
+            source: "layers-16-32",
+            destination: "final",
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+            stepIndex: 0,
+            fill: 7)
+        let remote = try DistributedRemoteStageHandle(plan: plan, descriptor: descriptor) { _ in
+            DistributedWorkerWireFrame(message: .forwardResult(DistributedStageForwardResultFrame(
+                stageID: descriptor.id,
+                requestID: "req-1",
+                stepIndex: 1,
+                hiddenState: nil,
+                tokenID: 42)))
+        }
+
+        await XCTAssertThrowsErrorAsync(
+            try await remote.forward(DistributedStageForwardInput(
+                requestID: "req-1",
+                stepIndex: 0,
+                positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+                positionIDs: [0],
+                hiddenState: packet))
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidStageOutput("response step_index does not match request"))
         }
     }
 

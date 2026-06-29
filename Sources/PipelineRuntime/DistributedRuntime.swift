@@ -1555,6 +1555,53 @@ public enum DistributedWorkerMessageCodec {
     }
 }
 
+public struct DistributedWorkerWireFrameStreamDecoder: Sendable {
+    private var buffer: [UInt8] = []
+
+    public init() {}
+
+    public var bufferedByteCount: Int {
+        buffer.count
+    }
+
+    public mutating func append(_ data: Data) {
+        buffer.append(contentsOf: data)
+    }
+
+    public mutating func nextFrame() throws -> DistributedWorkerWireFrame? {
+        guard let headerEnd = buffer.firstIndex(of: 0x0A) else {
+            return nil
+        }
+        let headerBytes = buffer[...headerEnd]
+        let message = try DistributedWorkerMessageCodec.decodeJSONLine(Data(headerBytes))
+        let payloadStart = headerEnd + 1
+        let payloadEnd = payloadStart + message.expectedPayloadByteCount
+        guard buffer.count >= payloadEnd else {
+            return nil
+        }
+        let payload = Array(buffer[payloadStart..<payloadEnd])
+        buffer.removeFirst(payloadEnd)
+        let frame = DistributedWorkerWireFrame(message: message, payload: payload)
+        try frame.message.validatePayloadByteCount(frame.payload.count)
+        return frame
+    }
+
+    public mutating func drainFrames() throws -> [DistributedWorkerWireFrame] {
+        var frames: [DistributedWorkerWireFrame] = []
+        while let frame = try nextFrame() {
+            frames.append(frame)
+        }
+        return frames
+    }
+
+    public func finish() throws {
+        guard buffer.isEmpty else {
+            throw DistributedStageExecutionError.invalidWireFrame(
+                "worker wire frame stream ended with \(buffer.count) buffered bytes")
+        }
+    }
+}
+
 public struct DistributedWorkerWireFrame: Hashable, Sendable {
     public let message: DistributedWorkerMessage
     public let payload: [UInt8]
