@@ -1,0 +1,7 @@
+[fast] language bundle ok: gemma-4-26b-a4b-coreai
+[fast] creating engine (auto→pipelined) …
+[fast] engine + tokenizer ready
+[fast] warming up engine …
+[fast] warmup done; generating 128 tokens …
+[fast] generate done in 37.53s
+[coreai] 20 prompt tok, 127 generated, stop=maxTokens, load=53.35s prefill=0.00s decode=37.53s (3.4 tok/s)
