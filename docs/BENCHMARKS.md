@@ -133,6 +133,10 @@ Run `scripts/check-benchmark-raw.sh` before committing raw benchmark logs. It ch
 git status for new or changed raw dirs, pinned model repo revisions, suite/model metadata consistency,
 measured row counts, failed rows, and deterministic measured stdout.
 
+Run `scripts/check-benchmark-gaps.sh` to list eligible manifest rows that still lack committed
+measured raw evidence. Use `--strict` only when the current release must have no eligible benchmark
+gaps.
+
 Before publishing docs, model cards, or benchmark reports, run:
 
 ```bash

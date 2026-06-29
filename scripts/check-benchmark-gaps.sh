@@ -172,7 +172,7 @@ awk -F '\t' -v evidence="$evidence" -v strict="$STRICT" '
       exit 0
     }
 
-    printf "benchmark gap audit ok: %d/%d eligible rows have committed measured raw evidence; pending=%d; noneligible=%d\n",
+    printf "benchmark gap audit: %d/%d eligible rows have committed measured raw evidence; pending=%d; noneligible=%d\n",
       measured, eligible, pending, noneligible
     print "pending_repo\tlocal_dir\tbenchmark_mode\tnotes"
     for (i = 1; i <= pending; i++) {
