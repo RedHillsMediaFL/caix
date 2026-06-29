@@ -47,6 +47,8 @@ This is blunt on purpose. Where the current code cannot do something, it says so
   - `DistributedWorkerMessage` frames for hello/ack, allocation, forward, reset, free, and error.
     The `FORWARD` frame carries token ids or hidden-state metadata plus position ids; tensor bytes
     stay outside JSON.
+  - `DistributedStagePlan.integrityHash()` gives coordinator and workers the same SHA-256 plan
+    identity for handshake rejection.
 - A dry-run planner CLI (`Sources/PipelineCLI/Cluster.swift`, wired in `main.swift`):
   `caix cluster plan --manifest … | --model …` with greedy worker assignment. Manifest schema
   `caix.cluster.stage_manifest.v0` documented in `docs/CLUSTER.md`. JSON output includes a

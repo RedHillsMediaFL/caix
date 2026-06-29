@@ -138,6 +138,86 @@ final class DistributedRuntimeTests: XCTestCase {
         }
     }
 
+    func testWorkerHelloValidatesPlanIntegrityAndStageClaim() throws {
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 4096], scalarType: .float16))
+        let hello = DistributedWorkerHello(
+            stage: try XCTUnwrap(plan.stage(id: "layers-0-16")),
+            hiddenSize: 4096,
+            boundaryScalarType: .float16,
+            cacheContract: "stateful",
+            planIntegrityHash: try plan.integrityHash())
+
+        XCTAssertNoThrow(try hello.validate(against: plan))
+    }
+
+    func testWorkerHelloRejectsPlanIntegrityMismatch() throws {
+        let plan = makePlan()
+        let hello = DistributedWorkerHello(
+            stage: try XCTUnwrap(plan.stage(id: "layers-0-16")),
+            planIntegrityHash: "stale-plan")
+
+        XCTAssertThrowsError(
+            try hello.validate(against: plan, expectedPlanIntegrityHash: "current-plan")
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidWorkerHello("plan_integrity_hash mismatch"))
+        }
+    }
+
+    func testWorkerHelloRejectsStageDescriptorMismatch() throws {
+        let plan = makePlan()
+        let hello = DistributedWorkerHello(
+            stage: stage(
+                "layers-0-16", .transformerLayers,
+                range: DistributedLayerRange(lowerBound: 0, upperBound: 8),
+                assetName: "layers_0_16", workerID: "worker-a"),
+            planIntegrityHash: "plan-hash")
+
+        XCTAssertThrowsError(
+            try hello.validate(against: plan, expectedPlanIntegrityHash: "plan-hash")
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidWorkerHello("stage descriptor does not match plan for layers-0-16"))
+        }
+    }
+
+    func testWorkerHelloRejectsBoundaryContractMismatch() throws {
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 4096], scalarType: .float16))
+        let wrongHiddenSize = DistributedWorkerHello(
+            stage: try XCTUnwrap(plan.stage(id: "layers-0-16")),
+            hiddenSize: 2048,
+            boundaryScalarType: .float16,
+            planIntegrityHash: "plan-hash")
+        let wrongScalar = DistributedWorkerHello(
+            stage: try XCTUnwrap(plan.stage(id: "layers-0-16")),
+            hiddenSize: 4096,
+            boundaryScalarType: .float32,
+            planIntegrityHash: "plan-hash")
+
+        XCTAssertThrowsError(
+            try wrongHiddenSize.validate(against: plan, expectedPlanIntegrityHash: "plan-hash")
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidWorkerHello(
+                    "hidden_size 2048 does not match boundary tensor hidden size 4096"))
+        }
+        XCTAssertThrowsError(
+            try wrongScalar.validate(against: plan, expectedPlanIntegrityHash: "plan-hash")
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidWorkerHello(
+                    "boundary_scalar_type float32 does not match boundary tensor float16"))
+        }
+    }
+
     func testForwardFrameValidatesRoleSpecificInputs() throws {
         let plan = makePlan(
             boundaryTensor: DistributedBoundaryTensorSpec(
@@ -349,6 +429,33 @@ final class DistributedRuntimeTests: XCTestCase {
 
         let decoded = try JSONDecoder().decode(DistributedStagePlan.self, from: data)
         XCTAssertEqual(decoded, plan)
+    }
+
+    func testStagePlanIntegrityHashIsStableAndChangesWithPlan() throws {
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 2], scalarType: .float16))
+        let data = try JSONEncoder().encode(plan)
+        let decoded = try JSONDecoder().decode(DistributedStagePlan.self, from: data)
+        let changedPlan = DistributedStagePlan(
+            modelName: plan.modelName,
+            totalLayerCount: plan.totalLayerCount,
+            stages: plan.stages.map { descriptor in
+                descriptor.id == "layers-16-32"
+                    ? DistributedStageDescriptor(
+                        id: descriptor.id,
+                        role: descriptor.role,
+                        layerRange: descriptor.layerRange,
+                        assetName: "layers_16_32_v2",
+                        workerID: descriptor.workerID)
+                    : descriptor
+            },
+            workers: plan.workers,
+            boundaryTensor: plan.boundaryTensor)
+
+        XCTAssertEqual(try plan.integrityHash(), try decoded.integrityHash())
+        XCTAssertEqual(try plan.integrityHash().count, 64)
+        XCTAssertNotEqual(try plan.integrityHash(), try changedPlan.integrityHash())
     }
 
     func testStageManifestLoadsTopLevelManifest() throws {

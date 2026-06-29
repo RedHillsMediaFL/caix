@@ -25,6 +25,9 @@
 - Added a stage-handle factory guard for missing resolved stage assets before Core AI stage load.
 - Added typed distributed worker control/forward message frames for loopback and Thunderbolt
   transport work.
+- Added canonical `DistributedStagePlan` integrity hashes for distributed worker handshakes.
+- Added `HELLO` frame validation for distributed worker plan-hash, stage descriptor, and boundary
+  contract checks.
 - Added the cluster-plan contract check to publication gates.
 - Added fail-closed `caix cluster join` and `caix serve --cluster` CLI stubs for Brew surface tests.
 - Expanded the Homebrew formula test to cover distributed plan/join help and `serve --cluster`.

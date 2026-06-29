@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// Role of one exported bundle in a stage-sharded LLM.
 public enum DistributedStageRole: String, Codable, CaseIterable, Sendable {
@@ -962,6 +963,15 @@ public struct DistributedStagePlan: Codable, Hashable, Sendable {
     public func validate(hiddenStatePacket packet: DistributedHiddenStatePacketMetadata) throws {
         try DistributedRuntimeValidation.validate(packet: packet, in: self)
     }
+
+    public func integrityHash() throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(self)
+        return SHA256.hash(data: data)
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
 }
 
 public struct DistributedWorkerHello: Codable, Hashable, Sendable {
@@ -1003,6 +1013,46 @@ public struct DistributedWorkerHello: Codable, Hashable, Sendable {
         self.freeMemoryBytes = freeMemoryBytes
         self.computeUnit = computeUnit
         self.labels = labels
+    }
+
+    public func validate(
+        against plan: DistributedStagePlan
+    ) throws {
+        try validate(against: plan, expectedPlanIntegrityHash: try plan.integrityHash())
+    }
+
+    public func validate(
+        against plan: DistributedStagePlan,
+        expectedPlanIntegrityHash: String
+    ) throws {
+        guard planIntegrityHash == expectedPlanIntegrityHash else {
+            throw DistributedStageExecutionError.invalidWorkerHello(
+                "plan_integrity_hash mismatch")
+        }
+        guard let expectedStage = plan.stage(id: stage.id) else {
+            throw DistributedStageExecutionError.invalidWorkerHello(
+                "unknown stage_id \(stage.id)")
+        }
+        guard expectedStage == stage else {
+            throw DistributedStageExecutionError.invalidWorkerHello(
+                "stage descriptor does not match plan for \(stage.id)")
+        }
+
+        if let hiddenSize,
+            let expectedHidden = plan.boundaryTensor?.shape.last,
+            expectedHidden > 0,
+            hiddenSize != expectedHidden
+        {
+            throw DistributedStageExecutionError.invalidWorkerHello(
+                "hidden_size \(hiddenSize) does not match boundary tensor hidden size \(expectedHidden)")
+        }
+        if let boundaryScalarType,
+            let expectedScalarType = plan.boundaryTensor?.scalarType,
+            boundaryScalarType != expectedScalarType
+        {
+            throw DistributedStageExecutionError.invalidWorkerHello(
+                "boundary_scalar_type \(boundaryScalarType.rawValue) does not match boundary tensor \(expectedScalarType.rawValue)")
+        }
     }
 }
 
@@ -1445,6 +1495,7 @@ public enum DistributedStageExecutionError: Error, Equatable, Sendable, CustomSt
     case missingStageHandle(String)
     case missingStageAssetPath(String)
     case missingStageAsset(stageID: String, path: String)
+    case invalidWorkerHello(String)
     case invalidForwardInput(String)
     case invalidStageOutput(String)
 
@@ -1462,6 +1513,8 @@ public enum DistributedStageExecutionError: Error, Equatable, Sendable, CustomSt
             return "Missing stage asset path: \(id)"
         case .missingStageAsset(let stageID, let path):
             return "Missing stage asset for \(stageID): \(path)"
+        case .invalidWorkerHello(let message):
+            return "Invalid distributed worker hello: \(message)"
         case .invalidForwardInput(let message):
             return "Invalid distributed forward input: \(message)"
         case .invalidStageOutput(let message):
