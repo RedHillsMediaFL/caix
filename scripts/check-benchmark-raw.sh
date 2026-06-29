@@ -13,7 +13,8 @@ Options:
 Does not run models, download payloads, or contact Hugging Face.
 Fails when committed suite/model raw logs are missing metadata, new or changed raw dirs have dirty
 run-start git status, measured rows fail, pinned model repo revisions are missing, caix commits are
-not present in the repository, suite/model settings drift, or deterministic measured stdout differs.
+not present in the repository, raw outputs point outside the raw evidence tree, suite/model settings
+drift, or deterministic measured stdout differs.
 USAGE
 }
 
@@ -33,6 +34,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -d "$RAW_DIR" ]] || { echo "error: raw benchmark directory not found: $RAW_DIR" >&2; exit 2; }
+RAW_REAL="$(cd "$RAW_DIR" && pwd -P)"
 
 metadata_value() {
   local key="$1"
@@ -72,6 +74,40 @@ resolve_local_path() {
   case "$1" in
     /*) printf '%s\n' "$1" ;;
     *) printf '%s/%s\n' "$REPO_DIR" "$1" ;;
+  esac
+}
+
+canonical_existing_path() {
+  local path="$1"
+  local abs dir base
+
+  abs="$(resolve_local_path "$path")"
+  if [[ -d "$abs" ]]; then
+    (cd "$abs" && pwd -P)
+  else
+    dir="$(cd "$(dirname "$abs")" && pwd -P)" || return 1
+    base="$(basename "$abs")"
+    printf '%s/%s\n' "$dir" "$base"
+  fi
+}
+
+require_path_under_dir() {
+  local label="$1"
+  local path="$2"
+  local parent="$3"
+  local path_real
+
+  path_real="$(canonical_existing_path "$path")" || {
+    echo "error: cannot resolve $label path: $path" >&2
+    return 1
+  }
+
+  case "$path_real" in
+    "$parent"/*) ;;
+    *)
+      echo "error: $label path is outside expected directory: $path" >&2
+      return 1
+      ;;
   esac
 }
 
@@ -145,6 +181,9 @@ check_model_dir() {
   [[ -d "$output" ]] || { echo "error: raw output directory missing for $repo: $output_label" >&2; return 1; }
   [[ -f "$output/metadata.txt" ]] || { echo "error: raw metadata missing for $repo: $output/metadata.txt" >&2; return 1; }
   [[ -f "$output/summary.tsv" ]] || { echo "error: raw summary missing for $repo: $output/summary.tsv" >&2; return 1; }
+  require_path_under_dir "$repo raw output" "$output" "$RAW_REAL" || return 1
+  local output_real
+  output_real="$(canonical_existing_path "$output")" || return 1
   if [[ "$REQUIRE_TRACKED" == "1" ]]; then
     require_tracked_file "$output/metadata.txt" "$repo metadata" || return 1
     require_tracked_file "$output/summary.tsv" "$repo summary" || return 1
@@ -212,6 +251,8 @@ check_model_dir() {
     stderr_file="$(resolve_local_path "$stderr_path")"
     [[ -f "$stdout_file" ]] || { echo "error: measured stdout missing for $repo: $stdout_path" >&2; return 1; }
     [[ -f "$stderr_file" ]] || { echo "error: measured stderr missing for $repo: $stderr_path" >&2; return 1; }
+    require_path_under_dir "$repo measured stdout" "$stdout_file" "$output_real" || return 1
+    require_path_under_dir "$repo measured stderr" "$stderr_file" "$output_real" || return 1
     if [[ "$REQUIRE_TRACKED" == "1" ]]; then
       require_tracked_file "$stdout_file" "$repo measured stdout" || return 1
       require_tracked_file "$stderr_file" "$repo measured stderr" || return 1
