@@ -1,0 +1,7 @@
+[fast] language bundle ok: qwen3-4b-coreai
+[fast] creating engine (auto→pipelined) …
+[fast] engine + tokenizer ready
+[fast] warming up engine …
+[fast] warmup done; generating 128 tokens …
+[fast] generate done in 10.02s
+[coreai] 6 prompt tok, 128 generated, stop=maxTokens, load=4.80s prefill=0.00s decode=10.02s (12.8 tok/s)

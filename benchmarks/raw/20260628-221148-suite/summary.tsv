@@ -1,0 +1,24 @@
+repo	local_dir	kind	benchmark_mode	status	reason	bundle	output
+redhillsmediafl/rhm-qwen2.5-0.5b-instruct-caix	qwen2.5-0.5b-instruct-coreai	standalone	decode	skip	missing local bundle	/Volumes/SSD/caix/models/exports/qwen2.5-0.5b-instruct-coreai	-
+redhillsmediafl/rhm-qwen2.5-3b-instruct-caix	qwen2.5-3b-instruct-coreai	standalone	decode	skip	missing local bundle	/Volumes/SSD/caix/models/exports/qwen2.5-3b-instruct-coreai	-
+redhillsmediafl/rhm-qwen3-0.6b-caix	qwen3-0.6b-coreai	standalone	decode	skip	missing local bundle	/Volumes/SSD/caix/models/exports/qwen3-0.6b-coreai	-
+redhillsmediafl/rhm-qwen3-4b-caix	qwen3-4b-coreai	standalone	decode	measured	-	/Volumes/SSD/caix/models/exports/qwen3-4b-coreai	benchmarks/raw/20260628-221149-qwen3-4b-coreai
+redhillsmediafl/rhm-qwen3-8b-caix	qwen3-8b-coreai	standalone	decode	skip	missing local bundle	/Volumes/SSD/caix/models/exports/qwen3-8b-coreai	-
+redhillsmediafl/rhm-qwen3-14b-caix	qwen3-14b-coreai	standalone	decode	skip	missing local bundle	/Volumes/SSD/caix/models/exports/qwen3-14b-coreai	-
+redhillsmediafl/rhm-ornith-1.0-9b-caix	ornith-1.0-9b-coreai	standalone	decode	skip	missing local bundle	/Volumes/SSD/caix/models/exports/ornith-1.0-9b-coreai	-
+redhillsmediafl/rhm-qwythos-9b-caix	qwythos-9b-coreai	standalone	decode	skip	missing local bundle	/Volumes/SSD/caix/models/exports/qwythos-9b-coreai	-
+redhillsmediafl/rhm-glm-4-9b-0414-caix	glm-4-9b-0414-coreai	standalone	decode	skip	missing local bundle	/Volumes/SSD/caix/models/exports/glm-4-9b-0414-coreai	-
+redhillsmediafl/rhm-glm-4-32b-0414-caix	glm-4-32b-0414-coreai	standalone	decode	skip	missing local bundle	/Volumes/SSD/caix/models/exports/glm-4-32b-0414-coreai	-
+redhillsmediafl/rhm-gpt-oss-20b-caix	gpt-oss-20b-coreai	standalone	decode	skip	missing local bundle	/Volumes/SSD/caix/models/exports/gpt-oss-20b-coreai	-
+redhillsmediafl/rhm-mistral-7b-instruct-v0.3-caix	mistral-7b-instruct-v0.3-coreai	standalone	decode	skip	missing local bundle	/Volumes/SSD/caix/models/exports/mistral-7b-instruct-v0.3-coreai	-
+redhillsmediafl/rhm-mistral-nemo-instruct-2407-caix	mistral-nemo-instruct-2407-coreai	standalone	decode	skip	missing local bundle	/Volumes/SSD/caix/models/exports/mistral-nemo-instruct-2407-coreai	-
+redhillsmediafl/rhm-mistral-small-instruct-2409-caix	mistral-small-instruct-2409-coreai	standalone	decode	skip	missing local bundle	/Volumes/SSD/caix/models/exports/mistral-small-instruct-2409-coreai	-
+redhillsmediafl/rhm-mixtral-8x7b-instruct-caix	mixtral-8x7b-instruct-coreai	standalone	decode	skip	missing local bundle	/Volumes/SSD/caix/models/exports/mixtral-8x7b-instruct-coreai	-
+redhillsmediafl/rhm-qwen3.6-27b-caix	qwen3.6-27b-coreai	standalone	decode	skip	missing local bundle	/Volumes/SSD/caix/models/exports/qwen3.6-27b-coreai	-
+redhillsmediafl/rhm-gemma-4-26b-a4b-caix	gemma-4-26b-a4b-coreai	standalone	decode	skip	missing local bundle	/Volumes/SSD/caix/models/exports/gemma-4-26b-a4b-coreai	-
+redhillsmediafl/rhm-gemma-4-31b-it-caix	gemma-4-31b-it-coreai	standalone	decode	skip	missing local bundle	/Volumes/SSD/caix/models/exports/gemma-4-31b-it-coreai	-
+redhillsmediafl/rhm-gemma-4-26b-a4b-mtp-caix	gemma-4-26b-a4b-mtp-coreai	mtp	eagle-mtp	skip	missing local bundle	/Volumes/SSD/caix/models/exports/gemma-4-26b-a4b-mtp-coreai	-
+redhillsmediafl/rhm-gemma-4-31b-it-mtp-caix	gemma-4-31b-it-mtp-coreai	mtp	eagle-mtp	skip	missing local bundle	/Volumes/SSD/caix/models/exports/gemma-4-31b-it-mtp-coreai	-
+redhillsmediafl/rhm-qwen3-4b-mtp-caix	qwen3-4b-mtp-coreai	mtp	speculative	skip	missing local bundle	/Volumes/SSD/caix/models/exports/qwen3-4b-mtp-coreai	-
+redhillsmediafl/rhm-gemma-4-26b-a4b-draft-caix	gemma-4-26b-a4b-draft-coreai	draft	manual	skip	component_only: draft component; benchmark with matching target	/Volumes/SSD/caix/models/exports/gemma-4-26b-a4b-draft-coreai	-
+redhillsmediafl/rhm-gemma-4-31b-it-draft-caix	gemma-4-31b-it-draft-coreai	draft	manual	skip	component_only: draft component; benchmark with matching target	/Volumes/SSD/caix/models/exports/gemma-4-31b-it-draft-coreai	-
