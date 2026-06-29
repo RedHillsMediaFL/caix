@@ -37,6 +37,8 @@
   produce raw benchmark logs instead of staying manual-only.
 - Added benchmark-mode fields to suite summaries and reports so standalone, classic speculative,
   and EAGLE measurements stay separate.
+- Canonicalized EAGLE benchmark rows as `eagle-mtp`, guarded the manifest mode values, and kept
+  older `eagle` suite summaries readable.
 - Added a reusable disk-pressure guard and wired benchmark runners to fail before writing logs when
   the checked volume is below the configured free-space floor.
 - Added a disk preflight for dashboard RHM bundle downloads before launching `hf download`.

@@ -23,7 +23,7 @@ Options:
 Every manifest row is recorded as measured, planned, or skipped with a reason.
 This script does not download models and does not publish numbers.
 Rows with benchmark_mode=speculative use scripts/benchmark-model.sh with <bundle>/draft.
-Rows with benchmark_mode=eagle use scripts/benchmark-eagle.sh against package layouts that contain
+Rows with benchmark_mode=eagle-mtp use scripts/benchmark-eagle.sh against package layouts that contain
 eagle_target.aimodel, eagle_draft.aimodel, and tokenizer/.
 USAGE
 }
@@ -97,6 +97,13 @@ revision_for_repo() {
   ' "$REVISIONS"
 }
 
+canonical_benchmark_mode() {
+  case "$1" in
+    eagle) printf 'eagle-mtp' ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
 heavy_task_guard() {
   local lock="$REPO_DIR/.agent-heavy-task.lock"
   if [[ -e "$lock" ]]; then
@@ -146,6 +153,9 @@ failed=0
 while IFS=$'\t' read -r repo local_dir kind mode status notes; do
   [[ -z "${repo:-}" || "$repo" == "repo" || "$repo" == \#* ]] && continue
   total=$((total + 1))
+  canonical_mode="$(canonical_benchmark_mode "$mode")"
+  is_eagle=0
+  [[ "$canonical_mode" == "eagle-mtp" ]] && is_eagle=1
 
   bundle="$EXPORTS/$local_dir"
   output="-"
@@ -156,22 +166,22 @@ while IFS=$'\t' read -r repo local_dir kind mode status notes; do
     reason="$status"
     [[ -n "${notes:-}" ]] && reason="$reason: $notes"
     skipped=$((skipped + 1))
-  elif [[ "$mode" != "decode" && "$mode" != "speculative" && "$mode" != "eagle" ]]; then
+  elif [[ "$canonical_mode" != "decode" && "$canonical_mode" != "speculative" && "$canonical_mode" != "eagle-mtp" ]]; then
     reason="unsupported benchmark mode: $mode"
     skipped=$((skipped + 1))
   elif [[ ! -d "$bundle" ]]; then
     reason="missing local bundle"
     skipped=$((skipped + 1))
-  elif [[ "$mode" == "speculative" && ! -d "$bundle/draft" ]]; then
+  elif [[ "$canonical_mode" == "speculative" && ! -d "$bundle/draft" ]]; then
     reason="missing draft bundle"
     skipped=$((skipped + 1))
-  elif [[ "$mode" == "eagle" && ! -d "$bundle/eagle_target.aimodel" ]]; then
+  elif [[ "$is_eagle" == "1" && ! -d "$bundle/eagle_target.aimodel" ]]; then
     reason="missing EAGLE target package"
     skipped=$((skipped + 1))
-  elif [[ "$mode" == "eagle" && ! -d "$bundle/eagle_draft.aimodel" ]]; then
+  elif [[ "$is_eagle" == "1" && ! -d "$bundle/eagle_draft.aimodel" ]]; then
     reason="missing EAGLE draft package"
     skipped=$((skipped + 1))
-  elif [[ "$mode" == "eagle" && ! -d "$bundle/tokenizer" ]]; then
+  elif [[ "$is_eagle" == "1" && ! -d "$bundle/tokenizer" ]]; then
     reason="missing EAGLE tokenizer"
     skipped=$((skipped + 1))
   elif [[ "$DRY_RUN" == "1" ]]; then
@@ -183,7 +193,7 @@ while IFS=$'\t' read -r repo local_dir kind mode status notes; do
     revision="$(revision_for_repo "$repo")"
     row_revision="$REPO_REVISION"
     [[ -n "$revision" ]] && row_revision="$revision"
-    if [[ "$mode" == "eagle" ]]; then
+    if [[ "$is_eagle" == "1" ]]; then
       cmd=("$SCRIPT_DIR/benchmark-eagle.sh"
         --package "$bundle"
         --name "$local_dir"
@@ -206,7 +216,7 @@ while IFS=$'\t' read -r repo local_dir kind mode status notes; do
         --warmup "$WARMUP"
         --runs "$RUNS"
         --out "$OUT_ROOT")
-      [[ "$mode" == "speculative" ]] && cmd+=(--draft "$bundle/draft" --draft-tokens 4)
+      [[ "$canonical_mode" == "speculative" ]] && cmd+=(--draft "$bundle/draft" --draft-tokens 4)
     fi
     [[ "$RAW" == "1" ]] && cmd+=(--raw)
 
@@ -221,7 +231,7 @@ while IFS=$'\t' read -r repo local_dir kind mode status notes; do
   fi
 
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$repo" "$local_dir" "$kind" "$mode" "$row_status" "$reason" "$bundle" "$output" >> "$SUMMARY"
+    "$repo" "$local_dir" "$kind" "$canonical_mode" "$row_status" "$reason" "$bundle" "$output" >> "$SUMMARY"
 done < "$MANIFEST"
 
 {

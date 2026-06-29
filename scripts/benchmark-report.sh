@@ -52,6 +52,13 @@ metadata_value() {
   ' "$file"
 }
 
+canonical_benchmark_mode() {
+  case "$1" in
+    eagle) printf 'eagle-mtp' ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
 count_measured_ok() {
   awk -F '\t' 'NR > 1 && $1 == "measured" && $3 == "ok" && $8 ~ /^[0-9]+([.][0-9]+)?$/ { n++ } END { print n + 0 }' "$1"
 }
@@ -127,6 +134,7 @@ while IFS=$'\t' read -r repo local_dir kind col4 col5 col6 col7 col8; do
       output="$col7"
       ;;
   esac
+  benchmark_mode="$(canonical_benchmark_mode "$benchmark_mode")"
 
   repo_revision="-"
   publishable="no"
@@ -177,6 +185,7 @@ while IFS=$'\t' read -r repo local_dir kind col4 col5 col6 col7 col8; do
     prompt="$(metadata_value prompt "$output/metadata.txt")"
     raw_mode="$(metadata_value benchmark_mode "$output/metadata.txt")"
     [[ -n "$raw_mode" ]] && benchmark_mode="$raw_mode"
+    benchmark_mode="$(canonical_benchmark_mode "$benchmark_mode")"
 
     median_generated="$(median_field "$output/summary.tsv" 4)"
     median_load="$(median_field "$output/summary.tsv" 5)"

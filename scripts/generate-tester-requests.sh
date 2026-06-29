@@ -81,11 +81,17 @@ EOF
     function sha(repo) {
       return (repo in revision) ? revision[repo] : "<record-before-testing>"
     }
+    function ready_mode(mode) {
+      return mode == "decode" || mode == "speculative" || mode == "eagle" || mode == "eagle-mtp"
+    }
+    function request_for(mode) {
+      if (mode == "speculative") return "classic speculative load, generation, benchmark"
+      if (mode == "eagle" || mode == "eagle-mtp") return "EAGLE MTP load, generation, benchmark"
+      return "load, generation, benchmark"
+    }
     $1 == "" || $1 == "repo" || $1 ~ /^#/ { next }
-    ($4 == "decode" || $4 == "speculative" || $4 == "eagle") && $5 == "eligible" {
-      request = "load, generation, benchmark"
-      if ($4 == "speculative") request = "classic speculative load, generation, benchmark"
-      if ($4 == "eagle") request = "EAGLE MTP load, generation, benchmark"
+    ready_mode($4) && $5 == "eligible" {
+      request = request_for($4)
       printf "| `%s` | `%s` | `%s` | %s | %s |\n",
         cell($1), sha($1), cell($2), request, cell($6)
     }
@@ -118,8 +124,11 @@ EOF
     function sha(repo) {
       return (repo in revision) ? revision[repo] : "<record-before-testing>"
     }
+    function ready_mode(mode) {
+      return mode == "decode" || mode == "speculative" || mode == "eagle" || mode == "eagle-mtp"
+    }
     $1 == "" || $1 == "repo" || $1 ~ /^#/ { next }
-    !(($4 == "decode" || $4 == "speculative" || $4 == "eagle") && $5 == "eligible") {
+    !(ready_mode($4) && $5 == "eligible") {
       request = ($3 == "draft") ? "component; do not test alone" : "manual target plus draft"
       printf "| `%s` | `%s` | `%s` | %s | %s |\n",
         cell($1), sha($1), cell($2), request, cell($6)

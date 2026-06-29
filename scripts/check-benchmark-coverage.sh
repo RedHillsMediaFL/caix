@@ -15,6 +15,7 @@ Options:
 Reads Hugging Face metadata only. Does not download model files.
 Fails when a live redhillsmediafl/rhm-*-caix repo is missing from the manifest, or when the
 manifest contains a repo that no longer appears in live caix repo discovery.
+Also fails on non-canonical benchmark_mode values.
 USAGE
 }
 
@@ -41,6 +42,18 @@ done
 [[ "$LIMIT" =~ ^[1-9][0-9]*$ ]] || { echo "error: --limit must be a positive integer" >&2; exit 2; }
 command -v hf >/dev/null 2>&1 || { echo "error: hf CLI not found" >&2; exit 2; }
 command -v jq >/dev/null 2>&1 || { echo "error: jq is required to parse hf JSON" >&2; exit 2; }
+
+mode_errors="$(awk -F '\t' '
+  $1 == "" || $1 == "repo" || $1 ~ /^#/ { next }
+  $4 != "decode" && $4 != "speculative" && $4 != "eagle-mtp" && $4 != "manual" {
+    printf "%s\t%s\n", $1, $4
+  }
+' "$MANIFEST")"
+if [[ -n "$mode_errors" ]]; then
+  echo "error: unsupported or non-canonical benchmark_mode values in $MANIFEST:" >&2
+  printf '%s\n' "$mode_errors" >&2
+  exit 1
+fi
 
 live_tmp="$(mktemp "${TMPDIR:-/tmp}/caix-live-repos.XXXXXX")"
 manifest_tmp="$(mktemp "${TMPDIR:-/tmp}/caix-manifest-repos.XXXXXX")"
