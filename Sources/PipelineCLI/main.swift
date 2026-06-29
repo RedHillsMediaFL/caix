@@ -465,8 +465,8 @@ func eagleCommand(_ argv: [String]) {
     var tokenizer: String?
     var prompt: String?
     var maxTokens = 64
-    var draftTokens = 4   // sweet spot on the sequential engine: K=4 maximizes tok/s across content
-                          // (K>=8 overflows the full-layer SDPA threadgroup limit on the verify forward)
+    var draftTokens = 4   // Default for current EAGLE packages.
+                          // K>=8 overflows the full-layer SDPA threadgroup limit on verify.
     var applyChatTemplate = true
     var verbose = false
     var targetOnly = false
@@ -635,8 +635,8 @@ func serveCommand(_ argv: [String]) {
     var python = "python3"
     var verbose = false
     var statsFile: String? = nil   // usage-stats persistence (default ~/.caix/usage.json)
-    // EAGLE MTP model (the fastest gemma we built). Enabled by default with the known bundle paths;
-    // disable with --no-eagle, or override paths individually.
+    // EAGLE MTP model. Enabled by default with the known bundle paths; disable with --no-eagle,
+    // or override paths individually.
     var eagleEnabled = true
     var eagleName = "gemma-4-26b-a4b-mtp"
     var eagleTarget = cwd + "/exports/gemma-4-26b-a4b-eagle-target/eagle_target.aimodel"

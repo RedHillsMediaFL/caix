@@ -31,7 +31,7 @@ final class ModelHandle: @unchecked Sendable {
         case persistent(PersistentModel)
         case speculative(PersistentSpeculativeModel)
         #if COREAI_RUNTIME
-        case eagle(EagleEngine)  // fastest gemma MTP (EAGLE speculative decoding)
+        case eagle(EagleEngine)  // EAGLE speculative decoding
         #endif
     }
     let backend: Backend

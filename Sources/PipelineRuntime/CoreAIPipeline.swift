@@ -320,10 +320,9 @@ public enum CoreAIPipeline {
         onToken: ((String) -> Void)? = nil
     ) async throws -> Result {
         #if COREAI_RUNTIME
-        // Fast path: drive LLM generation through Apple's pipelined engine (≈1.7× our sequential
-        // engine). Returns nil for diffusion / non-language bundles, which fall through to
-        // `LLMEngine` (diffusion denoise + the legacy sequential decode). `COREAI_LEGACY_ENGINE=1`
-        // forces the old path (e.g. when logits / topP / speculative parity are needed).
+        // Fast path: drive LLM generation through Apple's pipelined engine. Returns nil for
+        // diffusion / non-language bundles, which fall through to `LLMEngine` (diffusion denoise +
+        // the legacy sequential decode). `COREAI_LEGACY_ENGINE=1` forces the old path.
         if shouldTryFastLanguagePath(modelPath: modelPath, verbose: options.verbose) {
             if let fast = try await PipelinedLLM.runIfLanguage(
                 modelPath: modelPath, prompt: prompt, options: options, onToken: onToken) {
@@ -513,7 +512,7 @@ public enum CoreAIPipeline {
     /// EAGLE / MTP speculative decoding (Gemma-4). The target (`Gemma4EagleTarget`, 6-output) and
     /// draft (`Gemma4AssistantForCausalLM`, cross-attends the target KV) are raw `.aimodel`s with
     /// custom contracts, so they are driven directly (not via `ResolvedBundle`). Greedy: output is
-    /// byte-identical to the target alone; the headline is acceptance + tok/s.
+    /// byte-identical to the target alone; metrics report acceptance and decode throughput.
     @discardableResult
     public static func runEagle(
         targetAimodel: String,

@@ -1,11 +1,9 @@
 // Fast LLM generation backed by Apple's `CoreAILanguageModels` engines.
 //
-// WHY THIS EXISTS: our hand-rolled `LLMEngine` mirrors Apple's *sequential* reference engine
-// (blocking `function.run()` + host-side sampling), which pays a CPU↔GPU sync round-trip every
-// token (~10 ms even for a 0.6B model). Apple's own `EngineFactory` auto-selects the
-// `CoreAIPipelinedEngine` for dynamic-shape bundles — non-blocking `encode`, GPU-side sampling,
-// double-buffered — which on the *same* bundle runs qwen3-4b at ~101 tok/s vs ~60. So the fast
-// path is to drive generation through Apple's documented engine, not to micro-optimize ours.
+// WHY THIS EXISTS: our hand-rolled `LLMEngine` mirrors Apple's sequential reference engine
+// (blocking `function.run()` plus host-side sampling). Apple's `EngineFactory` can select the
+// pipelined engine for compatible dynamic-shape bundles, so this path drives generation through
+// that engine while preserving caix prompt handling and result accounting.
 #if COREAI_RUNTIME
 
 import CoreAI
@@ -86,22 +84,8 @@ enum PipelinedLLM {
                 ? .greedy
                 : SamplingConfiguration(temperature: options.temperature, topK: options.topK, topP: nil)
 
-            let input: Input
-            let promptTokenCount: Int
-            if options.applyChatTemplate {
-                let ids: [Int]
-                if let tools, !tools.isEmpty {
-                    ids = try tokenizer.applyChatTemplate(messages: messages, tools: tools)
-                } else {
-                    ids = try tokenizer.applyChatTemplate(messages: messages)
-                }
-                input = .tokens(ids)
-                promptTokenCount = ids.count
-            } else {
-                let text = messages.map { $0["content"] ?? "" }.joined()
-                input = .rawText(text)
-                promptTokenCount = tokenizer.encode(text: text).count
-            }
+            let prepared = try makeInput(
+                messages: messages, tools: tools, options: options, tokenizer: tokenizer)
 
             if !warmedSamplingKeys.contains(samplingKey) {
                 requestDbg("warming up engine ...")
@@ -113,12 +97,12 @@ enum PipelinedLLM {
             }
 
             let result = try await decodeWithVanillaStrategy(
-                input: input,
+                input: prepared.input,
                 tokenizer: tokenizer,
                 inferenceEngine: engine,
                 samplingConfiguration: sampling,
                 options: options,
-                promptTokenCount: promptTokenCount,
+                promptTokenCount: prepared.promptTokenCount,
                 modelLoadSeconds: loadSeconds,
                 onToken: onToken)
             requestDbg("generate done in \(String(format: "%.2f", result.decodeSeconds))s")
@@ -136,6 +120,26 @@ enum PipelinedLLM {
     private static func samplingWarmupKey(_ options: CoreAIPipeline.Options) -> String {
         let topK = options.topK.map(String.init) ?? "nil"
         return options.temperature <= 0 ? "greedy" : "temperature=\(options.temperature);topK=\(topK)"
+    }
+
+    private static func makeInput(
+        messages: [[String: String]],
+        tools: [[String: any Sendable]]?,
+        options: CoreAIPipeline.Options,
+        tokenizer: any Tokenizer
+    ) throws -> (input: Input, promptTokenCount: Int) {
+        let ids: [Int]
+        if options.applyChatTemplate {
+            if let tools, !tools.isEmpty {
+                ids = try tokenizer.applyChatTemplate(messages: messages, tools: tools)
+            } else {
+                ids = try tokenizer.applyChatTemplate(messages: messages)
+            }
+        } else {
+            let text = messages.map { $0["content"] ?? "" }.joined()
+            ids = tokenizer.encode(text: text)
+        }
+        return (.tokens(ids), ids.count)
     }
 
     /// Generate via Apple's pipelined engine if `modelPath` is a language bundle. Returns `nil`
@@ -207,24 +211,9 @@ enum PipelinedLLM {
 
         let modelLoadSeconds = Date().timeIntervalSince(loadStart)
 
-        // Apply the chat template ourselves via a proper messages array and pass PRE-TOKENIZED ids
-        // (`.tokens`), bypassing the engine's string-based `.prompt` templating.
-        let input: Input
-        let promptTokenCount: Int
-        if options.applyChatTemplate {
-            let ids: [Int]
-            if let tools, !tools.isEmpty {
-                ids = try tokenizer.applyChatTemplate(messages: messages, tools: tools)
-            } else {
-                ids = try tokenizer.applyChatTemplate(messages: messages)
-            }
-            input = .tokens(ids)
-            promptTokenCount = ids.count
-        } else {
-            let text = messages.map { $0["content"] ?? "" }.joined()
-            input = .rawText(text)
-            promptTokenCount = tokenizer.encode(text: text).count
-        }
+        // Pass pre-tokenized ids so the decoder does not tokenize the same prompt again.
+        let prepared = try makeInput(
+            messages: messages, tools: tools, options: options, tokenizer: tokenizer)
 
         // REQUIRED for the pipelined engine: warm up the decode/prefill graph shapes. Without this
         // the first encode loop deadlocks waiting on uncompiled shapes (llm-runner does the same).
@@ -232,12 +221,12 @@ enum PipelinedLLM {
         try await engine.warmup(queryLength: 0, sampling: sampling)
         dbg("warmup done; generating \(options.maxTokens) tokens …")
         let result = try await decodeWithVanillaStrategy(
-            input: input,
+            input: prepared.input,
             tokenizer: tokenizer,
             inferenceEngine: engine,
             samplingConfiguration: sampling,
             options: options,
-            promptTokenCount: promptTokenCount,
+            promptTokenCount: prepared.promptTokenCount,
             modelLoadSeconds: modelLoadSeconds,
             onToken: onToken)
         dbg("generate done in \(String(format: "%.2f", result.decodeSeconds))s")
