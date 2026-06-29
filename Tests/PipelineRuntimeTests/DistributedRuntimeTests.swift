@@ -535,6 +535,7 @@ final class DistributedRuntimeTests: XCTestCase {
 
         XCTAssertEqual(handle.allocatedRequests, ["req-1"])
         XCTAssertEqual(handle.resetRequests, ["req-1"])
+        XCTAssertEqual(handle.freeRequests, ["req-1"])
     }
 
     func testWorkerFrameExecutorProcessesForwardFrame() async throws {
@@ -785,6 +786,15 @@ final class DistributedRuntimeTests: XCTestCase {
 
         await XCTAssertThrowsErrorAsync(
             try await executor.process(DistributedWorkerWireFrame(
+                message: .free(DistributedRequestControl(
+                    requestID: "req-1", stageID: "layers-16-32"))))
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidControlFrame("request_id req-1 is not allocated"))
+        }
+        await XCTAssertThrowsErrorAsync(
+            try await executor.process(DistributedWorkerWireFrame(
                 message: .forward(DistributedStageForwardFrame(
                     stageID: "layers-16-32",
                     requestID: "req-1",
@@ -799,6 +809,24 @@ final class DistributedRuntimeTests: XCTestCase {
                 .invalidForwardInput("request_id req-1 is not allocated"))
         }
         XCTAssertTrue(handle.inputs.isEmpty)
+        XCTAssertEqual(handle.freeRequests, ["req-1"])
+    }
+
+    func testWorkerFrameExecutorRejectsFreeBeforeAllocate() async throws {
+        let plan = makePlan()
+        let handle = makeFakeHandles(for: plan)[1]
+        let executor = try DistributedWorkerFrameExecutor(plan: plan, handle: handle)
+
+        await XCTAssertThrowsErrorAsync(
+            try await executor.process(DistributedWorkerWireFrame(
+                message: .free(DistributedRequestControl(
+                    requestID: "req-1", stageID: handle.descriptor.id))))
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidControlFrame("request_id req-1 is not allocated"))
+        }
+        XCTAssertTrue(handle.freeRequests.isEmpty)
     }
 
     func testWorkerFrameExecutorRejectsWrongStageFrame() async throws {
@@ -886,6 +914,7 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertTrue(handle.inputs.isEmpty)
         XCTAssertTrue(handle.allocatedRequests.isEmpty)
         XCTAssertTrue(handle.resetRequests.isEmpty)
+        XCTAssertTrue(handle.freeRequests.isEmpty)
     }
 
     func testRemoteStageHandleRoundTripsThroughWorkerExecutor() async throws {
@@ -2158,6 +2187,7 @@ private final class FakeDistributedStageHandle: DistributedStageHandle {
     var allocatedRequests: [String] = []
     var inputs: [DistributedStageForwardInput] = []
     var resetRequests: [String] = []
+    var freeRequests: [String] = []
     private let output: (DistributedStageForwardInput) throws -> DistributedStageForwardOutput
 
     init(
@@ -2181,7 +2211,9 @@ private final class FakeDistributedStageHandle: DistributedStageHandle {
         resetRequests.append(requestID)
     }
 
-    func free(requestID: String) async {}
+    func free(requestID: String) async {
+        freeRequests.append(requestID)
+    }
 }
 
 private final class FakeDistributedStageHandleFactory: DistributedStageHandleFactory {

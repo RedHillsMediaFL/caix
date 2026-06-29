@@ -236,7 +236,8 @@ header followed by the raw payload (§4).
 - `FORWARD` — §5.2.
 - `RESET` {request_id}: worker rolls KV back to 0 (cheap; only the position counter moves —
   `LLMEngine.rollbackKV`, `:612-615`).
-- `FREE` {request_id}: worker drops the KV for that request.
+- `FREE` {request_id}: worker drops the KV for an active request. Unknown request IDs are
+  rejected before stage teardown runs.
 - `ERROR` {code, detail}: terminal for the current request.
 
 ### 5.2 Prefill flow

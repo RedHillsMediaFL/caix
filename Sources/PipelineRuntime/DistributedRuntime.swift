@@ -1791,6 +1791,14 @@ public struct DistributedWorkerRequestTracker: Sendable {
         requests[control.requestID] = RequestState(kvCapacity: state.kvCapacity)
     }
 
+    public func validateFree(_ control: DistributedRequestControl) throws {
+        try control.validate()
+        guard requests[control.requestID] != nil else {
+            throw DistributedStageExecutionError.invalidControlFrame(
+                "request_id \(control.requestID) is not allocated")
+        }
+    }
+
     public mutating func commitFree(_ control: DistributedRequestControl) {
         requests.removeValue(forKey: control.requestID)
     }
@@ -1885,6 +1893,7 @@ public final class DistributedWorkerFrameExecutor {
             return nil
         case .free(let control):
             try ensureTarget(stageID: control.stageID)
+            try requestTracker.validateFree(control)
             await handle.free(requestID: control.requestID)
             requestTracker.commitFree(control)
             return nil
