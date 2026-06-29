@@ -83,6 +83,7 @@ active_jobs() {
     /(^|[[:space:]\/])huggingface-cli (download|upload|upload-large-folder)/ { print; next }
     /(^|[[:space:]\/])git-lfs([[:space:]]|$)/ { print; next }
     /(^|[[:space:]\/])git([[:space:]]+[^[:space:]]+){0,8}[[:space:]]+lfs[[:space:]]+(fetch|pull|push|checkout|prune|migrate|upload|download)/ { print; next }
+    $6 ~ /(^|\/)(curl|rsync|tar|zip)$/ { print; next }
     /\.build\/(debug|release)\/caix (run|eagle)/ { print; next }
     /(^|\/)(caix|coreai-pipeline) (run|eagle)/ { print; next }
     /(^|\/)swift (build|test)|swift-package|swiftc|swift-frontend|xctest/ { print; next }

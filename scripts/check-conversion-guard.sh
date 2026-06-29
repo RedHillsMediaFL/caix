@@ -91,6 +91,19 @@ for expected in "git-lfs upload" "git lfs push" "git -C /tmp/repo lfs pull" "hug
   fi
 done
 
+bulk_table=$'201 1 00:01 0.0 0.1 /usr/bin/curl -L https://example.test/model.bin\n202 1 00:01 0.0 0.1 /usr/bin/rsync -a source/ dest/\n203 1 00:01 0.0 0.1 /usr/bin/tar -cf model.tar models/exports\n204 1 00:01 0.0 0.1 /usr/bin/zip -r model.zip models/exports'
+if env caix_heavy_task_lock="$tmpdir/no-lock" caix_test_process_table="$bulk_table" \
+    "$SCRIPT_DIR/conversion-guard.sh" >"$tmpdir/bulk.txt" 2>&1; then
+  echo "error: conversion-guard ignored bulk transfer/archive activity" >&2
+  exit 1
+fi
+for expected in "/usr/bin/curl" "/usr/bin/rsync" "/usr/bin/tar" "/usr/bin/zip"; do
+  if ! grep -F -- "$expected" "$tmpdir/bulk.txt" >/dev/null; then
+    echo "error: conversion-guard did not report bulk activity: $expected" >&2
+    exit 1
+  fi
+done
+
 fake_jobs=$'123 1 00:01 0.0 0.1 hf download repo --api-key exposed-key CAIX_SECRET=exposed-secret Bearer exposed-bearer https://user:exposed-url@example.test/repo'
 if env caix_heavy_task_lock="$tmpdir/no-lock" caix_test_active_jobs="$fake_jobs" \
     "$SCRIPT_DIR/conversion-guard.sh" >"$tmpdir/redacted.txt" 2>&1; then
