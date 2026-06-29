@@ -25,6 +25,8 @@
   submissions.
 - Added a public-copy guard script for benchmark placeholders, hype, unsupported support-product
   wording, and vague model-size language.
+- Added a benchmark coverage guard that compares the manifest with live RHM caix repos on Hugging
+  Face.
 - Added a reusable disk-pressure guard and wired benchmark runners to fail before writing logs when
   the checked volume is below the configured free-space floor.
 - Added a disk preflight for dashboard RHM bundle downloads before launching `hf download`.
@@ -33,6 +35,7 @@
 - Added a generated tester request sheet for model verification and raw benchmark collection.
 - Added `caix catalog` for metadata-backed Hugging Face caix repo discovery.
 - Added exact Hub revisions to `caix catalog` install commands when the metadata includes a SHA.
+- Pinned dashboard RHM downloads to the discovered Hub revision and defaulted direct bundles to the metadata bundle name.
 - Added explicit text-only errors for OpenAI/Anthropic requests that include multimodal content blocks.
 - Added server-side discovery for installable `redhillsmediafl/*-caix` Hugging Face model repos.
 - Added `POST /api/rhm-download` to install already-converted RHM Core AI bundles into the local exports directory.

@@ -142,7 +142,8 @@ actor JobTracker {
     /// convert.py re-gates on support and refuses model types that still need Core AI authoring.
     /// Tracked under `name`.
     func startConvertHF(name: String, hfRepo: String, compression: String, precision: String,
-                        context: Int?, script: String, workingDir: URL, pythonExecutable: String)
+                        context: Int?, script: String, workingDir: URL, pythonExecutable: String,
+                        reserveBytes: Int64 = DiskSpaceGuard.reserveBytesFromEnvironment())
         -> String?
     {
         if let existing = jobs[name], existing.state == .running {
@@ -150,6 +151,14 @@ actor JobTracker {
         }
         guard FileManager.default.fileExists(atPath: script) else {
             return "converter not found at \(script)"
+        }
+        if let err = DiskSpaceGuard.preflightInstall(
+            destinationRoot: workingDir,
+            incomingBytes: nil,
+            reserveBytes: reserveBytes,
+            label: "model conversion")
+        {
+            return err
         }
         var argv = [script, "--hf-id", hfRepo, "--name", name,
                     "--compression", compression, "--compute-precision", precision]
@@ -186,12 +195,21 @@ actor JobTracker {
     /// Tracked under `name`; support is checked after dequantization inside the converter.
     func startConvertGGUF(name: String, ggufRepo: String, ggufFile: String?, compression: String,
                           precision: String, context: Int?, script: String, workingDir: URL,
-                          pythonExecutable: String) -> String? {
+                          pythonExecutable: String,
+                          reserveBytes: Int64 = DiskSpaceGuard.reserveBytesFromEnvironment()) -> String? {
         if let existing = jobs[name], existing.state == .running {
             return "conversion already running for \(name)"
         }
         guard FileManager.default.fileExists(atPath: script) else {
             return "converter not found at \(script)"
+        }
+        if let err = DiskSpaceGuard.preflightInstall(
+            destinationRoot: workingDir,
+            incomingBytes: nil,
+            reserveBytes: reserveBytes,
+            label: "model conversion")
+        {
+            return err
         }
         var argv = [script, "--gguf", ggufRepo, "--name", name,
                     "--compression", compression, "--compute-precision", precision]
@@ -229,6 +247,7 @@ actor JobTracker {
     func startDownloadRHM(
         name: String,
         hfRepo: String,
+        revision: String? = nil,
         exportsDir: URL,
         estimatedBytes: Int64? = nil,
         reserveBytes: Int64 = DiskSpaceGuard.reserveBytesFromEnvironment()
@@ -253,7 +272,11 @@ actor JobTracker {
         }
 
         let destination = exportsDir.appendingPathComponent(name, isDirectory: true)
-        let argv = ["hf", "download", hfRepo, "--local-dir", destination.path]
+        var argv = ["hf", "download", hfRepo]
+        if let revision = revision?.trimmingCharacters(in: .whitespacesAndNewlines), !revision.isEmpty {
+            argv += ["--revision", revision]
+        }
+        argv += ["--local-dir", destination.path]
         let (logURL, logHandle) = Self.openLog(kind: "download-rhm", name: name, argv: argv)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")

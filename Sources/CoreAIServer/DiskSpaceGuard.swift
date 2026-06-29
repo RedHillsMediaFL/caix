@@ -23,12 +23,18 @@ struct DiskSpaceGuard {
     static func preflightInstall(
         destinationRoot: URL,
         incomingBytes: Int64?,
-        reserveBytes: Int64 = reserveBytesFromEnvironment()
+        reserveBytes: Int64 = reserveBytesFromEnvironment(),
+        label: String = "model install"
     ) -> String? {
         guard let available = availableBytes(for: destinationRoot) else {
             return "disk preflight failed: could not inspect free space for \(destinationRoot.path)"
         }
-        switch evaluate(availableBytes: available, incomingBytes: incomingBytes, reserveBytes: reserveBytes) {
+        switch evaluate(
+            availableBytes: available,
+            incomingBytes: incomingBytes,
+            reserveBytes: reserveBytes,
+            label: label)
+        {
         case .allow:
             return nil
         case .reject(let message):
@@ -36,7 +42,12 @@ struct DiskSpaceGuard {
         }
     }
 
-    static func evaluate(availableBytes: Int64, incomingBytes: Int64?, reserveBytes: Int64) -> Decision {
+    static func evaluate(
+        availableBytes: Int64,
+        incomingBytes: Int64?,
+        reserveBytes: Int64,
+        label: String = "model install"
+    ) -> Decision {
         let payloadBytes = max(0, incomingBytes ?? 0)
         let floorBytes = max(0, reserveBytes)
         let (requiredBytes, overflow) = floorBytes.addingReportingOverflow(payloadBytes)
@@ -44,7 +55,7 @@ struct DiskSpaceGuard {
             let payload = incomingBytes.map { formatBytes(max(0, $0)) } ?? "unknown"
             let required = overflow ? "overflow" : formatBytes(requiredBytes)
             return .reject(
-                "insufficient disk for model install: free \(formatBytes(availableBytes)), required \(required) (payload \(payload) + reserve \(formatBytes(floorBytes)))")
+                "insufficient disk for \(label): free \(formatBytes(availableBytes)), required \(required) (payload \(payload) + reserve \(formatBytes(floorBytes)))")
         }
         return .allow
     }

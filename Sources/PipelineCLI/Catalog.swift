@@ -80,6 +80,8 @@ struct CatalogResult: Codable {
 struct CatalogEntry: Codable {
     var repo: String
     var revision: String?
+    var bundleName: String?
+    var localDir: String?
     var base: String
     var size: String
     var sizeBytes: Int64?
@@ -109,7 +111,7 @@ enum Catalog {
         entries.reserveCapacity(refs.count)
         for ref in refs {
             guard let detail = try? await fetchModel(repo: ref.repo) else { continue }
-            let readme = try? await fetchREADME(repo: ref.repo)
+            let readme = try? await fetchREADME(repo: detail.repo, revision: detail.revision)
             entries.append(entry(from: detail, readme: readme))
         }
         entries.sort { $0.repo < $1.repo }
@@ -127,6 +129,12 @@ enum Catalog {
             lines.append("")
             lines.append(entry.repo)
             lines.append("  revision: \(entry.revision ?? "unknown")")
+            if let bundleName = entry.bundleName {
+                lines.append("  bundle: \(bundleName)")
+            }
+            if let localDir = entry.localDir {
+                lines.append("  local-dir: models/exports/\(localDir)")
+            }
             lines.append("  base: \(entry.base)")
             lines.append("  size: \(entry.size)")
             lines.append("  license: \(entry.license)")
@@ -189,9 +197,15 @@ enum Catalog {
         let tags = obj["tags"] as? [String] ?? []
         let siblings = (obj["siblings"] as? [[String: Any]] ?? []).compactMap { $0["rfilename"] as? String }
         let card = obj["cardData"] as? [String: Any]
+        let resolvedRepo = (obj["id"] as? String) ?? repo
+        let revision = obj["sha"] as? String
+        let metadata = siblings.contains("metadata.json")
+            ? try? await fetchBundleMetadata(repo: resolvedRepo, revision: revision)
+            : nil
         return ModelDetail(
-            repo: (obj["id"] as? String) ?? repo,
-            revision: obj["sha"] as? String,
+            repo: resolvedRepo,
+            revision: revision,
+            bundleName: safeLocalName(metadata?.name),
             tags: tags,
             siblings: siblings,
             usedStorage: int64Value(obj["usedStorage"]),
@@ -199,8 +213,9 @@ enum Catalog {
             cardData: card)
     }
 
-    private static func fetchREADME(repo: String) async throws -> String {
-        let url = apiURL(repo.split(separator: "/").map(String.init) + ["resolve", "main", "README.md"])
+    private static func fetchREADME(repo: String, revision: String?) async throws -> String {
+        let ref = revision?.isEmpty == false ? revision! : "main"
+        let url = apiURL(repo.split(separator: "/").map(String.init) + ["resolve", ref, "README.md"])
         let data = try await fetchData(url)
         return String(data: data, encoding: .utf8) ?? ""
     }
@@ -208,12 +223,15 @@ enum Catalog {
     private static func entry(from detail: ModelDetail, readme: String?) -> CatalogEntry {
         let name = detail.repo.split(separator: "/").last.map(String.init) ?? detail.repo
         let package = packageKind(siblings: detail.siblings)
-        let install = package == "manual"
-            ? "manual; inspect the model card"
-            : installCommand(repo: detail.repo, revision: detail.revision, name: name)
+        let localName = package == "manual" ? nil : (detail.bundleName ?? name)
+        let install = localName.map {
+            installCommand(repo: detail.repo, revision: detail.revision, localDir: $0)
+        } ?? "manual; inspect the model card"
         return CatalogEntry(
             repo: detail.repo,
             revision: detail.revision,
+            bundleName: detail.bundleName,
+            localDir: localName,
             base: baseModel(tags: detail.tags),
             size: detail.usedStorage.map(humanBytes) ?? "unknown",
             sizeBytes: detail.usedStorage,
@@ -224,11 +242,11 @@ enum Catalog {
             updated: detail.lastModified)
     }
 
-    private static func installCommand(repo: String, revision: String?, name: String) -> String {
+    private static func installCommand(repo: String, revision: String?, localDir: String) -> String {
         if let revision, !revision.isEmpty {
-            return "hf download \(repo) --revision \(revision) --local-dir models/exports/\(name)"
+            return "hf download \(repo) --revision \(revision) --local-dir models/exports/\(localDir)"
         }
-        return "hf download \(repo) --local-dir models/exports/\(name)"
+        return "hf download \(repo) --local-dir models/exports/\(localDir)"
     }
 
     private static func packageKind(siblings: [String]) -> String {
@@ -294,6 +312,22 @@ enum Catalog {
         return nil
     }
 
+    private static func fetchBundleMetadata(repo: String, revision: String?) async throws -> BundleMetadata {
+        let ref = revision?.isEmpty == false ? revision! : "main"
+        let url = apiURL(repo.split(separator: "/").map(String.init) + ["resolve", ref, "metadata.json"])
+        let data = try await fetchData(url)
+        return try JSONDecoder().decode(BundleMetadata.self, from: data)
+    }
+
+    private static func safeLocalName(_ raw: String?) -> String? {
+        guard let value = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            return nil
+        }
+        guard value.count <= 160 else { return nil }
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
+        return value.unicodeScalars.allSatisfy { allowed.contains($0) } ? value : nil
+    }
+
     private static func fetchJSONObject(_ url: URL) async throws -> [String: Any] {
         let data = try await fetchData(url)
         guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -348,11 +382,16 @@ enum Catalog {
     private struct ModelDetail {
         var repo: String
         var revision: String?
+        var bundleName: String?
         var tags: [String]
         var siblings: [String]
         var usedStorage: Int64?
         var lastModified: String?
         var cardData: [String: Any]?
+    }
+
+    private struct BundleMetadata: Decodable {
+        var name: String?
     }
 }
 

@@ -38,6 +38,7 @@ public numbers.
 Use the suite manifest to account for every known RHM caix repo:
 
 ```bash
+scripts/check-benchmark-coverage.sh
 scripts/benchmark-suite.sh --dry-run
 scripts/collect-model-revisions.sh \
   --out benchmarks/revisions.tsv \
@@ -53,6 +54,10 @@ The suite reads `benchmarks/MANIFEST.tsv`, does not download models, and writes 
 `benchmarks/raw/<timestamp>-suite/summary.tsv`. Installed standalone bundles are measured with the
 same decode settings. Missing bundles, draft-only repos, and MTP repos without a paired command are
 recorded as skipped with the reason.
+
+Run `scripts/check-benchmark-coverage.sh` before assigning tests or collecting revisions. It compares
+the manifest with live `redhillsmediafl/rhm-*-caix` Hub metadata and fails if a converted repo is
+missing from benchmark coverage.
 
 Create `benchmarks/revisions.tsv` before a publishable run:
 

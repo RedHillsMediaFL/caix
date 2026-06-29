@@ -25,20 +25,11 @@ target model verify them. Output is unchanged; decode throughput can improve.
 
 ## Performance
 
-Measured on one 64 GB Apple silicon Mac. Reference numbers, not promises.
-Benchmark rules and raw-log requirements are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+No public speed table is current in this checkout.
 
-**Qwen3-4B**, ~4-bit:
-
-| engine | decode tok/s |
-|---|---:|
-| mlx | 121.7 |
-| **caix** | **111.9** |
-| llama.cpp | 90.8 |
-| ollama | 56.5 |
-
-**gpt-oss-20b** MoE: caix **67.9 tok/s**; mlx **87.0 tok/s**; llama.cpp **81.5 tok/s**; ollama
-**55.0 tok/s**.
+Benchmark rules and raw-log requirements are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md). Do not
+publish speed numbers without the raw run directory, exact model repo revision, caix commit,
+hardware, OS build, and exact command.
 
 ---
 

@@ -245,17 +245,21 @@ final class ServerRuntime: Sendable {
               Self.isAllowedRHMRepo(body.repo) else {
             return JSONResponder.error("expected {\"repo\":\"redhillsmediafl/<name>-caix\"}", status: .badRequest)
         }
-        let meta = try? await fetchRHMBundleMetadata(repo: body.repo)
         let layout = try? await fetchRHMRepoLayout(repo: body.repo)
+        let meta = try? await fetchRHMBundleMetadata(repo: body.repo, revision: layout?.revision)
         let directBundle = ((meta?.kind ?? "llm") == "llm") && meta != nil
         guard directBundle || (layout?.hasEaglePackage == true) else {
             return JSONResponder.error("repo is not an installable caix bundle", status: .badRequest)
         }
+        let defaultName = directBundle
+            ? (Self.safeRHMDownloadName(meta?.name) ?? Self.defaultRHMDownloadName(for: body.repo))
+            : Self.defaultRHMDownloadName(for: body.repo)
         let name = body.name?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
-            ?? Self.defaultRHMDownloadName(for: body.repo)
+            ?? defaultName
         if let err = await jobs.startDownloadRHM(
             name: name,
             hfRepo: body.repo,
+            revision: layout?.revision,
             exportsDir: exportsDir,
             estimatedBytes: layout?.usedStorageBytes)
         {
@@ -546,19 +550,24 @@ final class ServerRuntime: Sendable {
             let siblings = (row["siblings"] as? [[String: Any]]) ?? []
             var layout = Self.rhmRepoLayout(from: siblings)
             layout.usedStorageBytes = Self.storageBytes(from: row)
+            layout.revision = row["sha"] as? String
             let meta: RHMBundleMetadata?
             if layout.hasMetadata {
-                meta = try? await fetchRHMBundleMetadata(repo: repo)
+                meta = try? await fetchRHMBundleMetadata(repo: repo, revision: layout.revision)
             } else {
                 meta = nil
             }
             let directBundle = layout.hasMetadata && ((meta?.kind ?? "llm") == "llm")
             let installable = directBundle || layout.hasEaglePackage
-            let name = Self.defaultRHMDownloadName(for: repo)
+            let safeBundleName = Self.safeRHMDownloadName(meta?.name)
+            let name = directBundle
+                ? (safeBundleName ?? Self.defaultRHMDownloadName(for: repo))
+                : Self.defaultRHMDownloadName(for: repo)
             out.append(RHMModelEntry(
                 repo: repo,
+                revision: layout.revision,
                 name: name,
-                bundleName: meta?.name,
+                bundleName: safeBundleName,
                 baseModel: Self.baseModel(from: tags),
                 downloads: row["downloads"] as? Int,
                 lastModified: row["lastModified"] as? String,
@@ -591,13 +600,15 @@ final class ServerRuntime: Sendable {
         else { return RHMRepoLayout() }
         var layout = Self.rhmRepoLayout(from: siblings)
         layout.usedStorageBytes = Self.storageBytes(from: row)
+        layout.revision = row["sha"] as? String
         return layout
     }
 
-    private func fetchRHMBundleMetadata(repo: String) async throws -> RHMBundleMetadata? {
+    private func fetchRHMBundleMetadata(repo: String, revision: String? = nil) async throws -> RHMBundleMetadata? {
         guard Self.isAllowedRHMRepo(repo) else { return nil }
         let encodedRepo = repo.split(separator: "/").map { String($0).addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? String($0) }.joined(separator: "/")
-        guard let url = URL(string: "https://huggingface.co/\(encodedRepo)/resolve/main/metadata.json") else {
+        let ref = revision?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? "main"
+        guard let url = URL(string: "https://huggingface.co/\(encodedRepo)/resolve/\(ref)/metadata.json") else {
             return nil
         }
         var req = URLRequest(url: url, timeoutInterval: 20)
@@ -619,6 +630,15 @@ final class ServerRuntime: Sendable {
 
     private static func defaultRHMDownloadName(for repo: String) -> String {
         repo.split(separator: "/").last.map(String.init) ?? "rhm-model-caix"
+    }
+
+    private static func safeRHMDownloadName(_ raw: String?) -> String? {
+        guard let value = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            return nil
+        }
+        guard value.count <= 160 else { return nil }
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
+        return value.unicodeScalars.allSatisfy { allowed.contains($0) } ? value : nil
     }
 
     private static func rhmRepoLayout(from siblings: [[String: Any]]) -> RHMRepoLayout {
@@ -948,10 +968,12 @@ struct RHMRepoLayout: Sendable {
     var hasDraftBundle: Bool = false
     var hasEaglePackage: Bool = false
     var usedStorageBytes: Int64? = nil
+    var revision: String? = nil
 }
 
 struct RHMModelEntry: Codable, Sendable {
     var repo: String
+    var revision: String?
     var name: String
     var bundleName: String?
     var baseModel: String?

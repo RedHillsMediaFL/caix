@@ -1,4 +1,9 @@
 import XCTest
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 @testable import CoreAIServer
 
@@ -36,6 +41,91 @@ final class JobTrackerTests: XCTestCase {
         XCTAssertTrue(err?.contains("insufficient disk") == true)
         let jobs = await tracker.snapshot()
         XCTAssertTrue(jobs.isEmpty)
+    }
+
+    func testStartConvertHFRejectsBeforeLaunchWhenReserveIsTooHigh() async throws {
+        let root = try makeTempDir()
+        let script = try makeNoopScript(in: root)
+        let tracker = JobTracker()
+
+        let err = await tracker.startConvertHF(
+            name: "example-coreai",
+            hfRepo: "example/model",
+            compression: "4bit",
+            precision: "float16",
+            context: nil,
+            script: script.path,
+            workingDir: root,
+            pythonExecutable: "/bin/sh",
+            reserveBytes: Int64.max / 4)
+
+        XCTAssertTrue(err?.contains("insufficient disk") == true)
+        XCTAssertTrue(err?.contains("model conversion") == true)
+        let jobs = await tracker.snapshot()
+        XCTAssertTrue(jobs.isEmpty)
+    }
+
+    func testStartConvertGGUFRejectsBeforeLaunchWhenReserveIsTooHigh() async throws {
+        let root = try makeTempDir()
+        let script = try makeNoopScript(in: root)
+        let tracker = JobTracker()
+
+        let err = await tracker.startConvertGGUF(
+            name: "example-coreai",
+            ggufRepo: "example/model-gguf",
+            ggufFile: nil,
+            compression: "4bit",
+            precision: "float16",
+            context: nil,
+            script: script.path,
+            workingDir: root,
+            pythonExecutable: "/bin/sh",
+            reserveBytes: Int64.max / 4)
+
+        XCTAssertTrue(err?.contains("insufficient disk") == true)
+        XCTAssertTrue(err?.contains("model conversion") == true)
+        let jobs = await tracker.snapshot()
+        XCTAssertTrue(jobs.isEmpty)
+    }
+
+    func testStartDownloadRHMPassesExactRevisionToHF() async throws {
+        let root = try makeTempDir()
+        let bin = root.appendingPathComponent("bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let argvLog = root.appendingPathComponent("hf-argv.txt")
+        let hf = bin.appendingPathComponent("hf")
+        try """
+            #!/bin/sh
+            printf '%s\\n' "$@" > "\(argvLog.path)"
+            exit 0
+            """.write(to: hf, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: hf.path)
+
+        let oldPath = getenv("PATH").map { String(cString: $0) }
+        setenv("PATH", "\(bin.path):\(oldPath ?? "")", 1)
+        addTeardownBlock {
+            if let oldPath {
+                setenv("PATH", oldPath, 1)
+            } else {
+                unsetenv("PATH")
+            }
+        }
+
+        let tracker = JobTracker()
+        let err = await tracker.startDownloadRHM(
+            name: "example-coreai",
+            hfRepo: "redhillsmediafl/example-caix",
+            revision: "0123456789abcdef0123456789abcdef01234567",
+            exportsDir: root,
+            estimatedBytes: 0,
+            reserveBytes: 0)
+
+        XCTAssertNil(err)
+        let argvLogAppeared = await waitForFile(argvLog)
+        XCTAssertTrue(argvLogAppeared)
+        let argv = try String(contentsOf: argvLog, encoding: .utf8)
+        XCTAssertTrue(argv.contains("download\nredhillsmediafl/example-caix\n--revision\n0123456789abcdef0123456789abcdef01234567\n--local-dir\n"))
+        XCTAssertTrue(argv.contains("example-coreai"))
     }
 
     func testRunCheckSupportReturnsFastJSON() async throws {
@@ -91,5 +181,24 @@ final class JobTrackerTests: XCTestCase {
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: url) }
         return url
+    }
+
+    private func makeNoopScript(in root: URL) throws -> URL {
+        let script = root.appendingPathComponent("noop.sh")
+        try """
+            exit 0
+            """.write(to: script, atomically: true, encoding: .utf8)
+        return script
+    }
+
+    private func waitForFile(_ url: URL, timeout: TimeInterval = 3) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if FileManager.default.fileExists(atPath: url.path) {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        return FileManager.default.fileExists(atPath: url.path)
     }
 }

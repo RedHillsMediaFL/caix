@@ -50,6 +50,8 @@ scan() {
 
 scan "benchmark placeholder or unsupported public speed claim" \
   'benchmark pending|coming soon|fastest|blazing|guaranteed|100%[[:space:]]+(compatible|support(ed)?|coverage|accurate|accuracy|working|faster|speed|safe|verified)'
+scan "raw benchmark speed number in public copy" \
+  '[0-9]+([.][0-9]+)?[[:space:]]*tok/s'
 scan "marketing/hype wording" \
   'revolutionary|game[- ]changer|world[- ]class|best[- ]in[- ]class|magic|gimmick'
 scan "unverified support-product wording" \
