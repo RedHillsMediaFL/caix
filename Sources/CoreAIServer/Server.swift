@@ -380,11 +380,6 @@ final class ServerRuntime: Sendable {
         else { throw URLError(.badURL) }
         var request = URLRequest(url: url)
         request.setValue("caix-support-check", forHTTPHeaderField: "User-Agent")
-        if let token = ProcessInfo.processInfo.environment["HF_TOKEN"]
-            ?? ProcessInfo.processInfo.environment["HUGGING_FACE_HUB_TOKEN"]
-        {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
         let (data, response) = try await URLSession.shared.data(for: request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw URLError(.badServerResponse)
