@@ -65,6 +65,9 @@ bundles, and draft-only repos are recorded as skipped with the reason.
 Standalone target rows and target+draft package rows are separate rows. Report target-only and
 speculative/MTP numbers separately; do not average them.
 
+`--seed` applies to standalone and classic speculative `caix run` rows. Do not use it for EAGLE/MTP
+suite rows.
+
 Run `scripts/check-benchmark-coverage.sh` before assigning tests or collecting revisions. It compares
 the manifest with live `redhillsmediafl/rhm-*-caix` Hub metadata and fails if a converted repo is
 missing from benchmark coverage. It also rejects non-canonical manifest modes; use `decode`,

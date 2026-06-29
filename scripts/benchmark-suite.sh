@@ -151,6 +151,27 @@ require_revision_for_measured_rows() {
   [[ "$errors" == "0" ]] || return 1
 }
 
+require_seed_supported_for_measured_rows() {
+  [[ -n "$SEED" ]] || return 0
+
+  local errors=0
+  local repo local_dir kind mode status notes canonical_mode bundle
+  while IFS=$'\t' read -r repo local_dir kind mode status notes; do
+    [[ -z "${repo:-}" || "$repo" == "repo" || "$repo" == \#* ]] && continue
+    [[ "$status" == "eligible" ]] || continue
+    canonical_mode="$(canonical_benchmark_mode "$mode")"
+    [[ "$canonical_mode" == "eagle-mtp" ]] || continue
+
+    bundle="$EXPORTS/$local_dir"
+    [[ -d "$bundle/eagle_target.aimodel" && -d "$bundle/eagle_draft.aimodel" && -d "$bundle/tokenizer" ]] || continue
+
+    echo "error: --seed is not supported for EAGLE benchmark rows: $repo" >&2
+    errors=$((errors + 1))
+  done < "$MANIFEST"
+
+  [[ "$errors" == "0" ]] || return 1
+}
+
 eagle_backbone_for_bundle() {
   local bundle="$1"
   local contract="$bundle/contract.txt"
@@ -185,6 +206,7 @@ if [[ "$DRY_RUN" != "1" ]]; then
     exit 2
   fi
   require_revision_for_measured_rows
+  require_seed_supported_for_measured_rows
   heavy_task_guard
 fi
 
