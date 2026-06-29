@@ -507,7 +507,7 @@ final class ServerRuntime: Sendable {
         }
         do {
             var req = URLRequest(url: url, timeoutInterval: 20)
-            req.setValue("caix/1.0", forHTTPHeaderField: "User-Agent")
+            req.setValue("caix/0.2.0-beta", forHTTPHeaderField: "User-Agent")
             let (data, _) = try await URLSession.shared.data(for: req)
             var text = String(data: data, encoding: .utf8) ?? ""
             // crude readable-text extraction
@@ -526,7 +526,7 @@ final class ServerRuntime: Sendable {
     private func fetchRHMModels() async throws -> [RHMModelEntry] {
         let url = URL(string: "https://huggingface.co/api/models?author=redhillsmediafl&search=caix&full=true")!
         var req = URLRequest(url: url, timeoutInterval: 20)
-        req.setValue("caix/1.0", forHTTPHeaderField: "User-Agent")
+        req.setValue("caix/0.2.0-beta", forHTTPHeaderField: "User-Agent")
         let (data, resp) = try await URLSession.shared.data(for: req)
         if let http = resp as? HTTPURLResponse, http.statusCode < 200 || http.statusCode >= 300 {
             throw NSError(domain: "caix.hf", code: http.statusCode)
@@ -584,7 +584,7 @@ final class ServerRuntime: Sendable {
             return RHMRepoLayout()
         }
         var req = URLRequest(url: url, timeoutInterval: 20)
-        req.setValue("caix/1.0", forHTTPHeaderField: "User-Agent")
+        req.setValue("caix/0.2.0-beta", forHTTPHeaderField: "User-Agent")
         let (data, resp) = try await URLSession.shared.data(for: req)
         if let http = resp as? HTTPURLResponse, http.statusCode < 200 || http.statusCode >= 300 {
             throw NSError(domain: "caix.hf", code: http.statusCode)
@@ -607,7 +607,7 @@ final class ServerRuntime: Sendable {
             return nil
         }
         var req = URLRequest(url: url, timeoutInterval: 20)
-        req.setValue("caix/1.0", forHTTPHeaderField: "User-Agent")
+        req.setValue("caix/0.2.0-beta", forHTTPHeaderField: "User-Agent")
         let (data, resp) = try await URLSession.shared.data(for: req)
         if let http = resp as? HTTPURLResponse, http.statusCode == 404 {
             return nil

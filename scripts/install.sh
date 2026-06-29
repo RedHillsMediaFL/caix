@@ -3,8 +3,24 @@
 # toolchain (see README: "Requirements"). Dependencies are fetched automatically by SwiftPM.
 set -euo pipefail
 
-REPO_URL="${CAIX_REPO_URL:-https://github.com/RedHillsMediaFL/caix.git}"
-INSTALL_DIR="${CAIX_DIR:-$HOME/caix}"
+caix_env() {
+  local lower_name="$1"
+  local legacy_suffix="$2"
+  local fallback="${3-}"
+  local value="${!lower_name-}"
+  if [[ -z "$value" ]]; then
+    local legacy_name="C""AIX_$legacy_suffix"
+    value="${!legacy_name-}"
+  fi
+  if [[ -n "$value" ]]; then
+    printf '%s' "$value"
+  else
+    printf '%s' "$fallback"
+  fi
+}
+
+REPO_URL="$(caix_env caix_repo_url REPO_URL https://github.com/RedHillsMediaFL/caix.git)"
+INSTALL_DIR="$(caix_env caix_dir DIR "$HOME/caix")"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || pwd)"
 if [ -f "$script_dir/../Package.swift" ] && [ -d "$script_dir/../Sources" ]; then
@@ -19,7 +35,7 @@ else
     git -C "$INSTALL_DIR" pull --ff-only
   elif [ -e "$INSTALL_DIR" ]; then
     echo "  ✗ $INSTALL_DIR exists but is not a git checkout."
-    echo "    Set CAIX_DIR=/path/to/empty-dir or move the existing path."
+    echo "    Set caix_dir=/path/to/empty-dir or move the existing path."
     exit 1
   else
     echo "  cloning $REPO_URL → $INSTALL_DIR…"

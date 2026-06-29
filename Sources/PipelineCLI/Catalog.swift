@@ -346,7 +346,7 @@ enum Catalog {
 
     private static func fetchData(_ url: URL) async throws -> Data {
         var request = URLRequest(url: url, timeoutInterval: 20)
-        request.setValue("caix/1.0", forHTTPHeaderField: "User-Agent")
+        request.setValue("caix/0.2.0-beta", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await session.data(for: request)
         if let http = response as? HTTPURLResponse, http.statusCode < 200 || http.statusCode >= 300 {
             throw CatalogError("HTTP \(http.statusCode) from \(url.absoluteString)")

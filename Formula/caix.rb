@@ -2,8 +2,9 @@ class Caix < Formula
   desc "Native Apple Core AI inference server for local language models"
   homepage "https://github.com/RedHillsMediaFL/caix"
   license "MIT"
+  version "0.2.0-beta"
 
-  # Head-only until Core AI exits beta and caix cuts a non-beta release.
+  # Head-only until the tap has a tested 0.x release tarball.
   # Copy this file to RedHillsMediaFL/homebrew-caix/Formula/caix.rb for the tap.
   head "https://github.com/RedHillsMediaFL/caix.git", branch: "main"
 
@@ -36,7 +37,7 @@ class Caix < Formula
         shift
         exec "#{libexec}/caix-bin" serve \\
           --web "#{pkgshare}/web" \\
-          --exports "${CAIX_EXPORTS:-$HOME/.caix/models/exports}" \\
+          --exports "${caix_exports:-$HOME/.caix/models/exports}" \\
           --registry "#{pkgshare}/models/registry.json" \\
           --convert-script "#{pkgshare}/python/converter/convert.py" \\
           "$@"
@@ -54,7 +55,7 @@ class Caix < Formula
       Verify the host:
         caix doctor
 
-      Put converted .aimodel bundles here, or set CAIX_EXPORTS:
+      Put converted .aimodel bundles here, or set caix_exports:
         ~/.caix/models/exports
 
       Start the server:

@@ -4,11 +4,12 @@
 # (on a Mac with a matching Core AI runtime). Usage: scripts/package.sh [version]
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${1:-0.2.0-beta-dev}"
+VERSION="${1:-0.2.0-beta}"
 ARCH="$(uname -m)"
 NAME="caix-${VERSION}-macos-${ARCH}"
 
 cd "$DIR"
+"$DIR/scripts/check-release-version.sh" "$VERSION"
 "$DIR/scripts/check-coreai-runtime.sh"
 echo "→ building release binary…"
 COREAI_RUNTIME=1 swift build -c release
@@ -27,6 +28,7 @@ cp caix README.md LICENSE       "$STAGE/" 2>/dev/null || true
 cp -R web python                "$STAGE/"
 cp models/registry.json         "$STAGE/models/"
 cp scripts/install.sh scripts/check-coreai-runtime.sh "$STAGE/scripts/" 2>/dev/null || true
+cp -R scripts/lib "$STAGE/scripts/" 2>/dev/null || true
 chmod +x "$STAGE/caix" "$STAGE/bin/caix"
 printf "%s\n" "$VERSION" > "$STAGE/VERSION"
 

@@ -96,6 +96,7 @@ caix doctor
 ```
 
 Homebrew/core comes later. See [Homebrew notes](docs/HOMEBREW.md).
+Releases stay below `1.0.0` while Core AI is beta; see [release notes](docs/RELEASES.md).
 
 ### Option B — source install
 
@@ -307,7 +308,7 @@ This gives you a private HTTPS URL on your tailnet without opening public ports.
   loader needs file-access permission and cannot read external/USB volumes without it. Keep the
   binary and models on the internal disk, or run `caix serve` from a normal user session. Full Disk
   Access on the binary fixes the `launchd` case. If exports stay on an external SSD, generate a
-  local model-list index and pass it via `CAIX_EXPORT_INDEX`:
+  local model-list index and pass it via `caix_export_index`:
 
 ```bash
 scripts/refresh-export-index.sh /Volumes/SSD/ai-dev/coreai-pipeline/exports \
@@ -334,10 +335,10 @@ Conversion wraps Apple's `coreai.llm.export` and needs Apple's `coreai-models` P
 
 ```bash
 # point caix at your coreai-models python dir and keep conversion IO on the SSD:
-export CAIX_COREAI_MODELS=/path/to/coreai-models/python
+export caix_coreai_models=/path/to/coreai-models/python
 export HF_HOME=${HF_HOME:-/Volumes/SSD/hf-cache}
-export CAIX_TMPDIR=${CAIX_TMPDIR:-/Volumes/SSD/coreai-tmp}
-export CAIX_EXPORTS=${CAIX_EXPORTS:-$PWD/models/exports}
+export caix_tmpdir=${caix_tmpdir:-/Volumes/SSD/coreai-tmp}
+export caix_exports=${caix_exports:-$PWD/models/exports}
 scripts/check-disk-pressure.sh --path /Volumes/SSD --floor-gib 500
 
 # check support, then convert:
@@ -382,10 +383,10 @@ confirms the architecture after dequant.
 
 | | |
 |---|---|
-| Models | `models/exports/<name>/` (override with `CAIX_EXPORTS` or `--exports`) |
+| Models | `models/exports/<name>/` (override with `caix_exports` or `--exports`) |
 | HF cache | `$HF_HOME`; caix defaults it to `/Volumes/SSD/hf-cache` when unset |
-| Converter tmp | `$CAIX_TMPDIR`; converter default is `/Volumes/SSD/coreai-tmp` |
-| Export index | optional JSON from `scripts/refresh-export-index.sh` (set `CAIX_EXPORT_INDEX`) |
+| Converter tmp | `$caix_tmpdir`; converter default is `/Volumes/SSD/coreai-tmp` |
+| Export index | optional JSON from `scripts/refresh-export-index.sh` (set `caix_export_index`) |
 | Web UI | `web/` (served at `/` and `/chat`) |
 | Usage stats | `~/.caix/usage.json` (override with `--stats-file`) — survives restarts |
 | Converter | `python/converter/` |

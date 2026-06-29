@@ -73,11 +73,11 @@ Do not install multiple model payloads at once unless you have checked free disk
 Use the release binary when available:
 
 ```bash
-CAIX_BIN=${CAIX_BIN:-.build/release/caix}
+caix_bin=${caix_bin:-.build/release/caix}
 MODEL=models/exports/qwen3-4b-coreai
 
-"$CAIX_BIN" inspect --model "$MODEL"
-"$CAIX_BIN" run \
+"$caix_bin" inspect --model "$MODEL"
+"$caix_bin" run \
   --model "$MODEL" \
   --prompt "Name one primary color." \
   --max-tokens 32 \

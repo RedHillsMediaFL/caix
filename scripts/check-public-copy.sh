@@ -65,7 +65,7 @@ scan "marketing/hype wording" \
 scan "support gimmick wording" \
   'donat(e|ion)?|sticker'
 scan_exact "uppercase caix brand wording" \
-  '\bCAIX\b'
+  '\bC[A]IX\b'
 scan "vague model-size wording" \
   'large model|large chat|dense large|\blarger\b|\blargest\b'
 scan "bare large wording; use parameter count, disk size, memory, and license instead" \

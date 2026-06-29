@@ -31,6 +31,8 @@ Do not ask for MacBook Thunderbolt testing yet. The gate is:
 3. `caix cluster join` and `caix serve --cluster` can run the same manifest used by the loopback test.
 
 After those pass, test one MacBook stage over Thunderbolt Bridge. Until then, keep testing local.
+Before the Thunderbolt test, install caix through Brew on the test machine and run
+`scripts/check-brew-distributed.sh`.
 
 ## Stage Manifest Format
 

@@ -6,6 +6,9 @@
 
 - Added `caix --version`, `caix doctor`, a Core AI runtime checker, and a tap-ready Homebrew formula
   for the post-testing tap path.
+- Added a release-version guard so caix stays below `1.0.0` while Core AI is beta.
+- Added a version-sync guard for the CLI version, package script, and Homebrew formula.
+- Added a Brew distributed-surface check for future Thunderbolt inference tests.
 - Published verified RHM Qwen2.5-0.5B-Instruct and Qwen2.5-3B-Instruct Core AI bundles and
   documented them in the README model table.
 - Published verified RHM Qwen3-8B Core AI bundle and documented it in the README model table.
@@ -62,7 +65,7 @@
 - Added local discovery/loading and RHM installability for EAGLE target+draft package directories.
 - Added a usage dashboard with rolling tok/s, last-generation speed, total input/output tokens, rolling-window output, and per-model throughput.
 - Added a one-line GitHub installer that clones or updates `~/caix`, builds the Core AI runtime binary, and links the `caix` launcher into `~/.local/bin`.
-- Added `scripts/refresh-export-index.sh` and `CAIX_EXPORT_INDEX` support for launchd/external-volume model discovery.
+- Added `scripts/refresh-export-index.sh` and `caix_export_index` support for launchd/external-volume model discovery.
 - Added an OpenCode provider config that points OpenCode at the local OpenAI-compatible caix server.
 - Expanded the OpenCode provider config to expose the current caix bundle IDs for hot-loading through `/v1/chat/completions`.
 - Added README status badges for GitHub releases, Apple silicon/Core AI, Swift, and RHM Hugging Face models.
@@ -127,4 +130,4 @@
 - Kept dashboard model listing responsive under launchd by using bounded model-index and registry reads instead of blocking indefinitely on inaccessible export paths.
 - Bounded dashboard Hugging Face support checks so a launchd/external-volume converter hang returns JSON and writes a support log instead of wedging the API.
 - Defaulted raw HF `glm4` conversions to bfloat16 after support detection and logged not-yet-authored or failed converter attempts to `~/.caix/convert-failures.log`.
-- Accepted `CAIX_COREAI_MODELS` as either a CoreAI checkout root or its `python/` package directory.
+- Accepted `caix_coreai_models` as either a CoreAI checkout root or its `python/` package directory.
