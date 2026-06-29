@@ -11,7 +11,7 @@ Options:
   --revision <ref>   Hub ref to fetch. Default: main.
 
 Reads README.md files only through the Hugging Face CLI. Does not download model payloads.
-Fails when a live card has public-copy wording that should not ship.
+Fails when a live card has public-copy wording that should not ship or omits the support link.
 USAGE
 }
 
@@ -67,6 +67,20 @@ while IFS= read -r repo; do
 done < "$manifest_repos"
 
 if [[ "$missing" -ne 0 ]]; then
+  exit 1
+fi
+
+support_missing=0
+while IFS= read -r repo; do
+  [[ -z "$repo" ]] && continue
+  card="$cards_dir/${repo//\//__}.README.md"
+  if ! rg -q 'https://redhillsmediafl[.]com/open-source|redhillsmediafl[.]com/open-source' "$card"; then
+    echo "error: support link missing from model card: $repo@$REVISION" >&2
+    support_missing=1
+  fi
+done < "$manifest_repos"
+
+if [[ "$support_missing" -ne 0 ]]; then
   exit 1
 fi
 

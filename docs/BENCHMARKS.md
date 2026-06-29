@@ -72,7 +72,8 @@ fails if a manifest repo is missing from the public family collections or if a c
 speed/fluff wording.
 
 Run `scripts/check-hf-model-cards.sh` before uploading card edits. It fetches only live
-`README.md` files for manifest repos and applies the public-copy guard.
+`README.md` files for manifest repos, requires the plain support link, and applies the
+public-copy guard.
 
 Run `scripts/check-token-handling.sh` before committing Hub automation or docs. It rejects direct
 HF token env reads, Bearer auth headers, and token argv patterns.
