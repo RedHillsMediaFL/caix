@@ -59,7 +59,6 @@ public final class PersistentModel {
         let fastHybridAllowed = env["COREAI_FAST_HYBRID_ENGINE"] != nil
         let fastCompatible = bundle.minKVCapacity == 0 || fastHybridAllowed
         if env["COREAI_LEGACY_ENGINE"] == nil,
-           env["COREAI_PERSISTENT_FAST_ENGINE"] != nil,
            fastCompatible,
            let fast = try await PipelinedLLM.loadPersistent(bundlePath: bundlePath, verbose: verbose)
         {

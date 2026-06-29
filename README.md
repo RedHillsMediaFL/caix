@@ -291,12 +291,11 @@ This gives you a private HTTPS URL on your tailnet without opening public ports.
 - **Beta toolchain required.** See [Requirements](#requirements).
 - **Cold loads are slow.** Core AI compiles the model on first use (~30-60 s for a 13 GB model).
   The chat view shows a "loading model..." spinner. Later requests reuse compiled state.
-- **Server fast path.** Standard language bundles use Apple's CoreAILanguageModels one-shot path by
-  default. `COREAI_PERSISTENT_FAST_ENGINE=1` tests the kept-hot engine.
-  `COREAI_LEGACY_ENGINE=1` uses the older sequential path for debugging. Hybrid
-  qwen3_5/qwen3_5_moe bundles with packed recurrent state use the explicit Core AI sequential engine
-  unless `COREAI_FAST_HYBRID_ENGINE=1` is set; the current fast warmup cache shape is too small for
-  those fixed state prefixes.
+- **Server fast path.** Standard language bundles use Apple's kept-hot CoreAILanguageModels engine
+  by default after `/api/load`. `COREAI_LEGACY_ENGINE=1` uses the older sequential path for
+  debugging. Hybrid qwen3_5/qwen3_5_moe bundles with packed recurrent state use the explicit Core
+  AI sequential engine unless `COREAI_FAST_HYBRID_ENGINE=1` is set; the current fast warmup cache
+  shape is too small for those fixed state prefixes.
 - **Background services and external volumes.** If you run caix from a `launchd` agent, Apple's
   loader needs file-access permission and cannot read external/USB volumes without it. Keep the
   binary and models on the internal disk, or run `caix serve` from a normal user session. Full Disk
