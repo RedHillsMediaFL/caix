@@ -113,6 +113,10 @@ The report script reads the suite summary and each measured model's raw `summary
 repo revision are marked `publishable=no`; do not copy those numbers into public docs. The report
 includes `benchmark_mode`; do not compare rows unless the mode and prompt settings match.
 
+Run `scripts/check-benchmark-raw.sh` before committing raw benchmark logs. It checks pinned model
+repo revisions, suite/model metadata consistency, measured row counts, failed rows, and deterministic
+measured stdout.
+
 ## Public Table Fields
 
 Use these fields for any published benchmark table:
