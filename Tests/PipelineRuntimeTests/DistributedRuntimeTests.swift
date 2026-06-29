@@ -138,6 +138,50 @@ final class DistributedRuntimeTests: XCTestCase {
         }
     }
 
+    func testWorkerMessageCodecRoundTripsSingleJSONLine() throws {
+        let message = DistributedWorkerMessage.allocate(
+            DistributedStageAllocation(requestID: "req-1", kvCapacity: 128))
+
+        let line = try DistributedWorkerMessageCodec.encodeJSONLine(message)
+
+        XCTAssertEqual(line.last, 0x0A)
+        XCTAssertFalse(line.dropLast().contains(0x0A))
+        XCTAssertEqual(try DistributedWorkerMessageCodec.decodeJSONLine(line), message)
+        XCTAssertEqual(
+            try DistributedWorkerMessageCodec.decodeJSONLine(Data(line.dropLast())),
+            message)
+    }
+
+    func testWorkerMessageCodecAcceptsCRLFLineEnding() throws {
+        let message = DistributedWorkerMessage.free(
+            DistributedRequestControl(requestID: "req-1", stageID: "layers-0-16"))
+        var line = try DistributedWorkerMessageCodec.encodeJSONLine(message)
+        line.insert(0x0D, at: line.count - 1)
+
+        XCTAssertEqual(try DistributedWorkerMessageCodec.decodeJSONLine(line), message)
+    }
+
+    func testWorkerMessageCodecRejectsEmptyAndMultiFrameLines() throws {
+        XCTAssertThrowsError(try DistributedWorkerMessageCodec.decodeJSONLine(Data("\n".utf8))) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidWireFrame("worker message line is empty"))
+        }
+
+        let first = try DistributedWorkerMessageCodec.encodeJSONLine(
+            .allocate(DistributedStageAllocation(requestID: "req-1", kvCapacity: 1)))
+        let second = try DistributedWorkerMessageCodec.encodeJSONLine(
+            .free(DistributedRequestControl(requestID: "req-1")))
+
+        XCTAssertThrowsError(
+            try DistributedWorkerMessageCodec.decodeJSONLine(first + second)
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidWireFrame("worker message line contains multiple frames"))
+        }
+    }
+
     func testWorkerHelloValidatesPlanIntegrityAndStageClaim() throws {
         let plan = makePlan(
             boundaryTensor: DistributedBoundaryTensorSpec(
@@ -948,6 +992,40 @@ final class DistributedRuntimeTests: XCTestCase {
         }
     }
 
+    func testSameMachinePipelineRejectsInvalidPositionRangeBeforeForwarding() async throws {
+        let plan = makePlan()
+        let handles = makeFakeHandles(for: plan)
+        let pipeline = try DistributedSameMachinePipeline(plan: plan, stages: handles)
+
+        await XCTAssertThrowsErrorAsync(
+            try await pipeline.forward(
+                requestID: "req-1",
+                stepIndex: 0,
+                positionRange: DistributedSequenceRange(lowerBound: 2, upperBound: 2),
+                tokenIDs: [7])
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidForwardInput("position_range is invalid"))
+        }
+        XCTAssertTrue(handles.allSatisfy { $0.inputs.isEmpty })
+    }
+
+    func testSameMachinePipelineRejectsEmptyResetRequestIDBeforeForwarding() async throws {
+        let plan = makePlan()
+        let handles = makeFakeHandles(for: plan)
+        let pipeline = try DistributedSameMachinePipeline(plan: plan, stages: handles)
+
+        await XCTAssertThrowsErrorAsync(
+            try await pipeline.reset(requestID: " ")
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidForwardInput("request_id is empty"))
+        }
+        XCTAssertTrue(handles.allSatisfy { $0.resetRequests.isEmpty })
+    }
+
     private func makePlan(
         stages: [DistributedStageDescriptor]? = nil,
         workers: [DistributedWorkerEndpoint]? = nil,
@@ -1110,6 +1188,7 @@ private final class FakeDistributedStageHandle: DistributedStageHandle {
     let descriptor: DistributedStageDescriptor
     var allocatedRequests: [String] = []
     var inputs: [DistributedStageForwardInput] = []
+    var resetRequests: [String] = []
     private let output: (DistributedStageForwardInput) throws -> DistributedStageForwardOutput
 
     init(
@@ -1129,7 +1208,9 @@ private final class FakeDistributedStageHandle: DistributedStageHandle {
         return try output(input)
     }
 
-    func reset(requestID: String) async throws {}
+    func reset(requestID: String) async throws {
+        resetRequests.append(requestID)
+    }
 
     func free(requestID: String) async {}
 }

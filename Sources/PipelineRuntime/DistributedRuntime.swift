@@ -1480,6 +1480,38 @@ public enum DistributedWorkerMessage: Codable, Hashable, Sendable {
     }
 }
 
+public enum DistributedWorkerMessageCodec {
+    public static func encodeJSONLine(_ message: DistributedWorkerMessage) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        var data = try encoder.encode(message)
+        guard !data.contains(0x0A) && !data.contains(0x0D) else {
+            throw DistributedStageExecutionError.invalidWireFrame(
+                "worker message JSON must be a single line")
+        }
+        data.append(0x0A)
+        return data
+    }
+
+    public static func decodeJSONLine(_ data: Data) throws -> DistributedWorkerMessage {
+        var bytes = Array(data)
+        if bytes.last == 0x0A {
+            bytes.removeLast()
+            if bytes.last == 0x0D {
+                bytes.removeLast()
+            }
+        }
+        guard !bytes.isEmpty else {
+            throw DistributedStageExecutionError.invalidWireFrame("worker message line is empty")
+        }
+        guard !bytes.contains(0x0A) && !bytes.contains(0x0D) else {
+            throw DistributedStageExecutionError.invalidWireFrame(
+                "worker message line contains multiple frames")
+        }
+        return try JSONDecoder().decode(DistributedWorkerMessage.self, from: Data(bytes))
+    }
+}
+
 public struct DistributedStageForwardInput: Hashable, Sendable {
     public let requestID: String
     public let stepIndex: Int
@@ -1585,6 +1617,7 @@ public enum DistributedStageExecutionError: Error, Equatable, Sendable, CustomSt
     case missingStageAsset(stageID: String, path: String)
     case invalidWorkerHello(String)
     case invalidControlFrame(String)
+    case invalidWireFrame(String)
     case invalidForwardInput(String)
     case invalidStageOutput(String)
 
@@ -1606,6 +1639,8 @@ public enum DistributedStageExecutionError: Error, Equatable, Sendable, CustomSt
             return "Invalid distributed worker hello: \(message)"
         case .invalidControlFrame(let message):
             return "Invalid distributed control frame: \(message)"
+        case .invalidWireFrame(let message):
+            return "Invalid distributed worker wire frame: \(message)"
         case .invalidForwardInput(let message):
             return "Invalid distributed forward input: \(message)"
         case .invalidStageOutput(let message):
@@ -1697,6 +1732,9 @@ public final class DistributedSameMachinePipeline {
         guard !tokenIDs.isEmpty else {
             throw DistributedStageExecutionError.invalidForwardInput("token_ids must be non-empty")
         }
+        guard positionRange.isValid else {
+            throw DistributedStageExecutionError.invalidForwardInput("position_range is invalid")
+        }
         guard tokenIDs.count == positionRange.count else {
             throw DistributedStageExecutionError.invalidForwardInput(
                 "token_ids count must match position_range")
@@ -1734,6 +1772,9 @@ public final class DistributedSameMachinePipeline {
     }
 
     public func reset(requestID: String) async throws {
+        guard !requestID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw DistributedStageExecutionError.invalidForwardInput("request_id is empty")
+        }
         for stage in stages {
             try await stage.reset(requestID: requestID)
         }

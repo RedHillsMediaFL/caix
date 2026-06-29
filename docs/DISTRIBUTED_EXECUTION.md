@@ -47,6 +47,7 @@ This is blunt on purpose. Where the current code cannot do something, it says so
   - `DistributedWorkerMessage` frames for hello/ack, allocation, forward, reset, free, and error.
     The `FORWARD` frame carries token ids or hidden-state metadata plus position ids; tensor bytes
     stay outside JSON. Worker frames validate through one runtime entry point before execution.
+    `DistributedWorkerMessageCodec` writes and reads one JSON header line per frame.
   - `DistributedStagePlan.integrityHash()` gives coordinator and workers the same SHA-256 plan
     identity for handshake rejection.
 - A dry-run planner CLI (`Sources/PipelineCLI/Cluster.swift`, wired in `main.swift`):

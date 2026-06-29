@@ -31,6 +31,8 @@
 - Added distributed allocation/reset/free control-frame validation for request IDs, stage IDs, and
   KV capacity.
 - Added whole-message validation for distributed worker frames, including ACK and error frames.
+- Added a JSON-line codec for distributed worker message headers.
+- Added same-machine pipeline guards for invalid position ranges and reset request IDs.
 - Added the cluster-plan contract check to publication gates.
 - Added fail-closed `caix cluster join` and `caix serve --cluster` CLI stubs for Brew surface tests.
 - Expanded the Homebrew formula test to cover distributed plan/join help and `serve --cluster`.
