@@ -10,6 +10,7 @@ Options:
   --prompt-file <path>  Prompt file. Overrides --prompt.
   --max-tokens <n>      Max generated tokens. Default: 128.
   --temperature <n>     Temperature. Default: 0.
+  --seed <n>            RNG seed passed to caix run.
   --warmup <n>          Warmup runs. Default: 1.
   --runs <n>            Measured runs. Default: 3.
   --raw                 Skip chat template.
@@ -30,6 +31,7 @@ PROMPT="Write one factual sentence about local inference on Apple silicon."
 PROMPT_FILE=""
 MAX_TOKENS=128
 TEMPERATURE=0
+SEED=""
 WARMUP=1
 RUNS=3
 RAW=0
@@ -48,6 +50,7 @@ while [[ $# -gt 0 ]]; do
     --prompt-file) PROMPT_FILE="${2:?}"; shift 2 ;;
     --max-tokens) MAX_TOKENS="${2:?}"; shift 2 ;;
     --temperature) TEMPERATURE="${2:?}"; shift 2 ;;
+    --seed) SEED="${2:?}"; shift 2 ;;
     --warmup) WARMUP="${2:?}"; shift 2 ;;
     --runs) RUNS="${2:?}"; shift 2 ;;
     --raw) RAW=1; shift ;;
@@ -69,6 +72,10 @@ if [[ -n "$DRAFT" ]]; then
   [[ -d "$DRAFT" ]] || { echo "error: draft directory not found: $DRAFT" >&2; exit 2; }
 fi
 [[ "$MAX_TOKENS" =~ ^[0-9]+$ ]] || { echo "error: --max-tokens must be an integer" >&2; exit 2; }
+if [[ -n "$SEED" && ! "$SEED" =~ ^[0-9]+$ ]]; then
+  echo "error: --seed must be a non-negative integer" >&2
+  exit 2
+fi
 [[ "$WARMUP" =~ ^[0-9]+$ ]] || { echo "error: --warmup must be an integer" >&2; exit 2; }
 [[ "$RUNS" =~ ^[1-9][0-9]*$ ]] || { echo "error: --runs must be a positive integer" >&2; exit 2; }
 [[ "$DRAFT_TOKENS" =~ ^[1-9][0-9]*$ ]] || { echo "error: --draft-tokens must be a positive integer" >&2; exit 2; }
@@ -144,6 +151,7 @@ trap 'rm -f "$LOCK"' EXIT
   echo "os=$(sw_vers -productVersion 2>/dev/null || true) ($(sw_vers -buildVersion 2>/dev/null || true))"
   echo "max_tokens=$MAX_TOKENS"
   echo "temperature=$TEMPERATURE"
+  echo "seed=$SEED"
   echo "warmup=$WARMUP"
   echo "runs=$RUNS"
   echo "raw=$RAW"
@@ -160,6 +168,7 @@ run_one() {
   local stdout_file="$OUT_DIR/${phase}-${idx}.stdout.txt"
   local stderr_file="$OUT_DIR/${phase}-${idx}.stderr.txt"
   local args=(run --model "$MODEL" --prompt "$PROMPT" --max-tokens "$MAX_TOKENS" --temperature "$TEMPERATURE" --verbose)
+  [[ -n "$SEED" ]] && args+=(--seed "$SEED")
   [[ -n "$DRAFT" ]] && args+=(--draft "$DRAFT" --draft-tokens "$DRAFT_TOKENS")
   [[ "$RAW" == "1" ]] && args+=(--raw)
   local status="ok"
