@@ -124,10 +124,11 @@ scripts/benchmark-report.sh \
 ```
 
 The report script reads the suite summary and each measured model's raw `summary.tsv` and
-`metadata.txt`. It refuses missing raw logs and failed measured rows. Rows without a recorded model
-repo revision are marked `publishable=no`; do not copy those numbers into public docs. The report
-includes `benchmark_mode` and refuses suite/model setting drift; do not compare rows unless the mode
-and prompt settings match.
+`metadata.txt`. It refuses missing raw logs, raw paths outside the suite's raw evidence root, missing
+captured stdout/stderr, and failed measured rows. Rows without a recorded model repo revision are
+marked `publishable=no`; do not copy those numbers into public docs. The report includes
+`benchmark_mode` and refuses suite/model setting drift; do not compare rows unless the mode and prompt
+settings match.
 
 Run `scripts/check-benchmark-raw.sh` before committing raw benchmark logs. It checks clean run-start
 git status for new or changed raw dirs, pinned model repo revisions, recorded caix commits,

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 usage() {
   cat <<'USAGE'
 Usage: scripts/benchmark-report.sh --suite <suite-dir> [--out <path>]
@@ -10,7 +13,8 @@ Options:
   --out <path>   Report path. Default: <suite-dir>/report.tsv.
 
 Reads suite summary rows plus per-model raw benchmark summaries.
-Refuses measured rows with missing raw logs or failed measured runs.
+Refuses measured rows with missing or out-of-tree raw logs, missing captured stdout/stderr, or
+failed measured runs.
 Rows without a recorded model revision are marked publishable=no.
 Preserves benchmark_mode so standalone decode, classic speculative, and EAGLE rows are not mixed.
 USAGE
@@ -32,6 +36,8 @@ done
 [[ -d "$SUITE" ]] || { echo "error: suite directory not found: $SUITE" >&2; exit 2; }
 [[ -f "$SUITE/summary.tsv" ]] || { echo "error: suite summary not found: $SUITE/summary.tsv" >&2; exit 2; }
 [[ -f "$SUITE/metadata.txt" ]] || { echo "error: suite metadata not found: $SUITE/metadata.txt" >&2; exit 2; }
+SUITE_REAL="$(cd "$SUITE" && pwd -P)"
+RAW_REAL="$(dirname "$SUITE_REAL")"
 
 if [[ -z "$OUT" ]]; then
   OUT="$SUITE/report.tsv"
@@ -56,6 +62,47 @@ canonical_benchmark_mode() {
   case "$1" in
     eagle) printf 'eagle-mtp' ;;
     *) printf '%s' "$1" ;;
+  esac
+}
+
+resolve_local_path() {
+  case "$1" in
+    /*) printf '%s\n' "$1" ;;
+    *) printf '%s/%s\n' "$REPO_DIR" "$1" ;;
+  esac
+}
+
+canonical_existing_path() {
+  local path="$1"
+  local abs dir base
+
+  abs="$(resolve_local_path "$path")"
+  if [[ -d "$abs" ]]; then
+    (cd "$abs" && pwd -P)
+  else
+    dir="$(cd "$(dirname "$abs")" && pwd -P)" || return 1
+    base="$(basename "$abs")"
+    printf '%s/%s\n' "$dir" "$base"
+  fi
+}
+
+require_path_under_dir() {
+  local label="$1"
+  local path="$2"
+  local parent="$3"
+  local path_real
+
+  path_real="$(canonical_existing_path "$path")" || {
+    echo "error: cannot resolve $label path: $path" >&2
+    exit 1
+  }
+
+  case "$path_real" in
+    "$parent"/*) ;;
+    *)
+      echo "error: $label path is outside expected directory: $path" >&2
+      exit 1
+      ;;
   esac
 }
 
@@ -170,34 +217,37 @@ while IFS=$'\t' read -r repo local_dir kind col4 col5 col6 col7 col8; do
   raw_dir="$output"
 
   if [[ "$status" == "measured" ]]; then
-    [[ -d "$output" ]] || { echo "error: raw output directory missing for $repo: $output" >&2; exit 1; }
-    [[ -f "$output/summary.tsv" ]] || { echo "error: raw summary missing for $repo: $output/summary.tsv" >&2; exit 1; }
-    [[ -f "$output/metadata.txt" ]] || { echo "error: raw metadata missing for $repo: $output/metadata.txt" >&2; exit 1; }
+    output_path="$(resolve_local_path "$output")"
+    [[ -d "$output_path" ]] || { echo "error: raw output directory missing for $repo: $output" >&2; exit 1; }
+    [[ -f "$output_path/summary.tsv" ]] || { echo "error: raw summary missing for $repo: $output/summary.tsv" >&2; exit 1; }
+    [[ -f "$output_path/metadata.txt" ]] || { echo "error: raw metadata missing for $repo: $output/metadata.txt" >&2; exit 1; }
+    require_path_under_dir "$repo raw output" "$output" "$RAW_REAL"
+    output_real="$(canonical_existing_path "$output")"
 
-    failed="$(count_measured_failed "$output/summary.tsv")"
+    failed="$(count_measured_failed "$output_path/summary.tsv")"
     [[ "$failed" == "0" ]] || { echo "error: measured run failed for $repo ($failed failed rows)" >&2; exit 1; }
 
-    measured_runs="$(count_measured_ok "$output/summary.tsv")"
+    measured_runs="$(count_measured_ok "$output_path/summary.tsv")"
     [[ "$measured_runs" -gt 0 ]] || { echo "error: no measured ok rows for $repo" >&2; exit 1; }
 
-    metadata_repo="$(metadata_value repo "$output/metadata.txt")"
+    metadata_repo="$(metadata_value repo "$output_path/metadata.txt")"
     [[ -z "$metadata_repo" || "$metadata_repo" == "$repo" ]] || {
       echo "error: metadata repo mismatch for $repo: $metadata_repo" >&2
       exit 1
     }
-    repo_revision="$(metadata_value repo_revision "$output/metadata.txt")"
+    repo_revision="$(metadata_value repo_revision "$output_path/metadata.txt")"
     [[ -n "$repo_revision" ]] || repo_revision="unknown"
 
-    caix_commit="$(metadata_value caix_commit "$output/metadata.txt")"
-    machine="$(metadata_value machine "$output/metadata.txt")"
-    memory="$(metadata_value memory_bytes "$output/metadata.txt")"
-    os="$(metadata_value os "$output/metadata.txt")"
-    raw_max_tokens="$(metadata_value max_tokens "$output/metadata.txt")"
-    raw_temperature="$(metadata_value temperature "$output/metadata.txt")"
-    raw_seed="$(metadata_value seed "$output/metadata.txt")"
-    raw_template_mode="$(metadata_value raw "$output/metadata.txt")"
-    raw_prompt="$(metadata_value prompt "$output/metadata.txt")"
-    raw_mode="$(metadata_value benchmark_mode "$output/metadata.txt")"
+    caix_commit="$(metadata_value caix_commit "$output_path/metadata.txt")"
+    machine="$(metadata_value machine "$output_path/metadata.txt")"
+    memory="$(metadata_value memory_bytes "$output_path/metadata.txt")"
+    os="$(metadata_value os "$output_path/metadata.txt")"
+    raw_max_tokens="$(metadata_value max_tokens "$output_path/metadata.txt")"
+    raw_temperature="$(metadata_value temperature "$output_path/metadata.txt")"
+    raw_seed="$(metadata_value seed "$output_path/metadata.txt")"
+    raw_template_mode="$(metadata_value raw "$output_path/metadata.txt")"
+    raw_prompt="$(metadata_value prompt "$output_path/metadata.txt")"
+    raw_mode="$(metadata_value benchmark_mode "$output_path/metadata.txt")"
     if [[ -n "$raw_mode" ]]; then
       raw_mode="$(canonical_benchmark_mode "$raw_mode")"
       if [[ "$benchmark_mode" != "-" && "$raw_mode" != "$benchmark_mode" ]]; then
@@ -214,7 +264,7 @@ while IFS=$'\t' read -r repo local_dir kind col4 col5 col6 col7 col8; do
     require_same_setting "$repo" raw "$suite_raw" "$raw_template_mode"
     require_same_setting "$repo" prompt "$suite_prompt" "$raw_prompt"
 
-    expected_runs="$(metadata_value runs "$output/metadata.txt")"
+    expected_runs="$(metadata_value runs "$output_path/metadata.txt")"
     [[ "$expected_runs" =~ ^[1-9][0-9]*$ ]] || {
       echo "error: invalid runs metadata for $repo: $expected_runs" >&2
       exit 1
@@ -230,13 +280,23 @@ while IFS=$'\t' read -r repo local_dir kind col4 col5 col6 col7 col8; do
     raw="$raw_template_mode"
     prompt="$raw_prompt"
 
-    median_generated="$(median_field "$output/summary.tsv" 4)"
-    median_load="$(median_field "$output/summary.tsv" 5)"
-    median_prefill="$(median_field "$output/summary.tsv" 6)"
-    median_decode="$(median_field "$output/summary.tsv" 7)"
-    median_tps="$(median_field "$output/summary.tsv" 8)"
-    min_tps="$(min_field "$output/summary.tsv" 8)"
-    max_tps="$(max_field "$output/summary.tsv" 8)"
+    while IFS=$'\t' read -r phase _run run_status _generated _load _prefill _decode _tps stdout_path stderr_path; do
+      [[ "$phase" == "measured" && "$run_status" == "ok" ]] || continue
+      stdout_file="$(resolve_local_path "$stdout_path")"
+      stderr_file="$(resolve_local_path "$stderr_path")"
+      [[ -f "$stdout_file" ]] || { echo "error: measured stdout missing for $repo: $stdout_path" >&2; exit 1; }
+      [[ -f "$stderr_file" ]] || { echo "error: measured stderr missing for $repo: $stderr_path" >&2; exit 1; }
+      require_path_under_dir "$repo measured stdout" "$stdout_file" "$output_real"
+      require_path_under_dir "$repo measured stderr" "$stderr_file" "$output_real"
+    done < "$output_path/summary.tsv"
+
+    median_generated="$(median_field "$output_path/summary.tsv" 4)"
+    median_load="$(median_field "$output_path/summary.tsv" 5)"
+    median_prefill="$(median_field "$output_path/summary.tsv" 6)"
+    median_decode="$(median_field "$output_path/summary.tsv" 7)"
+    median_tps="$(median_field "$output_path/summary.tsv" 8)"
+    min_tps="$(min_field "$output_path/summary.tsv" 8)"
+    max_tps="$(max_field "$output_path/summary.tsv" 8)"
 
     if [[ "$repo_revision" == "unknown" ]]; then
       reason="missing repo revision in raw metadata"
