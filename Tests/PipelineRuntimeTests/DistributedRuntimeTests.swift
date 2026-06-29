@@ -2230,6 +2230,133 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertTrue(handles.allSatisfy { $0.inputs.isEmpty })
     }
 
+    func testSameMachinePipelineRequiresAllocationBeforeForwarding() async throws {
+        let plan = makePlan()
+        let handles = makeFakeHandles(for: plan)
+        let pipeline = try DistributedSameMachinePipeline(plan: plan, stages: handles)
+
+        await XCTAssertThrowsErrorAsync(
+            try await pipeline.forward(
+                requestID: "req-1",
+                stepIndex: 0,
+                positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+                tokenIDs: [7])
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidForwardInput("request_id req-1 is not allocated"))
+        }
+        XCTAssertTrue(handles.allSatisfy { $0.inputs.isEmpty })
+    }
+
+    func testSameMachinePipelineRejectsDuplicateAllocationBeforeForwarding() async throws {
+        let plan = makePlan()
+        let handles = makeFakeHandles(for: plan)
+        let pipeline = try DistributedSameMachinePipeline(plan: plan, stages: handles)
+
+        try await pipeline.allocate(requestID: "req-1", kvCapacity: 4)
+        await XCTAssertThrowsErrorAsync(
+            try await pipeline.allocate(requestID: "req-1", kvCapacity: 4)
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidControlFrame("request_id req-1 is already allocated"))
+        }
+        XCTAssertEqual(handles.map(\.allocatedRequests), [["req-1"], ["req-1"], ["req-1"], ["req-1"]])
+    }
+
+    func testSameMachinePipelineTracksForwardStepOrderAndPositions() async throws {
+        let plan = makePlan()
+        let handles = makeFakeHandles(for: plan)
+        let pipeline = try DistributedSameMachinePipeline(plan: plan, stages: handles)
+
+        try await pipeline.allocate(requestID: "req-1", kvCapacity: 4)
+        _ = try await pipeline.forward(
+            requestID: "req-1",
+            stepIndex: 0,
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 2),
+            tokenIDs: [1, 2])
+
+        await XCTAssertThrowsErrorAsync(
+            try await pipeline.forward(
+                requestID: "req-1",
+                stepIndex: 0,
+                positionRange: DistributedSequenceRange(lowerBound: 2, upperBound: 3),
+                tokenIDs: [3])
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidForwardInput("step_index 0 does not match expected 1"))
+        }
+
+        await XCTAssertThrowsErrorAsync(
+            try await pipeline.forward(
+                requestID: "req-1",
+                stepIndex: 1,
+                positionRange: DistributedSequenceRange(lowerBound: 3, upperBound: 4),
+                tokenIDs: [4])
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidForwardInput(
+                    "position_range lower_bound 3 does not match processed_token_count 2"))
+        }
+        XCTAssertTrue(handles.allSatisfy { $0.inputs.count == 1 })
+
+        let output = try await pipeline.forward(
+            requestID: "req-1",
+            stepIndex: 1,
+            positionRange: DistributedSequenceRange(lowerBound: 2, upperBound: 3),
+            tokenIDs: [3])
+        XCTAssertEqual(output.tokenID, 42)
+        XCTAssertTrue(handles.allSatisfy { $0.inputs.count == 2 })
+    }
+
+    func testSameMachinePipelineResetRewindsRequestTracker() async throws {
+        let plan = makePlan()
+        let handles = makeFakeHandles(for: plan)
+        let pipeline = try DistributedSameMachinePipeline(plan: plan, stages: handles)
+
+        try await pipeline.allocate(requestID: "req-1", kvCapacity: 4)
+        _ = try await pipeline.forward(
+            requestID: "req-1",
+            stepIndex: 0,
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 2),
+            tokenIDs: [1, 2])
+        try await pipeline.reset(requestID: "req-1")
+        let output = try await pipeline.forward(
+            requestID: "req-1",
+            stepIndex: 0,
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+            tokenIDs: [3])
+
+        XCTAssertEqual(output.tokenID, 42)
+        XCTAssertEqual(handles.map(\.resetRequests), [["req-1"], ["req-1"], ["req-1"], ["req-1"]])
+        XCTAssertTrue(handles.allSatisfy { $0.inputs.count == 2 })
+    }
+
+    func testSameMachinePipelineFreeClearsRequestTracker() async throws {
+        let plan = makePlan()
+        let handles = makeFakeHandles(for: plan)
+        let pipeline = try DistributedSameMachinePipeline(plan: plan, stages: handles)
+
+        try await pipeline.allocate(requestID: "req-1", kvCapacity: 4)
+        await pipeline.free(requestID: "req-1")
+
+        await XCTAssertThrowsErrorAsync(
+            try await pipeline.forward(
+                requestID: "req-1",
+                stepIndex: 0,
+                positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+                tokenIDs: [7])
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidForwardInput("request_id req-1 is not allocated"))
+        }
+        XCTAssertEqual(handles.map(\.freeRequests), [["req-1"], ["req-1"], ["req-1"], ["req-1"]])
+    }
+
     func testSameMachinePipelineRejectsEmptyResetRequestIDBeforeForwarding() async throws {
         let plan = makePlan()
         let handles = makeFakeHandles(for: plan)

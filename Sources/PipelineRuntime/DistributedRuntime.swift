@@ -2381,6 +2381,7 @@ public enum DistributedStageExecutionError: Error, Equatable, Sendable, CustomSt
 public final class DistributedSameMachinePipeline {
     public let plan: DistributedStagePlan
     private let stages: [DistributedStageHandle]
+    private var requestTracker = DistributedWorkerRequestTracker()
 
     public init(plan: DistributedStagePlan, stages: [DistributedStageHandle]) throws {
         try plan.validate()
@@ -2442,9 +2443,11 @@ public final class DistributedSameMachinePipeline {
             throw DistributedStageExecutionError.invalidForwardInput("kv_capacity must be positive")
         }
         let allocation = DistributedStageAllocation(requestID: requestID, kvCapacity: kvCapacity)
+        try requestTracker.validateAllocate(allocation)
         for stage in stages {
             try await stage.allocate(allocation)
         }
+        requestTracker.commitAllocate(allocation)
     }
 
     public func forward(
@@ -2474,6 +2477,15 @@ public final class DistributedSameMachinePipeline {
         var hiddenState: DistributedHiddenStatePacket?
         var tokenID: Int32?
         let positionIDs = try Self.positionIDs(for: positionRange)
+        let firstFrame = DistributedStageForwardFrame(
+            stageID: stages.first!.descriptor.id,
+            requestID: requestID,
+            stepIndex: stepIndex,
+            positionRange: positionRange,
+            positionIDs: positionIDs,
+            tokenIDs: tokenIDs)
+        try firstFrame.validate(against: plan)
+        try requestTracker.validateForward(firstFrame)
 
         for (index, stage) in stages.enumerated() {
             let input = DistributedStageForwardInput(
@@ -2493,6 +2505,7 @@ public final class DistributedSameMachinePipeline {
             throw DistributedStageExecutionError.invalidStageOutput(
                 "final stage did not return a token id")
         }
+        requestTracker.commitForward(firstFrame)
         return DistributedStageForwardOutput(
             stageID: stages.last!.descriptor.id,
             stepIndex: stepIndex,
@@ -2516,15 +2529,21 @@ public final class DistributedSameMachinePipeline {
         guard !requestID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw DistributedStageExecutionError.invalidForwardInput("request_id is empty")
         }
+        let control = DistributedRequestControl(requestID: requestID)
+        try requestTracker.validateReset(control)
         for stage in stages {
             try await stage.reset(requestID: requestID)
         }
+        requestTracker.commitReset(control)
     }
 
     public func free(requestID: String) async {
+        guard requestTracker.activeRequestIDs.contains(requestID) else { return }
+        let control = DistributedRequestControl(requestID: requestID)
         for stage in stages {
             await stage.free(requestID: requestID)
         }
+        requestTracker.commitFree(control)
     }
 
     private func validate(
