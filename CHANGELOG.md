@@ -27,6 +27,8 @@
 - Added a benchmark suite manifest so every known RHM caix repo is measured or skipped with a stated
   reason.
 - Added a benchmark-suite guard that refuses measured rows without an exact model repo revision.
+- Added a benchmark gap audit that reports eligible manifest rows without committed measured raw
+  evidence.
 - Added direct benchmark-runner guards that require model repo id and exact repo revision.
 - Added benchmark runner guards that refuse measured runs from a dirty git worktree.
 - Added benchmark runner guards for active resumable Hub payload upload jobs.

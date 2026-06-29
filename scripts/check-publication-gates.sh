@@ -3,11 +3,12 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/check-publication-gates.sh [--hub] [--distributed] [--caix <path>] [--brew-caix <path>]
+Usage: scripts/check-publication-gates.sh [--hub] [--distributed] [--strict-benchmark-gaps] [--caix <path>] [--brew-caix <path>]
 
 Runs the non-heavy gates for publishing docs, cards, manifests, and benchmark evidence.
 Default checks are local only. --hub adds Hugging Face metadata/model-card checks.
 --distributed checks the Thunderbolt readiness gate.
+--strict-benchmark-gaps fails when an eligible benchmark manifest row lacks raw evidence.
 USAGE
 }
 
@@ -15,12 +16,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 RUN_HUB=0
 RUN_DISTRIBUTED=0
+STRICT_BENCHMARK_GAPS=0
 caix_args=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --hub) RUN_HUB=1; shift ;;
     --distributed) RUN_DISTRIBUTED=1; shift ;;
+    --strict-benchmark-gaps) STRICT_BENCHMARK_GAPS=1; shift ;;
     --caix) caix_args+=(--caix "${2:?}"); shift 2 ;;
     --brew-caix) caix_args+=(--brew-caix "${2:?}"); shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -48,6 +51,11 @@ run "$SCRIPT_DIR/check-version-sync.sh"
 run "$SCRIPT_DIR/check-conversion-ledger.sh"
 run "$SCRIPT_DIR/check-conversion-gap-audit.sh"
 run "$SCRIPT_DIR/check-benchmark-raw.sh"
+if [[ "$STRICT_BENCHMARK_GAPS" == "1" ]]; then
+  run "$SCRIPT_DIR/check-benchmark-gaps.sh" --strict
+else
+  run "$SCRIPT_DIR/check-benchmark-gaps.sh"
+fi
 run "$SCRIPT_DIR/check-tester-requests.sh"
 
 if [[ "$RUN_HUB" == "1" ]]; then
