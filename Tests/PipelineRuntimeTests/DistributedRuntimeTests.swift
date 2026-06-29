@@ -547,22 +547,25 @@ final class DistributedRuntimeTests: XCTestCase {
             requestID: "req-1",
             source: "layers-0-16",
             destination: "layers-16-32",
-            positionRange: DistributedSequenceRange(lowerBound: 4, upperBound: 7),
-            stepIndex: 1,
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 3),
+            stepIndex: 0,
             fill: 9)
         let request = DistributedWorkerWireFrame(
             message: .forward(DistributedStageForwardFrame(
                 stageID: "layers-16-32",
                 requestID: "req-1",
-                stepIndex: 1,
-                positionRange: DistributedSequenceRange(lowerBound: 4, upperBound: 7),
-                positionIDs: [4, 5, 6],
+                stepIndex: 0,
+                positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 3),
+                positionIDs: [0, 1, 2],
                 hiddenState: packet.metadata)),
             payload: packet.payload)
 
+        let allocateResponse = try await executor.process(DistributedWorkerWireFrame(
+            message: .allocate(DistributedStageAllocation(requestID: "req-1", kvCapacity: 8))))
         let maybeResponse = try await executor.process(request)
         let response = try XCTUnwrap(maybeResponse)
 
+        XCTAssertNil(allocateResponse)
         XCTAssertEqual(handle.inputs.count, 1)
         XCTAssertEqual(handle.inputs[0].requestID, "req-1")
         XCTAssertEqual(handle.inputs[0].hiddenState, packet)
@@ -572,10 +575,230 @@ final class DistributedRuntimeTests: XCTestCase {
         }
         XCTAssertEqual(result.stageID, "layers-16-32")
         XCTAssertEqual(result.requestID, "req-1")
-        XCTAssertEqual(result.stepIndex, 1)
+        XCTAssertEqual(result.stepIndex, 0)
         XCTAssertEqual(result.hiddenState?.sourceStageID, "layers-16-32")
         XCTAssertEqual(result.hiddenState?.destinationStageID, "final")
         XCTAssertEqual(response.payload.count, 12)
+    }
+
+    func testWorkerFrameExecutorRejectsForwardBeforeAllocate() async throws {
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 2], scalarType: .float16))
+        let handle = makeFakeHandles(for: plan)[2]
+        let executor = try DistributedWorkerFrameExecutor(plan: plan, handle: handle)
+        let packet = try hiddenPacket(
+            requestID: "req-1",
+            source: "layers-0-16",
+            destination: "layers-16-32",
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+            stepIndex: 0,
+            fill: 7)
+
+        await XCTAssertThrowsErrorAsync(
+            try await executor.process(DistributedWorkerWireFrame(
+                message: .forward(DistributedStageForwardFrame(
+                    stageID: "layers-16-32",
+                    requestID: "req-1",
+                    stepIndex: 0,
+                    positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+                    positionIDs: [0],
+                    hiddenState: packet.metadata)),
+                payload: packet.payload))
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidForwardInput("request_id req-1 is not allocated"))
+        }
+        XCTAssertTrue(handle.inputs.isEmpty)
+    }
+
+    func testWorkerFrameExecutorRejectsStepDrift() async throws {
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 2], scalarType: .float16))
+        let handle = makeFakeHandles(for: plan)[2]
+        let executor = try DistributedWorkerFrameExecutor(plan: plan, handle: handle)
+        let firstPacket = try hiddenPacket(
+            requestID: "req-1",
+            source: "layers-0-16",
+            destination: "layers-16-32",
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+            stepIndex: 0,
+            fill: 7)
+        let stalePacket = try hiddenPacket(
+            requestID: "req-1",
+            source: "layers-0-16",
+            destination: "layers-16-32",
+            positionRange: DistributedSequenceRange(lowerBound: 1, upperBound: 2),
+            stepIndex: 0,
+            fill: 8)
+
+        _ = try await executor.process(DistributedWorkerWireFrame(
+            message: .allocate(DistributedStageAllocation(requestID: "req-1", kvCapacity: 4))))
+        _ = try await executor.process(DistributedWorkerWireFrame(
+            message: .forward(DistributedStageForwardFrame(
+                stageID: "layers-16-32",
+                requestID: "req-1",
+                stepIndex: 0,
+                positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+                positionIDs: [0],
+                hiddenState: firstPacket.metadata)),
+            payload: firstPacket.payload))
+
+        await XCTAssertThrowsErrorAsync(
+            try await executor.process(DistributedWorkerWireFrame(
+                message: .forward(DistributedStageForwardFrame(
+                    stageID: "layers-16-32",
+                    requestID: "req-1",
+                    stepIndex: 0,
+                    positionRange: DistributedSequenceRange(lowerBound: 1, upperBound: 2),
+                    positionIDs: [1],
+                    hiddenState: stalePacket.metadata)),
+                payload: stalePacket.payload))
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidForwardInput("step_index 0 does not match expected 1"))
+        }
+        XCTAssertEqual(handle.inputs.count, 1)
+    }
+
+    func testWorkerFrameExecutorRejectsPositionDriftAndCapacityOverflow() async throws {
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 2], scalarType: .float16))
+        let handles = makeFakeHandles(for: plan)
+        let driftExecutor = try DistributedWorkerFrameExecutor(plan: plan, handle: handles[2])
+        let overflowExecutor = try DistributedWorkerFrameExecutor(plan: plan, handle: handles[1])
+        let driftPacket = try hiddenPacket(
+            requestID: "req-drift",
+            source: "layers-0-16",
+            destination: "layers-16-32",
+            positionRange: DistributedSequenceRange(lowerBound: 1, upperBound: 2),
+            stepIndex: 0,
+            fill: 7)
+        let overflowPacket = try hiddenPacket(
+            requestID: "req-overflow",
+            source: "embed",
+            destination: "layers-0-16",
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 2),
+            stepIndex: 0,
+            fill: 8)
+
+        _ = try await driftExecutor.process(DistributedWorkerWireFrame(
+            message: .allocate(DistributedStageAllocation(
+                requestID: "req-drift", kvCapacity: 4))))
+        await XCTAssertThrowsErrorAsync(
+            try await driftExecutor.process(DistributedWorkerWireFrame(
+                message: .forward(DistributedStageForwardFrame(
+                    stageID: "layers-16-32",
+                    requestID: "req-drift",
+                    stepIndex: 0,
+                    positionRange: DistributedSequenceRange(lowerBound: 1, upperBound: 2),
+                    positionIDs: [1],
+                    hiddenState: driftPacket.metadata)),
+                payload: driftPacket.payload))
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidForwardInput(
+                    "position_range lower_bound 1 does not match processed_token_count 0"))
+        }
+
+        _ = try await overflowExecutor.process(DistributedWorkerWireFrame(
+            message: .allocate(DistributedStageAllocation(
+                requestID: "req-overflow", kvCapacity: 1))))
+        await XCTAssertThrowsErrorAsync(
+            try await overflowExecutor.process(DistributedWorkerWireFrame(
+                message: .forward(DistributedStageForwardFrame(
+                    stageID: "layers-0-16",
+                    requestID: "req-overflow",
+                    stepIndex: 0,
+                    positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 2),
+                    positionIDs: [0, 1],
+                    hiddenState: overflowPacket.metadata)),
+                payload: overflowPacket.payload))
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidForwardInput("position_range upper_bound 2 exceeds kv_capacity 1"))
+        }
+        XCTAssertTrue(handles[1].inputs.isEmpty)
+        XCTAssertTrue(handles[2].inputs.isEmpty)
+    }
+
+    func testWorkerFrameExecutorResetRewindsRequestState() async throws {
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 2], scalarType: .float16))
+        let handle = makeFakeHandles(for: plan)[2]
+        let executor = try DistributedWorkerFrameExecutor(plan: plan, handle: handle)
+        let packet = try hiddenPacket(
+            requestID: "req-1",
+            source: "layers-0-16",
+            destination: "layers-16-32",
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+            stepIndex: 0,
+            fill: 7)
+        let request = DistributedWorkerWireFrame(
+            message: .forward(DistributedStageForwardFrame(
+                stageID: "layers-16-32",
+                requestID: "req-1",
+                stepIndex: 0,
+                positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+                positionIDs: [0],
+                hiddenState: packet.metadata)),
+            payload: packet.payload)
+
+        _ = try await executor.process(DistributedWorkerWireFrame(
+            message: .allocate(DistributedStageAllocation(requestID: "req-1", kvCapacity: 4))))
+        _ = try await executor.process(request)
+        _ = try await executor.process(DistributedWorkerWireFrame(
+            message: .reset(DistributedRequestControl(
+                requestID: "req-1", stageID: "layers-16-32"))))
+        _ = try await executor.process(request)
+
+        XCTAssertEqual(handle.inputs.count, 2)
+        XCTAssertEqual(handle.resetRequests, ["req-1"])
+    }
+
+    func testWorkerFrameExecutorFreeDropsRequestState() async throws {
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 2], scalarType: .float16))
+        let handle = makeFakeHandles(for: plan)[2]
+        let executor = try DistributedWorkerFrameExecutor(plan: plan, handle: handle)
+        let packet = try hiddenPacket(
+            requestID: "req-1",
+            source: "layers-0-16",
+            destination: "layers-16-32",
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+            stepIndex: 0,
+            fill: 7)
+
+        _ = try await executor.process(DistributedWorkerWireFrame(
+            message: .allocate(DistributedStageAllocation(requestID: "req-1", kvCapacity: 4))))
+        _ = try await executor.process(DistributedWorkerWireFrame(
+            message: .free(DistributedRequestControl(
+                requestID: "req-1", stageID: "layers-16-32"))))
+
+        await XCTAssertThrowsErrorAsync(
+            try await executor.process(DistributedWorkerWireFrame(
+                message: .forward(DistributedStageForwardFrame(
+                    stageID: "layers-16-32",
+                    requestID: "req-1",
+                    stepIndex: 0,
+                    positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+                    positionIDs: [0],
+                    hiddenState: packet.metadata)),
+                payload: packet.payload))
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidForwardInput("request_id req-1 is not allocated"))
+        }
+        XCTAssertTrue(handle.inputs.isEmpty)
     }
 
     func testWorkerFrameExecutorRejectsWrongStageFrame() async throws {
@@ -713,6 +936,64 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertEqual(handle.allocatedRequests, ["req-1"])
     }
 
+    func testLoopbackWorkerTransportRoundTripsHandshakeWithChunking() throws {
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 2], scalarType: .float16))
+        let handles = makeFakeHandles(for: plan)
+        var coordinator = try DistributedWorkerHandshakeCoordinator(plan: plan)
+
+        for handle in handles {
+            let executor = try DistributedWorkerFrameExecutor(plan: plan, handle: handle)
+            let loopback = DistributedLoopbackWorkerTransport(
+                executor: executor,
+                requestChunkSize: 3,
+                responseChunkSize: 2)
+            let response = try loopback.handshake(
+                with: &coordinator,
+                cacheContract: "stateful",
+                freeMemoryBytes: 2048,
+                computeUnit: "all",
+                labels: ["stage": handle.descriptor.id])
+
+            XCTAssertNoThrow(try response.validate(against: plan))
+            guard case .helloAck(let ack) = response.message else {
+                return XCTFail("expected hello_ack")
+            }
+            XCTAssertTrue(ack.accepted)
+            XCTAssertEqual(ack.stageID, handle.descriptor.id)
+            XCTAssertEqual(ack.planIntegrityHash, try plan.integrityHash())
+            XCTAssertNil(ack.reason)
+            XCTAssertTrue(response.payload.isEmpty)
+        }
+
+        XCTAssertTrue(coordinator.isReady)
+        XCTAssertNoThrow(try coordinator.requireReady())
+    }
+
+    func testLoopbackWorkerTransportRejectsDuplicateHandshake() throws {
+        let plan = makePlan()
+        let handle = makeFakeHandles(for: plan)[1]
+        let executor = try DistributedWorkerFrameExecutor(plan: plan, handle: handle)
+        let loopback = DistributedLoopbackWorkerTransport(
+            executor: executor,
+            requestChunkSize: 1,
+            responseChunkSize: 1)
+        var coordinator = try DistributedWorkerHandshakeCoordinator(plan: plan)
+
+        _ = try loopback.handshake(with: &coordinator)
+        let response = try loopback.handshake(with: &coordinator)
+
+        guard case .helloAck(let ack) = response.message else {
+            return XCTFail("expected hello_ack")
+        }
+        XCTAssertFalse(ack.accepted)
+        XCTAssertEqual(ack.stageID, handle.descriptor.id)
+        XCTAssertEqual(ack.reason, "stage already claimed")
+        XCTAssertNil(ack.planIntegrityHash)
+        XCTAssertEqual(coordinator.claimedStages, [handle.descriptor.id])
+    }
+
     func testLoopbackWorkerTransportRoundTripsForwardResponseWithChunking() async throws {
         let plan = makePlan(
             boundaryTensor: DistributedBoundaryTensorSpec(
@@ -727,19 +1008,22 @@ final class DistributedRuntimeTests: XCTestCase {
             requestID: "req-1",
             source: "layers-0-16",
             destination: "layers-16-32",
-            positionRange: DistributedSequenceRange(lowerBound: 4, upperBound: 7),
-            stepIndex: 1,
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 3),
+            stepIndex: 0,
             fill: 9)
         let request = DistributedWorkerWireFrame(
             message: .forward(DistributedStageForwardFrame(
                 stageID: "layers-16-32",
                 requestID: "req-1",
-                stepIndex: 1,
-                positionRange: DistributedSequenceRange(lowerBound: 4, upperBound: 7),
-                positionIDs: [4, 5, 6],
+                stepIndex: 0,
+                positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 3),
+                positionIDs: [0, 1, 2],
                 hiddenState: packet.metadata)),
             payload: packet.payload)
 
+        let allocateResponse = try await loopback.roundTrip(DistributedWorkerWireFrame(
+            message: .allocate(DistributedStageAllocation(requestID: "req-1", kvCapacity: 8))))
+        XCTAssertNil(allocateResponse)
         let maybeResponse = try await loopback.roundTrip(request)
         let response = try XCTUnwrap(maybeResponse)
 
@@ -749,9 +1033,9 @@ final class DistributedRuntimeTests: XCTestCase {
         }
         XCTAssertEqual(result.stageID, "layers-16-32")
         XCTAssertEqual(result.requestID, "req-1")
-        XCTAssertEqual(result.stepIndex, 1)
+        XCTAssertEqual(result.stepIndex, 0)
         XCTAssertEqual(response.payload.count, packet.payload.count)
-        XCTAssertEqual(handle.inputs.first?.positionIDs, [4, 5, 6])
+        XCTAssertEqual(handle.inputs.first?.positionIDs, [0, 1, 2])
     }
 
     func testRemoteStageHandleRejectsMissingForwardResponse() async throws {

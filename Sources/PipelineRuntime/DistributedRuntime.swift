@@ -1710,10 +1710,97 @@ public struct DistributedWorkerHandshakeCoordinator: Sendable {
     }
 }
 
+public struct DistributedWorkerRequestTracker: Sendable {
+    public struct RequestState: Hashable, Sendable {
+        public let kvCapacity: Int
+        public let processedTokenCount: Int
+        public let nextStepIndex: Int
+
+        public init(
+            kvCapacity: Int,
+            processedTokenCount: Int = 0,
+            nextStepIndex: Int = 0
+        ) {
+            self.kvCapacity = kvCapacity
+            self.processedTokenCount = processedTokenCount
+            self.nextStepIndex = nextStepIndex
+        }
+    }
+
+    private var requests: [String: RequestState] = [:]
+
+    public init() {}
+
+    public var activeRequestIDs: Set<String> {
+        Set(requests.keys)
+    }
+
+    public func state(for requestID: String) -> RequestState? {
+        requests[requestID]
+    }
+
+    public func validateAllocate(_ allocation: DistributedStageAllocation) throws {
+        try allocation.validate()
+        guard requests[allocation.requestID] == nil else {
+            throw DistributedStageExecutionError.invalidControlFrame(
+                "request_id \(allocation.requestID) is already allocated")
+        }
+    }
+
+    public mutating func commitAllocate(_ allocation: DistributedStageAllocation) {
+        requests[allocation.requestID] = RequestState(kvCapacity: allocation.kvCapacity)
+    }
+
+    public func validateForward(_ frame: DistributedStageForwardFrame) throws {
+        guard let state = requests[frame.requestID] else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "request_id \(frame.requestID) is not allocated")
+        }
+        guard frame.stepIndex == state.nextStepIndex else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "step_index \(frame.stepIndex) does not match expected \(state.nextStepIndex)")
+        }
+        guard frame.positionRange.lowerBound == state.processedTokenCount else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "position_range lower_bound \(frame.positionRange.lowerBound) does not match processed_token_count \(state.processedTokenCount)")
+        }
+        guard frame.positionRange.upperBound <= state.kvCapacity else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "position_range upper_bound \(frame.positionRange.upperBound) exceeds kv_capacity \(state.kvCapacity)")
+        }
+    }
+
+    public mutating func commitForward(_ frame: DistributedStageForwardFrame) {
+        guard let state = requests[frame.requestID] else { return }
+        requests[frame.requestID] = RequestState(
+            kvCapacity: state.kvCapacity,
+            processedTokenCount: state.processedTokenCount + frame.positionRange.count,
+            nextStepIndex: state.nextStepIndex + 1)
+    }
+
+    public func validateReset(_ control: DistributedRequestControl) throws {
+        try control.validate()
+        guard requests[control.requestID] != nil else {
+            throw DistributedStageExecutionError.invalidControlFrame(
+                "request_id \(control.requestID) is not allocated")
+        }
+    }
+
+    public mutating func commitReset(_ control: DistributedRequestControl) {
+        guard let state = requests[control.requestID] else { return }
+        requests[control.requestID] = RequestState(kvCapacity: state.kvCapacity)
+    }
+
+    public mutating func commitFree(_ control: DistributedRequestControl) {
+        requests.removeValue(forKey: control.requestID)
+    }
+}
+
 public final class DistributedWorkerFrameExecutor {
     public let plan: DistributedStagePlan
     public let handle: DistributedStageHandle
     private let planIntegrityHash: String
+    private var requestTracker = DistributedWorkerRequestTracker()
 
     public init(plan: DistributedStagePlan, handle: DistributedStageHandle) throws {
         try plan.validate()
@@ -1753,10 +1840,13 @@ public final class DistributedWorkerFrameExecutor {
         try wireFrame.validate(against: plan)
         switch wireFrame.message {
         case .allocate(let allocation):
+            try requestTracker.validateAllocate(allocation)
             try await handle.allocate(allocation)
+            requestTracker.commitAllocate(allocation)
             return nil
         case .forward(let frame):
             try ensureTarget(stageID: frame.stageID)
+            try requestTracker.validateForward(frame)
             let hiddenState = try frame.hiddenState.map { metadata in
                 try DistributedHiddenStatePacket(metadata: metadata, payload: wireFrame.payload)
             }
@@ -1785,14 +1875,18 @@ public final class DistributedWorkerFrameExecutor {
                 message: .forwardResult(result),
                 payload: output.hiddenState?.payload ?? [])
             try response.validate(against: plan)
+            requestTracker.commitForward(frame)
             return response
         case .reset(let control):
             try ensureTarget(stageID: control.stageID)
+            try requestTracker.validateReset(control)
             try await handle.reset(requestID: control.requestID)
+            requestTracker.commitReset(control)
             return nil
         case .free(let control):
             try ensureTarget(stageID: control.stageID)
             await handle.free(requestID: control.requestID)
+            requestTracker.commitFree(control)
             return nil
         case .hello, .helloAck, .forwardResult, .error:
             throw DistributedStageExecutionError.invalidControlFrame(
@@ -1822,6 +1916,38 @@ public final class DistributedLoopbackWorkerTransport {
         self.executor = executor
         self.requestChunkSize = requestChunkSize
         self.responseChunkSize = responseChunkSize
+    }
+
+    public func handshake(
+        with coordinator: inout DistributedWorkerHandshakeCoordinator,
+        cacheContract: String? = nil,
+        freeMemoryBytes: UInt64? = nil,
+        computeUnit: String? = nil,
+        labels: [String: String] = [:]
+    ) throws -> DistributedWorkerWireFrame {
+        let hello = try executor.makeHello(
+            cacheContract: cacheContract,
+            freeMemoryBytes: freeMemoryBytes,
+            computeUnit: computeUnit,
+            labels: labels)
+        let helloFrames = try decodeStream(
+            DistributedWorkerMessageCodec.encodeWireFrame(hello),
+            chunkSize: requestChunkSize)
+        guard helloFrames.count == 1, let helloFrame = helloFrames.first else {
+            throw DistributedStageExecutionError.invalidWireFrame(
+                "loopback hello must contain exactly one frame")
+        }
+
+        let response = try coordinator.processHello(helloFrame)
+        let responseFrames = try decodeStream(
+            DistributedWorkerMessageCodec.encodeWireFrame(response),
+            chunkSize: responseChunkSize)
+        guard responseFrames.count == 1, let responseFrame = responseFrames.first else {
+            throw DistributedStageExecutionError.invalidWireFrame(
+                "loopback hello_ack must contain exactly one frame")
+        }
+        try responseFrame.validate(against: coordinator.plan)
+        return responseFrame
     }
 
     public func roundTrip(

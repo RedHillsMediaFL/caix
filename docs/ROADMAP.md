@@ -33,13 +33,16 @@ Current in-tree pieces:
   manifest-ordered handle maps, and a stage-handle factory context with resolved stage asset paths.
 - Typed worker message frames for hello/ack, allocation, forward, reset, free, and error.
 - SHA-256 plan integrity hashes for worker handshakes.
+- Worker frame execution, handshake admission, in-process loopback framing, and request-state
+  guards for allocate-before-forward, step order, processed-token position, KV capacity, reset,
+  and free.
 
 Still missing before real staged inference:
 
 - Stage exporter output for per-stage `.aimodel` bundles and `cluster.stages` metadata.
 - A Core AI `DistributedStageHandle`.
 - Token-for-token Qwen3-0.6B same-machine evidence against the monolithic bundle.
-- Loopback worker/coordinator transport.
+- Cross-process loopback worker/coordinator transport.
 - Thunderbolt Bridge test evidence.
 
 Why this path:

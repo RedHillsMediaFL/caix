@@ -41,6 +41,10 @@
   handle and returns forward-result frames.
 - Added a distributed worker handshake coordinator for `HELLO`/ACK admission and missing-stage
   startup checks.
+- Added distributed worker request-state tracking for allocate-before-forward, step order,
+  processed-token position, KV capacity, reset, and free handling.
+- Threaded `HELLO`/ACK through the loopback worker transport so handshake frames use the same
+  stream decoder contract as worker requests.
 - Added a remote distributed stage handle for coordinator-to-worker frame round trips.
 - Added same-machine pipeline guards for invalid position ranges and reset request IDs.
 - Added the cluster-plan contract check to publication gates.

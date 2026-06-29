@@ -54,13 +54,14 @@ This is blunt on purpose. Where the current code cannot do something, it says so
   - `DistributedWorkerWireFrameStreamDecoder` incrementally parses socket reads into complete
     worker wire frames without treating tensor bytes as JSON.
   - `DistributedWorkerFrameExecutor` dispatches validated request frames to one
-    `DistributedStageHandle` and returns `forward_result` frames. It is transport-independent
-    worker logic for the loopback and Thunderbolt paths.
+    `DistributedStageHandle` and returns `forward_result` frames. It tracks request allocation,
+    step order, processed-token position, KV capacity, reset, and free state before forwarding.
+    It is transport-independent worker logic for the loopback and Thunderbolt paths.
   - `DistributedWorkerHandshakeCoordinator` accepts or rejects worker `HELLO` frames, prevents
     duplicate stage claims, and reports missing startup stages before execution.
-  - `DistributedLoopbackWorkerTransport` runs worker requests through the same frame encoder,
-    stream decoder, executor, and response path in-process. It is the socket contract before
-    there is a socket.
+  - `DistributedLoopbackWorkerTransport` runs worker handshakes and requests through the same
+    frame encoder, stream decoder, executor, and response path in-process. It is the socket
+    contract before there is a socket.
   - `DistributedRemoteStageHandle` wraps a worker frame round trip so the coordinator can mix local
     and remote stages through the same `DistributedStageHandle` interface.
   - `DistributedStagePlan.integrityHash()` gives coordinator and workers the same SHA-256 plan
