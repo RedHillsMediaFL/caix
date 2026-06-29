@@ -12,6 +12,7 @@ USAGE
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 RUN_HUB=0
 RUN_DISTRIBUTED=0
 caix_args=()
@@ -33,6 +34,14 @@ run() {
   "$@"
 }
 
+run git -C "$REPO_DIR" diff --check HEAD --
+shell_scripts=()
+while IFS= read -r script; do
+  shell_scripts+=("$script")
+done < <(find "$SCRIPT_DIR" -maxdepth 1 -type f -name '*.sh' | sort)
+if [[ "${#shell_scripts[@]}" -gt 0 ]]; then
+  run bash -n "${shell_scripts[@]}"
+fi
 run "$SCRIPT_DIR/check-token-handling.sh"
 run "$SCRIPT_DIR/check-public-copy.sh"
 run "$SCRIPT_DIR/check-version-sync.sh"

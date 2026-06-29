@@ -30,6 +30,7 @@
 - Added a benchmark report gate that refuses missing raw logs and marks rows without model revisions
   as non-publishable.
 - Added a single publication-gates script for local and Hub metadata/card checks.
+- Added whitespace and shell syntax checks to the publication-gates script.
 - Added external tester instructions for verified load/generation reports and raw benchmark
   submissions.
 - Added a public-copy guard script for benchmark placeholders, hype, unsupported support-product
