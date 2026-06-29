@@ -71,7 +71,9 @@ func printUsage() {
           caix bench --model <bundle-dir> [options]
           caix catalog <owner/search|collection-slug> [options]
           caix cluster plan --manifest <stage-manifest.json> [options]
+          caix cluster join --coordinator <host:port> --stage <stage-dir> [options]
           caix serve [--port 1237] [--host 127.0.0.1]
+          caix serve --cluster <stage-manifest.json> [options]
 
         serve OPTIONS:
           --port <N>             Listen port (default: 1237)
@@ -82,6 +84,7 @@ func printUsage() {
           --convert-script <p>   convert.py path (default: ./python/converter/convert.py)
           --python <exe>         Python executable for conversion (default: python3)
           --stats-file <path>     Persistent usage stats JSON (default: ~/.caix/usage.json)
+          --cluster <manifest>    Stage manifest for distributed coordinator mode (not implemented)
           --no-eagle              Disable the built-in EAGLE/MTP serve model
           --eagle-name <name>     Served name for the EAGLE/MTP model
           --eagle-target <dir>    EAGLE target .aimodel bundle
@@ -130,6 +133,12 @@ func printUsage() {
           --workers <list>       Comma-separated worker memory budgets
           --dry-run              Accepted for clarity; planning is dry-run only
           --json                 Emit machine-readable JSON
+
+        cluster join OPTIONS:
+          --coordinator <host:port>
+                                  Coordinator address for this worker
+          --stage <dir>           Local staged .aimodel bundle directory
+          --listen <host:port>    Worker listen address (default: 127.0.0.1:0)
 
         DIFFUSION (auto-detected from bundle metadata kind/diffusion block):
           run routes diffusion bundles to the host denoise loop (random-canvas init →
@@ -647,6 +656,7 @@ func serveCommand(_ argv: [String]) {
     var python = "python3"
     var verbose = false
     var statsFile: String? = nil   // usage-stats persistence (default ~/.caix/usage.json)
+    var clusterManifest: String? = nil
     // EAGLE MTP model. Enabled by default with the known bundle paths; disable with --no-eagle,
     // or override paths individually.
     var eagleEnabled = true
@@ -687,6 +697,7 @@ func serveCommand(_ argv: [String]) {
         case "--convert-script": convertScript = value(arg)
         case "--python": python = value(arg)
         case "--stats-file": statsFile = value(arg)
+        case "--cluster": clusterManifest = value(arg)
         case "--no-eagle": eagleEnabled = false
         case "--eagle-name": eagleName = value(arg)
         case "--eagle-target": eagleTarget = value(arg)
@@ -702,6 +713,15 @@ func serveCommand(_ argv: [String]) {
         default: fail("unknown option: \(arg)")
         }
         i += 1
+    }
+
+    if let clusterManifest {
+        guard !clusterManifest.isEmpty else { fail("--cluster needs a manifest path") }
+        FileHandle.standardError.write(
+            Data(
+                "error: caix serve --cluster is not implemented yet; use caix cluster plan to validate staged manifests\n"
+                    .utf8))
+        exit(1)
     }
 
     // Build the EAGLE config only if the target+draft bundles actually exist on disk.

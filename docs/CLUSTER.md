@@ -111,7 +111,7 @@ model bundle when using `--model`.
 
 ## Current TODOs
 
-- `caix cluster join` is not implemented.
-- `caix serve --cluster` is not implemented.
+- `caix cluster join --help` exists; worker runtime is not implemented.
+- `caix serve --cluster` is advertised; coordinator runtime is not implemented.
 - Stage export metadata is not emitted by the converter yet.
 - Runtime tensor transport and worker protocols are intentionally outside this dry-run command.

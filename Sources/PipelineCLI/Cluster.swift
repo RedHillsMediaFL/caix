@@ -78,6 +78,8 @@ func clusterCommand(_ argv: [String]) {
     switch subcommand {
     case "plan":
         clusterPlanCommand(Array(argv.dropFirst()))
+    case "join":
+        clusterJoinCommand(Array(argv.dropFirst()))
     case "-h", "--help", "help":
         clusterUsage()
         exit(0)
@@ -94,13 +96,88 @@ private func clusterUsage() {
         USAGE:
           caix cluster plan --manifest <stage-manifest.json> [options]
           caix cluster plan --model <bundle-dir> [options]
+          caix cluster join --coordinator <host:port> --stage <stage-dir> [options]
 
-        OPTIONS:
+        plan OPTIONS:
           --worker <name=GB>     Worker memory budget; repeatable
           --workers <list>       Comma-separated worker memory budgets
           --dry-run              Accepted for clarity; planning is dry-run only
           --json                 Emit machine-readable JSON
+
+        join OPTIONS:
+          --coordinator <host:port>
+                                  Coordinator address for this worker
+          --stage <dir>           Local staged .aimodel bundle directory
+          --listen <host:port>    Worker listen address (default: 127.0.0.1:0)
         """)
+}
+
+private func clusterJoinCommand(_ argv: [String]) {
+    var coordinator: String?
+    var stagePath: String?
+    var listen = "127.0.0.1:0"
+
+    func usage() {
+        print(
+            """
+            USAGE:
+              caix cluster join --coordinator <host:port> --stage <stage-dir> [options]
+
+            OPTIONS:
+              --coordinator <host:port>
+                                      Coordinator address for this worker
+              --stage <dir>           Local staged .aimodel bundle directory
+              --listen <host:port>    Worker listen address (default: 127.0.0.1:0)
+
+            This command is reserved for distributed worker runtime. It does not run workers yet.
+            """)
+    }
+
+    func fail(_ message: String) -> Never {
+        FileHandle.standardError.write(Data("error: \(message)\n".utf8))
+        exit(2)
+    }
+
+    var i = 0
+    func value(_ flag: String) -> String {
+        i += 1
+        guard i < argv.count else { fail("\(flag) needs a value") }
+        return argv[i]
+    }
+
+    while i < argv.count {
+        let arg = argv[i]
+        switch arg {
+        case "--coordinator":
+            coordinator = value(arg)
+        case "--stage":
+            stagePath = value(arg)
+        case "--listen":
+            listen = value(arg)
+        case "-h", "--help":
+            usage()
+            exit(0)
+        default:
+            fail("unknown cluster join option: \(arg)")
+        }
+        i += 1
+    }
+
+    guard let coordinator, !coordinator.isEmpty else {
+        fail("cluster join requires --coordinator <host:port>")
+    }
+    guard let stagePath, !stagePath.isEmpty else {
+        fail("cluster join requires --stage <stage-dir>")
+    }
+    guard listen.contains(":") else {
+        fail("--listen must be host:port")
+    }
+
+    FileHandle.standardError.write(
+        Data(
+            "error: caix cluster join is not implemented yet; use caix cluster plan to validate staged manifests\n"
+                .utf8))
+    exit(1)
 }
 
 private func clusterPlanCommand(_ argv: [String]) {
@@ -361,7 +438,7 @@ private func clusterWarnings(
 
 private func clusterNotes() -> [String] {
     [
-        "dry-run only; caix cluster join and caix serve --cluster are not implemented yet",
+        "dry-run only; caix cluster join and caix serve --cluster do not run workers yet",
         "runtime_plan is validated with the same DistributedStagePlan contract used by PipelineRuntime",
         "KV cache ownership stays with the worker assigned to each stage",
         "hidden-state activations flow between adjacent stages in manifest order",
