@@ -22,6 +22,9 @@ OpenAI and Anthropic clients can point at the local server.
 caix supports classic speculative packages and EAGLE target+draft packages. Use the model-card flags
 for each package.
 
+Multimodal status: caix parses OpenAI and Anthropic image/audio/video content blocks, but no verified
+runtime bundle consumes them yet. Multimodal requests return a clear 400 until that changes.
+
 ---
 
 ## Testing and support
