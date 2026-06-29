@@ -15,6 +15,7 @@ Generate a current request sheet when assigning external tests:
 ```bash
 scripts/check-benchmark-coverage.sh
 scripts/check-hf-collections.sh
+scripts/check-conversion-ledger.sh
 scripts/generate-tester-requests.sh \
   --revisions benchmarks/revisions.tsv \
   --out docs/TESTER_REQUESTS.md

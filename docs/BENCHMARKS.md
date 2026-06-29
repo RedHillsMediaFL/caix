@@ -72,6 +72,10 @@ speed/fluff wording.
 Run `scripts/check-hf-model-cards.sh` before uploading card edits. It fetches only live
 `README.md` files for manifest repos and applies the public-copy guard.
 
+Run `scripts/check-conversion-ledger.sh` after changing `models/registry.json`,
+`docs/CONVERSION_LEDGER.tsv`, or the benchmark manifest. It keeps active conversion lanes explicit:
+published, component-only, or blocked with a next step.
+
 Create `benchmarks/revisions.tsv` before a publishable run:
 
 ```bash
@@ -127,5 +131,6 @@ Use these fields for any published benchmark table:
 
 - RHM model cards intentionally omit benchmark rows until measured public numbers exist.
 - `benchmarks/MANIFEST.tsv` is the current RHM caix benchmark coverage list.
+- `docs/CONVERSION_LEDGER.tsv` is the current conversion lane status list.
 - Gemma 3 is blocked until Hugging Face access is approved.
 - Qwen3-32B and Qwen3-30B-A3B are skipped on this 64 GB host by conversion fit-check.

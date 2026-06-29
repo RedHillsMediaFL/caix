@@ -1,0 +1,8 @@
+model_key	source_repo	status	published_repo	next_step
+gemma-4-31B-it-assistant	google/gemma-4-31B-it-assistant	component_published	redhillsmediafl/rhm-gemma-4-31b-it-draft-caix	Keep as a component; benchmark only with the matching target package.
+gemma-4-31B-it	google/gemma-4-31B-it	published	redhillsmediafl/rhm-gemma-4-31b-it-caix,redhillsmediafl/rhm-gemma-4-31b-it-mtp-caix	Keep standalone and EAGLE MTP benchmark rows separate.
+Qwythos-9B	empero-ai/Qwythos-9B-Claude-Mythos-5-1M	published	redhillsmediafl/rhm-qwythos-9b-caix	Collect external benchmark logs.
+ornith-1.0-35b	deepreinforce-ai/Ornith-1.0-35B	blocked_runtime	-	Full 40-layer int4+head-quant bundle exports but runtime warmup fails with MPS reshape diagnostics; validate dual-entrypoint full bundle before upload.
+Qwen3.6-27B	Qwen/Qwen3.6-27B	published	redhillsmediafl/rhm-qwen3.6-27b-caix	Collect external benchmark logs.
+diffusiongemma-26B-A4B-it	google/diffusiongemma-26B-A4B-it	blocked_architecture	-	Author host denoise runtime and verify single-forward export before conversion.
+diffusiongemma-26B-A4B-it-HERETIC	edwixx/diffusiongemma-26B-A4B-it-HERETIC-Uncensored	blocked_architecture	-	Reuse diffusion_gemma support after base model path is verified; handle missing processor config.

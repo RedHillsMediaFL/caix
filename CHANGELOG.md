@@ -31,6 +31,8 @@
   keep notes free of speed/fluff wording.
 - Added a Hugging Face model-card guard that checks live manifest README files without downloading
   model payloads.
+- Added a conversion ledger and guard so active registry lanes are marked published,
+  component-only, or blocked with an explicit next step.
 - Added classic speculative and EAGLE/MTP benchmark runner support so target+draft packages can
   produce raw benchmark logs instead of staying manual-only.
 - Added a reusable disk-pressure guard and wired benchmark runners to fail before writing logs when
