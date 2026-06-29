@@ -59,6 +59,7 @@ REVISION=<model-repo-commit>
 NAME=qwen3-4b-coreai
 
 export HF_HOME=${HF_HOME:-/Volumes/SSD/hf-cache}
+scripts/check-disk-pressure.sh --path /Volumes/SSD --floor-gib 500
 mkdir -p models/exports
 hf download "$REPO" \
   --revision "$REVISION" \

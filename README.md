@@ -156,6 +156,7 @@ caix serves Core AI `.aimodel` bundles. Get one of these two ways:
 
 ```bash
 export HF_HOME=${HF_HOME:-/Volumes/SSD/hf-cache}
+scripts/check-disk-pressure.sh --path /Volumes/SSD --floor-gib 500
 mkdir -p models/exports
 # list converted Qwen repos and exact install commands
 caix catalog redhillsmediafl/qwen
