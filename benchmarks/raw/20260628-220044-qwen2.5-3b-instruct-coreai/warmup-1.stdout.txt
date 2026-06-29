@@ -1,0 +1,1 @@
+Local inference on Apple silicon, particularly on Apple's M-series chips, often leverages optimized machine learning algorithms and frameworks to achieve high performance in real-time applications due to the chip's architecture designed for both performance and power efficiency.
