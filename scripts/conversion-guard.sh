@@ -129,6 +129,11 @@ def redact(command):
         r"\1[redacted]",
         command,
     )
+    command = re.sub(
+        r"(?i)\b([a-z][a-z0-9+.-]*://)([^/\s:@]+):([^/\s@]+)@",
+        r"\1[redacted]@",
+        command,
+    )
     return command
 
 for line in sys.stdin:
