@@ -21,6 +21,22 @@ First implementation:
 - Hidden-state activations move between workers over Thunderbolt Bridge or LAN.
 - Final stage samples and returns token IDs.
 
+Current in-tree pieces:
+
+- `DistributedStagePlan` and validation for roles, layer coverage, workers, and hidden-state
+  packet routes.
+- `caix cluster plan` dry-run placement for staged manifests.
+- Fail-closed `caix cluster join` and `caix serve --cluster` CLI stubs.
+- `DistributedSameMachinePipeline`, an in-process stage-handle harness tested with fake stages.
+
+Still missing before real staged inference:
+
+- Stage exporter output for per-stage `.aimodel` bundles and `cluster.stages` metadata.
+- A Core AI `DistributedStageHandle`.
+- Token-for-token Qwen3-0.6B same-machine evidence against the monolithic bundle.
+- Loopback worker/coordinator transport.
+- Thunderbolt Bridge test evidence.
+
 Why this path:
 
 - Core AI exposes local `AIModel` / `InferenceFunction` execution with caller-owned input buffers,
@@ -31,12 +47,12 @@ Why this path:
 
 Do first:
 
-1. Prove same-machine staged execution with Qwen3-0.6B.
-2. Verify staged output matches the monolithic Core AI bundle.
-3. Split the stages into two local processes over loopback.
-4. Move one stage to the 32 GB MacBook over Thunderbolt Bridge.
-5. Add the 16 GB Mac mini as a third shard.
-6. Add `caix cluster plan`, `caix cluster join`, and `caix serve --cluster`.
+1. Build the stage exporter and Core AI `DistributedStageHandle`.
+2. Prove same-machine staged execution with Qwen3-0.6B.
+3. Verify staged output matches the monolithic Core AI bundle.
+4. Split the stages into two local processes over loopback.
+5. Move one stage to the 32 GB MacBook over Thunderbolt Bridge.
+6. Add the 16 GB Mac mini as a third shard.
 
 MacBook test gate:
 
