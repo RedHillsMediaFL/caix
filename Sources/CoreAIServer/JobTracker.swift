@@ -29,6 +29,23 @@ actor JobTracker {
     static let convertLogDir = logRoot.appendingPathComponent("logs", isDirectory: true)
     static let supportLogDir = logRoot.appendingPathComponent("support-logs", isDirectory: true)
 
+    private static func subprocessEnvironment(
+        pythonUnbuffered: Bool = false,
+        disableHFProgressBars: Bool = false
+    ) -> [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        if env["HF_HOME", default: ""].isEmpty {
+            env["HF_HOME"] = "/Volumes/SSD/hf-cache"
+        }
+        if pythonUnbuffered {
+            env["PYTHONUNBUFFERED"] = "1"
+        }
+        if disableHFProgressBars {
+            env["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+        }
+        return env
+    }
+
     /// Launch `python3 <script> <model>` from `workingDir`. Returns `nil` on success or an
     /// error message if it couldn't be started (or is already running).
     func startConvert(model: String, script: String, workingDir: URL, pythonExecutable: String)
@@ -46,9 +63,7 @@ actor JobTracker {
         process.currentDirectoryURL = workingDir
         process.executableURL = URL(fileURLWithPath: pythonExecutable)
         process.arguments = [script, model]
-        var env = ProcessInfo.processInfo.environment
-        env["PYTHONUNBUFFERED"] = "1"
-        process.environment = env
+        process.environment = Self.subprocessEnvironment(pythonUnbuffered: true)
         process.standardOutput = logHandle ?? FileHandle.nullDevice
         process.standardError = logHandle ?? FileHandle.nullDevice
         process.terminationHandler = { proc in
@@ -87,9 +102,7 @@ actor JobTracker {
         process.currentDirectoryURL = workingDir
         process.executableURL = URL(fileURLWithPath: pythonExecutable)
         process.arguments = [script, "--check", "--hf-id", hfRepo]
-        var env = ProcessInfo.processInfo.environment
-        env["PYTHONUNBUFFERED"] = "1"
-        process.environment = env
+        process.environment = Self.subprocessEnvironment(pythonUnbuffered: true)
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe
@@ -168,9 +181,7 @@ actor JobTracker {
         process.currentDirectoryURL = workingDir
         process.executableURL = URL(fileURLWithPath: pythonExecutable)
         process.arguments = argv
-        var env = ProcessInfo.processInfo.environment
-        env["PYTHONUNBUFFERED"] = "1"
-        process.environment = env
+        process.environment = Self.subprocessEnvironment(pythonUnbuffered: true)
         process.standardOutput = logHandle ?? FileHandle.nullDevice
         process.standardError = logHandle ?? FileHandle.nullDevice
         process.terminationHandler = { proc in
@@ -220,9 +231,7 @@ actor JobTracker {
         process.currentDirectoryURL = workingDir
         process.executableURL = URL(fileURLWithPath: pythonExecutable)
         process.arguments = argv
-        var env = ProcessInfo.processInfo.environment
-        env["PYTHONUNBUFFERED"] = "1"
-        process.environment = env
+        process.environment = Self.subprocessEnvironment(pythonUnbuffered: true)
         process.standardOutput = logHandle ?? FileHandle.nullDevice
         process.standardError = logHandle ?? FileHandle.nullDevice
         process.terminationHandler = { proc in
@@ -281,9 +290,7 @@ actor JobTracker {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = argv
-        var env = ProcessInfo.processInfo.environment
-        env["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
-        process.environment = env
+        process.environment = Self.subprocessEnvironment(disableHFProgressBars: true)
         process.standardOutput = logHandle ?? FileHandle.nullDevice
         process.standardError = logHandle ?? FileHandle.nullDevice
         process.terminationHandler = { proc in

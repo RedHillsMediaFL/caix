@@ -40,6 +40,8 @@ command -v curl >/dev/null 2>&1 || { echo "error: curl is required" >&2; exit 2;
 command -v hf >/dev/null 2>&1 || { echo "error: hf CLI not found" >&2; exit 2; }
 command -v jq >/dev/null 2>&1 || { echo "error: jq is required to parse Hub JSON" >&2; exit 2; }
 
+export HF_HOME="${HF_HOME:-/Volumes/SSD/hf-cache}"
+
 tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/caix-hf-collections.XXXXXX")"
 trap 'rm -rf "$tmpdir"' EXIT
 

@@ -43,6 +43,8 @@ done
 command -v hf >/dev/null 2>&1 || { echo "error: hf CLI not found" >&2; exit 2; }
 command -v jq >/dev/null 2>&1 || { echo "error: jq is required to parse hf JSON" >&2; exit 2; }
 
+export HF_HOME="${HF_HOME:-/Volumes/SSD/hf-cache}"
+
 mode_errors="$(awk -F '\t' '
   $1 == "" || $1 == "repo" || $1 ~ /^#/ { next }
   $4 != "decode" && $4 != "speculative" && $4 != "eagle-mtp" && $4 != "manual" {

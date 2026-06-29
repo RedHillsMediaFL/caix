@@ -93,21 +93,30 @@ final class JobTrackerTests: XCTestCase {
         let bin = root.appendingPathComponent("bin", isDirectory: true)
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
         let argvLog = root.appendingPathComponent("hf-argv.txt")
+        let envLog = root.appendingPathComponent("hf-env.txt")
         let hf = bin.appendingPathComponent("hf")
         try """
             #!/bin/sh
             printf '%s\\n' "$@" > "\(argvLog.path)"
+            printf '%s\\n' "$HF_HOME" > "\(envLog.path)"
             exit 0
             """.write(to: hf, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: hf.path)
 
         let oldPath = getenv("PATH").map { String(cString: $0) }
+        let oldHFHome = getenv("HF_HOME").map { String(cString: $0) }
         setenv("PATH", "\(bin.path):\(oldPath ?? "")", 1)
+        unsetenv("HF_HOME")
         addTeardownBlock {
             if let oldPath {
                 setenv("PATH", oldPath, 1)
             } else {
                 unsetenv("PATH")
+            }
+            if let oldHFHome {
+                setenv("HF_HOME", oldHFHome, 1)
+            } else {
+                unsetenv("HF_HOME")
             }
         }
 
@@ -126,6 +135,9 @@ final class JobTrackerTests: XCTestCase {
         let argv = try String(contentsOf: argvLog, encoding: .utf8)
         XCTAssertTrue(argv.contains("download\nredhillsmediafl/example-caix\n--revision\n0123456789abcdef0123456789abcdef01234567\n--local-dir\n"))
         XCTAssertTrue(argv.contains("example-coreai"))
+        let hfHome = try String(contentsOf: envLog, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertEqual(hfHome, "/Volumes/SSD/hf-cache")
     }
 
     func testRunCheckSupportReturnsFastJSON() async throws {
