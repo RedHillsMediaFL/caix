@@ -76,8 +76,17 @@ if [ "$free_gib" -lt "$FLOOR_GIB" ]; then
 fi
 
 if [ "$JSON" -eq 1 ]; then
-  printf '{"path":"%s","free_gib":%s,"floor_gib":%s,"status":"%s"}\n' \
-    "$PATH_TO_CHECK" "$free_gib" "$FLOOR_GIB" "$status"
+  PATH_TO_CHECK="$PATH_TO_CHECK" FREE_GIB="$free_gib" FLOOR_GIB="$FLOOR_GIB" STATUS="$status" python3 - <<'PY'
+import json
+import os
+
+print(json.dumps({
+    "path": os.environ["PATH_TO_CHECK"],
+    "free_gib": int(os.environ["FREE_GIB"]),
+    "floor_gib": int(os.environ["FLOOR_GIB"]),
+    "status": os.environ["STATUS"],
+}, separators=(",", ":")))
+PY
 elif [ "$QUIET" -eq 0 ]; then
   if [ "$rc" -eq 0 ]; then
     printf 'disk ok: %s GiB free at %s (floor %s GiB)\n' \

@@ -39,6 +39,20 @@ print(free)
 PY
 )"
 
+json_path="$tmpdir/json path \" check"
+mkdir -p "$json_path"
+json="$("$SCRIPT_DIR/check-disk-pressure.sh" --path "$json_path" --floor-gib 0 --json)"
+JSON="$json" EXPECTED_PATH="$json_path" python3 - <<'PY'
+import json
+import os
+
+doc = json.loads(os.environ["JSON"])
+if doc.get("path") != os.environ["EXPECTED_PATH"]:
+    raise SystemExit("json path was not preserved")
+if doc.get("status") != "ok":
+    raise SystemExit("expected ok status for quoted path")
+PY
+
 floor_gib=$((free_gib + 1))
 if "$SCRIPT_DIR/check-disk-pressure.sh" --path "$tmpdir" --floor-gib "$floor_gib" --quiet; then
   echo "error: disk-pressure guard accepted a floor above available space" >&2
