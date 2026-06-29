@@ -67,6 +67,17 @@ count_measured_failed() {
   awk -F '\t' 'NR > 1 && $1 == "measured" && $3 != "ok" { n++ } END { print n + 0 }' "$1"
 }
 
+require_same_setting() {
+  local repo="$1"
+  local label="$2"
+  local suite_value="$3"
+  local raw_value="$4"
+  if [[ "$suite_value" != "$raw_value" ]]; then
+    echo "error: benchmark setting drift for $repo: $label suite='$suite_value' raw='$raw_value'" >&2
+    exit 1
+  fi
+}
+
 median_field() {
   local file="$1"
   local field="$2"
@@ -179,13 +190,40 @@ while IFS=$'\t' read -r repo local_dir kind col4 col5 col6 col7 col8; do
     machine="$(metadata_value machine "$output/metadata.txt")"
     memory="$(metadata_value memory_bytes "$output/metadata.txt")"
     os="$(metadata_value os "$output/metadata.txt")"
-    max_tokens="$(metadata_value max_tokens "$output/metadata.txt")"
-    temperature="$(metadata_value temperature "$output/metadata.txt")"
-    raw="$(metadata_value raw "$output/metadata.txt")"
-    prompt="$(metadata_value prompt "$output/metadata.txt")"
+    raw_max_tokens="$(metadata_value max_tokens "$output/metadata.txt")"
+    raw_temperature="$(metadata_value temperature "$output/metadata.txt")"
+    raw_template_mode="$(metadata_value raw "$output/metadata.txt")"
+    raw_prompt="$(metadata_value prompt "$output/metadata.txt")"
     raw_mode="$(metadata_value benchmark_mode "$output/metadata.txt")"
-    [[ -n "$raw_mode" ]] && benchmark_mode="$raw_mode"
+    if [[ -n "$raw_mode" ]]; then
+      raw_mode="$(canonical_benchmark_mode "$raw_mode")"
+      if [[ "$benchmark_mode" != "-" && "$raw_mode" != "$benchmark_mode" ]]; then
+        echo "error: benchmark mode mismatch for $repo: suite=$benchmark_mode raw=$raw_mode" >&2
+        exit 1
+      fi
+      benchmark_mode="$raw_mode"
+    fi
     benchmark_mode="$(canonical_benchmark_mode "$benchmark_mode")"
+
+    require_same_setting "$repo" max_tokens "$suite_max_tokens" "$raw_max_tokens"
+    require_same_setting "$repo" temperature "$suite_temperature" "$raw_temperature"
+    require_same_setting "$repo" raw "$suite_raw" "$raw_template_mode"
+    require_same_setting "$repo" prompt "$suite_prompt" "$raw_prompt"
+
+    expected_runs="$(metadata_value runs "$output/metadata.txt")"
+    [[ "$expected_runs" =~ ^[1-9][0-9]*$ ]] || {
+      echo "error: invalid runs metadata for $repo: $expected_runs" >&2
+      exit 1
+    }
+    [[ "$measured_runs" == "$expected_runs" ]] || {
+      echo "error: measured run count mismatch for $repo: summary=$measured_runs metadata=$expected_runs" >&2
+      exit 1
+    }
+
+    max_tokens="$raw_max_tokens"
+    temperature="$raw_temperature"
+    raw="$raw_template_mode"
+    prompt="$raw_prompt"
 
     median_generated="$(median_field "$output/summary.tsv" 4)"
     median_load="$(median_field "$output/summary.tsv" 5)"
@@ -197,6 +235,9 @@ while IFS=$'\t' read -r repo local_dir kind col4 col5 col6 col7 col8; do
 
     if [[ "$repo_revision" == "unknown" ]]; then
       reason="missing repo revision in raw metadata"
+    elif [[ ! "$repo_revision" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "error: invalid repo revision for $repo: $repo_revision" >&2
+      exit 1
     else
       reason="-"
       publishable="yes"
