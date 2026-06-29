@@ -34,6 +34,8 @@
 - Added a JSON-line codec for distributed worker message headers.
 - Added payload byte-count validation for distributed worker wire frames.
 - Added full distributed worker wire-frame encoding and decoding for header-plus-payload transport.
+- Added a distributed worker frame executor that dispatches validated request frames to a stage
+  handle and returns forward-result frames.
 - Added same-machine pipeline guards for invalid position ranges and reset request IDs.
 - Added the cluster-plan contract check to publication gates.
 - Added fail-closed `caix cluster join` and `caix serve --cluster` CLI stubs for Brew surface tests.
@@ -59,6 +61,7 @@
 - Added a benchmark-suite guard that refuses measured rows without an exact model repo revision.
 - Added a benchmark gap audit that reports eligible manifest rows without committed measured raw
   evidence.
+- Added a tracked-evidence mode for benchmark raw checks and enabled it in publication gates.
 - Added direct benchmark-runner guards that require model repo id and exact repo revision.
 - Added benchmark runner guards that refuse measured runs from a dirty git worktree.
 - Added benchmark runner guards for active resumable Hub payload upload jobs.

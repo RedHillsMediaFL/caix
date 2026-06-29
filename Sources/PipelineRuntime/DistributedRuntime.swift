@@ -1570,6 +1570,127 @@ public struct DistributedWorkerWireFrame: Hashable, Sendable {
     }
 }
 
+public final class DistributedWorkerFrameExecutor {
+    public let plan: DistributedStagePlan
+    public let handle: DistributedStageHandle
+    private let planIntegrityHash: String
+
+    public init(plan: DistributedStagePlan, handle: DistributedStageHandle) throws {
+        try plan.validate()
+        guard let expectedDescriptor = plan.stage(id: handle.descriptor.id) else {
+            throw DistributedStageExecutionError.missingStageHandle(handle.descriptor.id)
+        }
+        guard expectedDescriptor == handle.descriptor else {
+            throw DistributedStageExecutionError.stageDescriptorMismatch(
+                expected: expectedDescriptor.id, actual: handle.descriptor.id)
+        }
+        self.plan = plan
+        self.handle = handle
+        self.planIntegrityHash = try plan.integrityHash()
+    }
+
+    public func makeHello(
+        cacheContract: String? = nil,
+        freeMemoryBytes: UInt64? = nil,
+        computeUnit: String? = nil,
+        labels: [String: String] = [:]
+    ) throws -> DistributedWorkerWireFrame {
+        let hello = DistributedWorkerHello(
+            stage: handle.descriptor,
+            hiddenSize: plan.boundaryTensor?.shape.last,
+            boundaryScalarType: plan.boundaryTensor?.scalarType,
+            cacheContract: cacheContract,
+            planIntegrityHash: planIntegrityHash,
+            freeMemoryBytes: freeMemoryBytes,
+            computeUnit: computeUnit,
+            labels: labels)
+        let message = DistributedWorkerMessage.hello(hello)
+        try message.validate(against: plan)
+        return DistributedWorkerWireFrame(message: message)
+    }
+
+    public func process(_ wireFrame: DistributedWorkerWireFrame) async throws -> DistributedWorkerWireFrame? {
+        try wireFrame.validate(against: plan)
+        switch wireFrame.message {
+        case .allocate(let allocation):
+            try await handle.allocate(allocation)
+            return nil
+        case .forward(let frame):
+            try ensureTarget(stageID: frame.stageID)
+            let hiddenState = try frame.hiddenState.map { metadata in
+                try DistributedHiddenStatePacket(metadata: metadata, payload: wireFrame.payload)
+            }
+            let output = try await handle.forward(DistributedStageForwardInput(
+                requestID: frame.requestID,
+                stepIndex: frame.stepIndex,
+                positionRange: frame.positionRange,
+                tokenIDs: frame.tokenIDs,
+                hiddenState: hiddenState))
+            guard output.stageID == handle.descriptor.id else {
+                throw DistributedStageExecutionError.invalidStageOutput(
+                    "output stage_id \(output.stageID) does not match worker stage \(handle.descriptor.id)")
+            }
+            guard output.stepIndex == frame.stepIndex else {
+                throw DistributedStageExecutionError.invalidStageOutput(
+                    "output step_index does not match request")
+            }
+            let result = DistributedStageForwardResultFrame(
+                stageID: output.stageID,
+                requestID: frame.requestID,
+                stepIndex: output.stepIndex,
+                hiddenState: output.hiddenState?.metadata,
+                tokenID: output.tokenID)
+            let response = DistributedWorkerWireFrame(
+                message: .forwardResult(result),
+                payload: output.hiddenState?.payload ?? [])
+            try response.validate(against: plan)
+            return response
+        case .reset(let control):
+            try ensureTarget(stageID: control.stageID)
+            try await handle.reset(requestID: control.requestID)
+            return nil
+        case .free(let control):
+            try ensureTarget(stageID: control.stageID)
+            await handle.free(requestID: control.requestID)
+            return nil
+        case .hello, .helloAck, .forwardResult, .error:
+            throw DistributedStageExecutionError.invalidControlFrame(
+                "worker cannot process \(wireFrame.message.kindName) frame")
+        }
+    }
+
+    private func ensureTarget(stageID: String?) throws {
+        guard let stageID else { return }
+        guard stageID == handle.descriptor.id else {
+            throw DistributedStageExecutionError.invalidControlFrame(
+                "frame stage_id \(stageID) does not match worker stage \(handle.descriptor.id)")
+        }
+    }
+}
+
+extension DistributedWorkerMessage {
+    fileprivate var kindName: String {
+        switch self {
+        case .hello:
+            return "hello"
+        case .helloAck:
+            return "hello_ack"
+        case .allocate:
+            return "alloc"
+        case .forward:
+            return "forward"
+        case .forwardResult:
+            return "forward_result"
+        case .reset:
+            return "reset"
+        case .free:
+            return "free"
+        case .error:
+            return "error"
+        }
+    }
+}
+
 public struct DistributedStageForwardInput: Hashable, Sendable {
     public let requestID: String
     public let stepIndex: Int

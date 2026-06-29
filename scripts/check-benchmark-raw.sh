@@ -7,7 +7,8 @@ usage() {
 Usage: scripts/check-benchmark-raw.sh [options]
 
 Options:
-  --raw-dir <path>  Raw benchmark root. Default: benchmarks/raw.
+  --raw-dir <path>     Raw benchmark root. Default: benchmarks/raw.
+  --require-tracked    Require every suite/model raw evidence file to be tracked by git.
 
 Does not run models, download payloads, or contact Hugging Face.
 Fails when committed suite/model raw logs are missing metadata, new or changed raw dirs have dirty
@@ -19,10 +20,13 @@ USAGE
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 RAW_DIR="$REPO_DIR/benchmarks/raw"
+REPO_REAL="$(cd "$REPO_DIR" && pwd -P)"
+REQUIRE_TRACKED=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --raw-dir) RAW_DIR="${2:?}"; shift 2 ;;
+    --require-tracked) REQUIRE_TRACKED=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -64,6 +68,44 @@ repo_relative_path() {
   esac
 }
 
+resolve_local_path() {
+  case "$1" in
+    /*) printf '%s\n' "$1" ;;
+    *) printf '%s/%s\n' "$REPO_DIR" "$1" ;;
+  esac
+}
+
+require_tracked_file() {
+  local file="$1"
+  local label="$2"
+  local abs dir base rel
+
+  abs="$(resolve_local_path "$file")"
+  [[ -e "$abs" ]] || {
+    echo "error: benchmark evidence file missing for $label: $file" >&2
+    return 1
+  }
+
+  dir="$(cd "$(dirname "$abs")" && pwd -P)" || return 1
+  base="$(basename "$abs")"
+  abs="$dir/$base"
+
+  case "$abs" in
+    "$REPO_REAL"/*)
+      rel="${abs#$REPO_REAL/}"
+      ;;
+    *)
+      echo "error: benchmark evidence file is outside the repository for $label: $file" >&2
+      return 1
+      ;;
+  esac
+
+  if ! git -C "$REPO_DIR" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1; then
+    echo "error: benchmark evidence file is not tracked for $label: $rel" >&2
+    return 1
+  fi
+}
+
 raw_dir_has_git_changes() {
   local raw_dir="$1"
   local rel
@@ -81,11 +123,18 @@ check_model_dir() {
   local suite="$1"
   local repo="$2"
   local row_mode="$3"
-  local output="$4"
+  local output_label="$4"
+  local output
 
-  [[ -d "$output" ]] || { echo "error: raw output directory missing for $repo: $output" >&2; return 1; }
+  output="$(resolve_local_path "$output_label")"
+
+  [[ -d "$output" ]] || { echo "error: raw output directory missing for $repo: $output_label" >&2; return 1; }
   [[ -f "$output/metadata.txt" ]] || { echo "error: raw metadata missing for $repo: $output/metadata.txt" >&2; return 1; }
   [[ -f "$output/summary.tsv" ]] || { echo "error: raw summary missing for $repo: $output/summary.tsv" >&2; return 1; }
+  if [[ "$REQUIRE_TRACKED" == "1" ]]; then
+    require_tracked_file "$output/metadata.txt" "$repo metadata" || return 1
+    require_tracked_file "$output/summary.tsv" "$repo summary" || return 1
+  fi
 
   local metadata_repo
   metadata_repo="$(metadata_value repo "$output/metadata.txt")"
@@ -132,13 +181,20 @@ check_model_dir() {
   fi
 
   local first_stdout=""
-  local stdout_path
-  while IFS=$'\t' read -r _phase _run _status _generated _load _prefill _decode _tps stdout_path _stderr; do
+  local stdout_path stderr_path stdout_file stderr_file
+  while IFS=$'\t' read -r _phase _run _status _generated _load _prefill _decode _tps stdout_path stderr_path; do
     [[ "$_phase" == "measured" && "$_status" == "ok" ]] || continue
-    [[ -f "$stdout_path" ]] || { echo "error: measured stdout missing for $repo: $stdout_path" >&2; return 1; }
+    stdout_file="$(resolve_local_path "$stdout_path")"
+    stderr_file="$(resolve_local_path "$stderr_path")"
+    [[ -f "$stdout_file" ]] || { echo "error: measured stdout missing for $repo: $stdout_path" >&2; return 1; }
+    [[ -f "$stderr_file" ]] || { echo "error: measured stderr missing for $repo: $stderr_path" >&2; return 1; }
+    if [[ "$REQUIRE_TRACKED" == "1" ]]; then
+      require_tracked_file "$stdout_file" "$repo measured stdout" || return 1
+      require_tracked_file "$stderr_file" "$repo measured stderr" || return 1
+    fi
     if [[ -z "$first_stdout" ]]; then
-      first_stdout="$stdout_path"
-    elif ! cmp -s "$first_stdout" "$stdout_path"; then
+      first_stdout="$stdout_file"
+    elif ! cmp -s "$first_stdout" "$stdout_file"; then
       echo "error: measured stdout differs for $repo: $first_stdout vs $stdout_path" >&2
       return 1
     fi
@@ -178,6 +234,10 @@ model_count=0
 while IFS= read -r suite; do
   [[ -f "$suite/metadata.txt" ]] || { echo "error: suite metadata missing: $suite/metadata.txt" >&2; exit 1; }
   [[ -f "$suite/summary.tsv" ]] || { echo "error: suite summary missing: $suite/summary.tsv" >&2; exit 1; }
+  if [[ "$REQUIRE_TRACKED" == "1" ]]; then
+    require_tracked_file "$suite/metadata.txt" "$suite metadata"
+    require_tracked_file "$suite/summary.tsv" "$suite summary"
+  fi
   suite_count=$((suite_count + 1))
 
   total="$(metadata_value total "$suite/metadata.txt")"

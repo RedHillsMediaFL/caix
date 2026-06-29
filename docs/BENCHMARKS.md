@@ -132,6 +132,8 @@ and prompt settings match.
 Run `scripts/check-benchmark-raw.sh` before committing raw benchmark logs. It checks clean run-start
 git status for new or changed raw dirs, pinned model repo revisions, suite/model metadata consistency,
 measured row counts, failed rows, and deterministic measured stdout.
+Publication gates run it with `--require-tracked` so public checks cannot pass from local probe logs
+that were not committed.
 
 Run `scripts/check-benchmark-gaps.sh` to list eligible manifest rows that still lack committed
 measured raw evidence. Use `--strict` only when the current release must have no eligible benchmark
