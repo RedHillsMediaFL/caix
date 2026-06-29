@@ -54,17 +54,27 @@ EOF
   esac
 done
 
+process_table() {
+  if [ -n "${caix_test_process_table-}" ]; then
+    printf '%s\n' "$caix_test_process_table"
+    return 0
+  fi
+  ps -axo pid=,ppid=,etime=,pcpu=,pmem=,command=
+}
+
 active_jobs() {
   if [ -n "${caix_test_active_jobs-}" ]; then
     printf '%s\n' "$caix_test_active_jobs"
     return 0
   fi
-  ps -axo pid=,ppid=,etime=,pcpu=,pmem=,command= | awk '
+  process_table | awk '
     /awk / { next }
     /conversion-guard\.sh/ { next }
     /python\/converter\/convert\.py/ && !/--convert-script/ { print; next }
     /coreai\.llm\.export/ { print; next }
     /hf (download|upload|upload-large-folder)/ { print; next }
+    /(^|[[:space:]\/])git-lfs([[:space:]]|$)/ { print; next }
+    /(^|[[:space:]\/])git lfs (fetch|pull|push|checkout|prune|migrate|upload|download)/ { print; next }
     /\.build\/(debug|release)\/caix (run|eagle)/ { print; next }
     /(^|\/)(caix|coreai-pipeline) (run|eagle)/ { print; next }
     /(^|\/)swift (build|test)|swift-package|swiftc|swift-frontend|xctest/ { print; next }
