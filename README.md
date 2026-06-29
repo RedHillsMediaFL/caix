@@ -347,7 +347,8 @@ python3 python/converter/convert.py --check --hf-id Qwen/Qwen2-0.5B
 python3 python/converter/convert.py --hf-id Qwen/Qwen2-0.5B --compression 4bit --compute-precision float16
 ```
 
-Run only one heavy Core AI export or CLI verification at a time. For local queues, gate each job with:
+Run only one heavy Core AI export, HF transfer, CLI verification, build, or benchmark at a time.
+For local queues, gate each job with:
 
 ```bash
 scripts/conversion-guard.sh --wait

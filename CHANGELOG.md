@@ -50,6 +50,8 @@
 - Added direct benchmark-runner guards that require model repo id and exact repo revision.
 - Added benchmark runner guards that refuse measured runs from a dirty git worktree.
 - Added benchmark runner guards for active resumable Hub payload upload jobs.
+- Expanded `scripts/conversion-guard.sh` to honor the heavy-task lock and active Hub transfer,
+  build, test, benchmark, and verification jobs.
 - Added direct benchmark-runner checks for stable measured stdout and generated-token counts.
 - Added standalone benchmark-runner seed support for reproducible caix runs.
 - Documented benchmark seed as a comparable run setting.

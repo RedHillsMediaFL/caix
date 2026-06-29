@@ -2,9 +2,14 @@
 # Guard long-running Core AI conversion queues from overlapping heavy jobs.
 # Usage:
 #   scripts/conversion-guard.sh          # print active jobs; exit 1 if busy
-#   scripts/conversion-guard.sh --wait   # block until no active conversion/generation job remains
+#   scripts/conversion-guard.sh --wait   # block until no heavy job or heavy-task lock remains
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$SCRIPT_DIR/lib/caix-env.sh"
+
+LOCK="$(caix_env caix_heavy_task_lock HEAVY_TASK_LOCK "$REPO_DIR/.agent-heavy-task.lock")"
 wait_mode=0
 interval=30
 json=0
@@ -28,7 +33,7 @@ while [ "$#" -gt 0 ]; do
 Guard long-running Core AI conversion queues from overlapping heavy jobs.
 Usage:
   scripts/conversion-guard.sh          # print active jobs; exit 1 if busy
-  scripts/conversion-guard.sh --wait   # block until no active conversion/generation job remains
+  scripts/conversion-guard.sh --wait   # block until no heavy job or heavy-task lock remains
   scripts/conversion-guard.sh --json   # emit machine-readable status
 EOF
       exit 0
@@ -46,15 +51,21 @@ active_jobs() {
     /conversion-guard\.sh/ { next }
     /python\/converter\/convert\.py/ && !/--convert-script/ { print; next }
     /coreai\.llm\.export/ { print; next }
-    /(coreai-pipeline|\/caix|\.build\/release\/caix) run / { print; next }
+    /hf (download|upload|upload-large-folder)/ { print; next }
+    /\.build\/(debug|release)\/caix (run|eagle)/ { print; next }
+    /(^|\/)(caix|coreai-pipeline) (run|eagle)/ { print; next }
+    /(^|\/)swift (build|test)|swift-package|swiftc|swift-frontend|xctest/ { print; next }
   '
 }
 
-print_jobs() {
-  jobs="$1"
+print_status() {
+  lock_busy="$1"
+  jobs="$2"
   if [ "$json" -eq 1 ]; then
-    python3 -c '
-import json, sys
+    LOCK_BUSY="$lock_busy" LOCK_PATH="$LOCK" python3 -c '
+import json
+import os
+import sys
 rows = []
 for line in sys.stdin:
     parts = line.rstrip("\n").split(None, 5)
@@ -67,16 +78,24 @@ for line in sys.stdin:
             "mem_percent": float(parts[4]),
             "command": parts[5],
         })
-print(json.dumps({"busy": bool(rows), "jobs": rows}, indent=2))
+lock_path = os.environ["LOCK_PATH"] if os.environ.get("LOCK_BUSY") == "1" else None
+print(json.dumps({"busy": bool(rows) or lock_path is not None, "lock_path": lock_path, "jobs": rows}, indent=2))
 ' <<< "$jobs"
-  elif [ -n "$jobs" ]; then
-    printf '%s\n' "$jobs"
+  else
+    if [ "$lock_busy" -eq 1 ]; then
+      printf 'heavy-task lock exists: %s\n' "$LOCK"
+    fi
+    if [ -n "$jobs" ]; then
+      printf '%s\n' "$jobs"
+    fi
   fi
 }
 
 while true; do
+  lock_busy=0
+  [ -e "$LOCK" ] && lock_busy=1
   jobs="$(active_jobs || true)"
-  if [ -z "$jobs" ]; then
+  if [ "$lock_busy" -eq 0 ] && [ -z "$jobs" ]; then
     if [ "$json" -eq 1 ]; then
       printf '{"busy":false,"jobs":[]}\n'
     else
@@ -86,13 +105,13 @@ while true; do
   fi
 
   if [ "$wait_mode" -eq 0 ]; then
-    print_jobs "$jobs"
+    print_status "$lock_busy" "$jobs"
     exit 1
   fi
 
   if [ "$json" -eq 0 ]; then
     echo "busy; waiting ${interval}s"
-    print_jobs "$jobs"
+    print_status "$lock_busy" "$jobs"
   fi
   sleep "$interval"
 done
