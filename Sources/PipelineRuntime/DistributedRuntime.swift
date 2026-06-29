@@ -2597,6 +2597,182 @@ public final class DistributedSameMachinePipeline {
     }
 }
 
+public enum DistributedStagedStopReason: String, Sendable {
+    case eos
+    case maxTokens = "max_tokens"
+    case contextLimit = "context_limit"
+}
+
+public struct DistributedStagedGenerationOptions: Hashable, Sendable {
+    public let maxTokens: Int
+    public let kvCapacity: Int?
+    public let stopTokenIDs: Set<Int32>
+
+    public init(
+        maxTokens: Int = 64,
+        kvCapacity: Int? = nil,
+        stopTokenIDs: Set<Int32> = []
+    ) {
+        self.maxTokens = maxTokens
+        self.kvCapacity = kvCapacity
+        self.stopTokenIDs = stopTokenIDs
+    }
+}
+
+public struct DistributedStagedGenerationResult: Hashable, Sendable {
+    public let generatedTokenIDs: [Int32]
+    public let promptTokenCount: Int
+    public let stopReason: DistributedStagedStopReason
+    public let kvCapacity: Int
+
+    public var generatedTokenCount: Int {
+        generatedTokenIDs.count
+    }
+
+    public init(
+        generatedTokenIDs: [Int32],
+        promptTokenCount: Int,
+        stopReason: DistributedStagedStopReason,
+        kvCapacity: Int
+    ) {
+        self.generatedTokenIDs = generatedTokenIDs
+        self.promptTokenCount = promptTokenCount
+        self.stopReason = stopReason
+        self.kvCapacity = kvCapacity
+    }
+}
+
+/// Thin token-loop wrapper for the same-machine staged-equivalence milestone.
+///
+/// This does not tokenize, sample logits, or load Core AI. The final stage is responsible for
+/// returning the greedy next token; this wrapper only mirrors the coordinator-owned prefill/decode
+/// request sequence and KV lifecycle.
+public final class DistributedStagedEngine {
+    public let pipeline: DistributedSameMachinePipeline
+    public let maxContextLength: Int
+
+    public init(
+        pipeline: DistributedSameMachinePipeline,
+        maxContextLength: Int
+    ) throws {
+        guard maxContextLength > 0 else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "max_context_length must be positive")
+        }
+        self.pipeline = pipeline
+        self.maxContextLength = maxContextLength
+    }
+
+    public func generate(
+        promptTokens: [Int32],
+        options: DistributedStagedGenerationOptions = DistributedStagedGenerationOptions(),
+        requestID: String = UUID().uuidString
+    ) async throws -> DistributedStagedGenerationResult {
+        guard !promptTokens.isEmpty else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "prompt_tokens must be non-empty")
+        }
+        guard options.maxTokens >= 0 else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "max_tokens must be non-negative")
+        }
+        let kvCapacity = try resolvedKVCapacity(
+            promptCount: promptTokens.count,
+            maxTokens: options.maxTokens,
+            explicitKVCapacity: options.kvCapacity)
+
+        guard options.maxTokens > 0 else {
+            return DistributedStagedGenerationResult(
+                generatedTokenIDs: [],
+                promptTokenCount: promptTokens.count,
+                stopReason: .maxTokens,
+                kvCapacity: kvCapacity)
+        }
+
+        try await pipeline.allocate(requestID: requestID, kvCapacity: kvCapacity)
+        do {
+            var nextToken = try await pipelineNextToken(
+                requestID: requestID,
+                stepIndex: 0,
+                positionRange: DistributedSequenceRange(
+                    lowerBound: 0,
+                    upperBound: promptTokens.count),
+                tokenIDs: promptTokens)
+            var generated: [Int32] = []
+            var stopReason: DistributedStagedStopReason = .maxTokens
+
+            while generated.count < options.maxTokens {
+                if options.stopTokenIDs.contains(nextToken) {
+                    stopReason = .eos
+                    break
+                }
+                if promptTokens.count + generated.count >= maxContextLength {
+                    stopReason = .contextLimit
+                    break
+                }
+
+                generated.append(nextToken)
+                guard generated.count < options.maxTokens else { break }
+
+                let decodePosition = promptTokens.count + generated.count - 1
+                nextToken = try await pipelineNextToken(
+                    requestID: requestID,
+                    stepIndex: generated.count,
+                    positionRange: DistributedSequenceRange(
+                        lowerBound: decodePosition,
+                        upperBound: decodePosition + 1),
+                    tokenIDs: [nextToken])
+            }
+
+            await pipeline.free(requestID: requestID)
+            return DistributedStagedGenerationResult(
+                generatedTokenIDs: generated,
+                promptTokenCount: promptTokens.count,
+                stopReason: stopReason,
+                kvCapacity: kvCapacity)
+        } catch {
+            await pipeline.free(requestID: requestID)
+            throw error
+        }
+    }
+
+    private func pipelineNextToken(
+        requestID: String,
+        stepIndex: Int,
+        positionRange: DistributedSequenceRange,
+        tokenIDs: [Int32]
+    ) async throws -> Int32 {
+        let output = try await pipeline.forward(
+            requestID: requestID,
+            stepIndex: stepIndex,
+            positionRange: positionRange,
+            tokenIDs: tokenIDs)
+        guard let tokenID = output.tokenID else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "staged pipeline did not return a token id")
+        }
+        return tokenID
+    }
+
+    private func resolvedKVCapacity(
+        promptCount: Int,
+        maxTokens: Int,
+        explicitKVCapacity: Int?
+    ) throws -> Int {
+        let requested = explicitKVCapacity ?? (promptCount + maxTokens + 8)
+        guard requested > 0 else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "kv_capacity must be positive")
+        }
+        let capacity = min(requested, maxContextLength)
+        guard capacity >= promptCount else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "kv_capacity is smaller than prompt")
+        }
+        return capacity
+    }
+}
+
 public enum DistributedRuntimeValidationError: Error, Equatable, Sendable, CustomStringConvertible {
     case invalidIdentifier(field: String)
     case invalidTotalLayerCount(Int)

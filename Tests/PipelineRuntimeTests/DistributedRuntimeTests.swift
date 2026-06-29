@@ -2357,6 +2357,124 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertEqual(handles.map(\.freeRequests), [["req-1"], ["req-1"], ["req-1"], ["req-1"]])
     }
 
+    func testStagedEngineGeneratesPrefillAndDecodeTokenSteps() async throws {
+        let plan = makePlan()
+        let handles = makeFakeHandles(for: plan)
+        let pipeline = try DistributedSameMachinePipeline(plan: plan, stages: handles)
+        let engine = try DistributedStagedEngine(pipeline: pipeline, maxContextLength: 16)
+
+        let result = try await engine.generate(
+            promptTokens: [10, 11],
+            options: DistributedStagedGenerationOptions(maxTokens: 3),
+            requestID: "req-engine")
+
+        XCTAssertEqual(result.generatedTokenIDs, [42, 42, 42])
+        XCTAssertEqual(result.generatedTokenCount, 3)
+        XCTAssertEqual(result.promptTokenCount, 2)
+        XCTAssertEqual(result.stopReason, .maxTokens)
+        XCTAssertEqual(result.kvCapacity, 13)
+        XCTAssertTrue(handles.allSatisfy { $0.inputs.count == 3 })
+        XCTAssertEqual(handles[0].inputs.map(\.stepIndex), [0, 1, 2])
+        XCTAssertEqual(
+            handles[0].inputs.map(\.positionRange),
+            [
+                DistributedSequenceRange(lowerBound: 0, upperBound: 2),
+                DistributedSequenceRange(lowerBound: 2, upperBound: 3),
+                DistributedSequenceRange(lowerBound: 3, upperBound: 4),
+            ])
+        XCTAssertEqual(handles[0].inputs.map(\.positionIDs), [[0, 1], [2], [3]])
+        XCTAssertEqual(handles[0].inputs.map(\.tokenIDs), [[10, 11], [42], [42]])
+        XCTAssertEqual(handles.map(\.freeRequests), [
+            ["req-engine"], ["req-engine"], ["req-engine"], ["req-engine"],
+        ])
+    }
+
+    func testStagedEngineStopsBeforeAppendingStopToken() async throws {
+        let plan = makePlan()
+        let handles = makeFakeHandles(for: plan)
+        let pipeline = try DistributedSameMachinePipeline(plan: plan, stages: handles)
+        let engine = try DistributedStagedEngine(pipeline: pipeline, maxContextLength: 16)
+
+        let result = try await engine.generate(
+            promptTokens: [10, 11],
+            options: DistributedStagedGenerationOptions(maxTokens: 3, stopTokenIDs: [42]),
+            requestID: "req-stop")
+
+        XCTAssertEqual(result.generatedTokenIDs, [])
+        XCTAssertEqual(result.stopReason, .eos)
+        XCTAssertTrue(handles.allSatisfy { $0.inputs.count == 1 })
+        XCTAssertEqual(handles.map(\.freeRequests), [
+            ["req-stop"], ["req-stop"], ["req-stop"], ["req-stop"],
+        ])
+    }
+
+    func testStagedEngineStopsAtContextLimitBeforeAppendingToken() async throws {
+        let plan = makePlan()
+        let handles = makeFakeHandles(for: plan)
+        let pipeline = try DistributedSameMachinePipeline(plan: plan, stages: handles)
+        let engine = try DistributedStagedEngine(pipeline: pipeline, maxContextLength: 2)
+
+        let result = try await engine.generate(
+            promptTokens: [10, 11],
+            options: DistributedStagedGenerationOptions(maxTokens: 3),
+            requestID: "req-context")
+
+        XCTAssertEqual(result.generatedTokenIDs, [])
+        XCTAssertEqual(result.stopReason, .contextLimit)
+        XCTAssertEqual(result.kvCapacity, 2)
+        XCTAssertTrue(handles.allSatisfy { $0.inputs.count == 1 })
+        XCTAssertEqual(handles.map(\.freeRequests), [
+            ["req-context"], ["req-context"], ["req-context"], ["req-context"],
+        ])
+    }
+
+    func testStagedEngineRejectsEmptyPromptBeforeAllocation() async throws {
+        let plan = makePlan()
+        let handles = makeFakeHandles(for: plan)
+        let pipeline = try DistributedSameMachinePipeline(plan: plan, stages: handles)
+        let engine = try DistributedStagedEngine(pipeline: pipeline, maxContextLength: 16)
+
+        await XCTAssertThrowsErrorAsync(
+            try await engine.generate(
+                promptTokens: [],
+                options: DistributedStagedGenerationOptions(maxTokens: 1),
+                requestID: "req-empty")
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidForwardInput("prompt_tokens must be non-empty"))
+        }
+        XCTAssertTrue(handles.allSatisfy { $0.allocatedRequests.isEmpty })
+        XCTAssertTrue(handles.allSatisfy { $0.inputs.isEmpty })
+    }
+
+    func testStagedEngineFreesRequestAfterForwardFailure() async throws {
+        let plan = makePlan()
+        let handles = makeFakeHandles(for: plan)
+        let pipeline = try DistributedSameMachinePipeline(plan: plan, stages: handles)
+        let engine = try DistributedStagedEngine(pipeline: pipeline, maxContextLength: 16)
+
+        await XCTAssertThrowsErrorAsync(
+            try await engine.generate(
+                promptTokens: [10, 11],
+                options: DistributedStagedGenerationOptions(maxTokens: 2, kvCapacity: 2),
+                requestID: "req-overflow")
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidForwardInput("position_range upper_bound 3 exceeds kv_capacity 2"))
+        }
+        XCTAssertEqual(handles.map(\.freeRequests), [
+            ["req-overflow"], ["req-overflow"], ["req-overflow"], ["req-overflow"],
+        ])
+
+        let result = try await engine.generate(
+            promptTokens: [12],
+            options: DistributedStagedGenerationOptions(maxTokens: 1),
+            requestID: "req-overflow")
+        XCTAssertEqual(result.generatedTokenIDs, [42])
+    }
+
     func testSameMachinePipelineRejectsEmptyResetRequestIDBeforeForwarding() async throws {
         let plan = makePlan()
         let handles = makeFakeHandles(for: plan)
