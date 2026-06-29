@@ -71,6 +71,7 @@
 - Redacted URL-embedded credentials from `scripts/conversion-guard.sh` process reports.
 - Redacted sensitive URL query parameters from `scripts/conversion-guard.sh` process reports.
 - Treated direct `curl`, `rsync`, `tar`, and `zip` processes as heavy activity in the shared guard.
+- Tightened benchmark report generation and raw gates against stale report TSV artifacts.
 - Emitted disk-pressure JSON through a real encoder so paths with quotes remain valid JSON.
 - Rejected malformed non-numeric filesystem free-space readings in the disk-pressure guard.
 - Marked GLM-Z1 benchmark evidence blocked on measured stdout stability.

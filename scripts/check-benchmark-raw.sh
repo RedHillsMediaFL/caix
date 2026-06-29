@@ -23,6 +23,7 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 RAW_DIR="$REPO_DIR/benchmarks/raw"
 REPO_REAL="$(cd "$REPO_DIR" && pwd -P)"
 REQUIRE_TRACKED=0
+EXPECTED_REPORT_HEADER=$'repo\trepo_revision\tlocal_dir\tkind\tbenchmark_mode\tstatus\tpublishable\treason\tmeasured_runs\tmedian_generated\tmedian_load_s\tmedian_prefill_s\tmedian_decode_s\tmedian_decode_tps\tmin_decode_tps\tmax_decode_tps\tcaix_commit\tmachine\tmemory_bytes\tos\tmax_tokens\ttemperature\tseed\traw\tprompt\traw_dir'
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -158,9 +159,51 @@ require_repo_commit() {
 
 raw_dir_has_git_changes() {
   local raw_dir="$1"
-  local rel
+  local rel status
   rel="$(repo_relative_path "$raw_dir")" || return 0
-  [[ -n "$(git -C "$REPO_DIR" status --porcelain -- "$rel")" ]]
+  status="$(
+    git -C "$REPO_DIR" status --porcelain -- "$rel" |
+      awk '
+        {
+          path = substr($0, 4)
+          if (path !~ /(^|\/)report[.]tsv$/) print
+        }
+      '
+  )"
+  [[ -n "$status" ]]
+}
+
+check_suite_report() {
+  local suite="$1"
+  local report="$suite/report.tsv"
+  local header tmp
+
+  [[ -f "$report" ]] || return 0
+
+  if [[ "$REQUIRE_TRACKED" == "1" ]]; then
+    require_tracked_file "$report" "$suite report" || return 1
+  fi
+
+  IFS= read -r header < "$report" || {
+    echo "error: benchmark report is empty: $report" >&2
+    return 1
+  }
+  if [[ "$header" != "$EXPECTED_REPORT_HEADER" ]]; then
+    echo "error: benchmark report schema is stale: $report" >&2
+    return 1
+  fi
+
+  tmp="$(mktemp "${TMPDIR:-/tmp}/caix-benchmark-report.XXXXXX")" || return 1
+  if ! "$SCRIPT_DIR/benchmark-report.sh" --suite "$suite" --out "$tmp" >/dev/null; then
+    rm -f "$tmp"
+    return 1
+  fi
+  if ! cmp -s "$tmp" "$report"; then
+    echo "error: benchmark report is stale: $report" >&2
+    rm -f "$tmp"
+    return 1
+  fi
+  rm -f "$tmp"
 }
 
 summary_count() {
@@ -341,6 +384,8 @@ while IFS= read -r suite; do
     echo "error: suite count mismatch in $suite" >&2
     exit 1
   fi
+
+  check_suite_report "$suite" || exit 1
 
   while IFS=$'\t' read -r repo _local_dir _kind benchmark_mode status _reason _bundle output; do
     [[ -z "${repo:-}" || "$repo" == "repo" || "$repo" == \#* ]] && continue

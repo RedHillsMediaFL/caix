@@ -125,6 +125,20 @@ require_same_setting() {
   fi
 }
 
+require_repo_commit() {
+  local label="$1"
+  local commit="$2"
+
+  if [[ ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "error: invalid caix commit for $label: $commit" >&2
+    exit 1
+  fi
+  if ! git -C "$REPO_DIR" cat-file -e "$commit^{commit}" 2>/dev/null; then
+    echo "error: caix commit for $label is not present in this repository: $commit" >&2
+    exit 1
+  fi
+}
+
 median_field() {
   local file="$1"
   local field="$2"
@@ -171,6 +185,8 @@ suite_max_tokens="$(metadata_value max_tokens "$SUITE/metadata.txt")"
 suite_temperature="$(metadata_value temperature "$SUITE/metadata.txt")"
 suite_seed="$(metadata_value seed "$SUITE/metadata.txt")"
 suite_raw="$(metadata_value raw "$SUITE/metadata.txt")"
+
+require_repo_commit "suite metadata" "$suite_caix_commit"
 
 printf 'repo\trepo_revision\tlocal_dir\tkind\tbenchmark_mode\tstatus\tpublishable\treason\tmeasured_runs\tmedian_generated\tmedian_load_s\tmedian_prefill_s\tmedian_decode_s\tmedian_decode_tps\tmin_decode_tps\tmax_decode_tps\tcaix_commit\tmachine\tmemory_bytes\tos\tmax_tokens\ttemperature\tseed\traw\tprompt\traw_dir\n' > "$TMP"
 
@@ -239,6 +255,11 @@ while IFS=$'\t' read -r repo local_dir kind col4 col5 col6 col7 col8; do
     [[ -n "$repo_revision" ]] || repo_revision="unknown"
 
     caix_commit="$(metadata_value caix_commit "$output_path/metadata.txt")"
+    require_repo_commit "$repo model metadata" "$caix_commit"
+    if [[ "$caix_commit" != "$suite_caix_commit" ]]; then
+      echo "error: suite/model caix commit drift for $repo: suite=$suite_caix_commit model=$caix_commit" >&2
+      exit 1
+    fi
     machine="$(metadata_value machine "$output_path/metadata.txt")"
     memory="$(metadata_value memory_bytes "$output_path/metadata.txt")"
     os="$(metadata_value os "$output_path/metadata.txt")"
