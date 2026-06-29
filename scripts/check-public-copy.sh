@@ -53,6 +53,8 @@ scan "raw benchmark speed number in public copy" \
   '[0-9]+([.][0-9]+)?[[:space:]]*tok/s'
 scan "marketing/hype wording" \
   'revolutionary|game[- ]changer|world[- ]class|best[- ]in[- ]class|magic|gimmick'
+scan "support gimmick wording" \
+  'donat(e|ion)?|sticker'
 scan "vague model-size wording" \
   'large model|large chat|dense large|\blarger\b|\blargest\b'
 scan "bare large wording; use parameter count, disk size, memory, and license instead" \
