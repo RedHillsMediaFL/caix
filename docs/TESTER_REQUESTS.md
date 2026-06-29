@@ -19,6 +19,7 @@ temperature, streaming mode, warmup count, measured run count, and chat-template
 | `redhillsmediafl/rhm-qwen2.5-0.5b-instruct-caix` | `457592be4e87468a6c64f5567dc3bd46554daa13` | `qwen2.5-0.5b-instruct-coreai` | `decode` | 3 | `benchmarks/raw/20260628-214941-qwen2.5-0.5b-instruct-coreai` |
 | `redhillsmediafl/rhm-qwen2.5-3b-instruct-caix` | `e0c019d5a534ec8aea936dfafedb7e00b17c3961` | `qwen2.5-3b-instruct-coreai` | `decode` | 3 | `benchmarks/raw/20260628-220044-qwen2.5-3b-instruct-coreai` |
 | `redhillsmediafl/rhm-qwen3-0.6b-caix` | `3aa798b1a942fd15be6e5a96bd18b01e52dc6bc4` | `qwen3-0.6b-coreai` | `decode` | 3 | `benchmarks/raw/20260628-214406-qwen3-0.6b-coreai` |
+| `redhillsmediafl/rhm-qwen3-1.7b-caix` | `bf04650aef9a5e325f1ba05c52866b0363f56c29` | `qwen3-1.7b-coreai` | `decode` | 3 | `benchmarks/raw/20260629-072107-qwen3-1.7b-coreai` |
 | `redhillsmediafl/rhm-qwen3-4b-caix` | `bc5b7f1b866dee97270d4e1d7bdbdd30e48aa641` | `qwen3-4b-coreai` | `decode` | 3 | `benchmarks/raw/20260628-221149-qwen3-4b-coreai` |
 | `redhillsmediafl/rhm-qwen3-8b-caix` | `e46668067aff8efb89e87469269c120073511136` | `qwen3-8b-coreai` | `decode` | 3 | `benchmarks/raw/20260628-222458-qwen3-8b-coreai` |
 | `redhillsmediafl/rhm-qwen3-14b-caix` | `62a1e52fd5a5b9c1b241243cb0903d80fb5ad624` | `qwen3-14b-coreai` | `decode` | 3 | `benchmarks/raw/20260628-223516-qwen3-14b-coreai` |
