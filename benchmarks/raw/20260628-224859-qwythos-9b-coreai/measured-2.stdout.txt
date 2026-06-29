@@ -1,0 +1,1 @@
+Local inference on Apple silicon is optimized by the M-series chips' unified memory architecture, which allows the Neural Engine to access the CPU's RAM directly for ultra-low latency processing.

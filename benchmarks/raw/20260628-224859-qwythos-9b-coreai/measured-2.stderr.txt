@@ -1,0 +1,8 @@
+[fast] skipping CoreAILanguageModels path: bundle requires KV floor 512
+[coreai] loading model qwythos-9b-coreai.aimodel + tokenizer …
+[coreai] dtypes: logits=float16 keyCache=bfloat16 valueCache=bfloat16
+[coreai] model+tokenizer ready in 9.20s
+[coreai] prompt -> 104 tokens, KV cache capacity 640 (floor 512)
+[coreai] prefill 50.610s (2.1 tok/s)
+[coreai] decode 35 tokens in 75.235s (0.5 tok/s), stop=eos
+[coreai] 104 prompt tok, 35 generated, stop=eos, load=9.20s prefill=50.61s decode=75.24s (0.5 tok/s)
