@@ -100,7 +100,11 @@ A staged model is a set of per-stage `.aimodel` bundles plus a stage manifest. T
 `caix.cluster.stage_manifest.v0` (full schema and the `cluster`-block-in-`metadata.json`
 variant are in `docs/CLUSTER.md`); it keeps `metadata_version` 0.2 and adds a `cluster` block
 rather than introducing a new bundle kind. The runtime needs each stage entry to resolve to:
-its role, its layer range (for `transformer_layers`), and its `.aimodel` path.
+its role, its layer range (for `transformer_layers`), and its `.aimodel` path. A worked
+example is `docs/examples/cluster-stage-manifest.json`: `total_layer_count` sits at the top
+level; each `transformer_layers` stage gives `layers` as a half-open `[lower, upper]` array;
+the `embeddings` and `final_norm_head` stages give `layers` as a label string (`"embeddings"`,
+`"norm+lm_head"`).
 
 Note: the dry-run manifest carries `memory_gb` per stage for placement. Tied-embedding models
 (Qwen3 family) duplicate the embedding/unembedding matrix across the `embeddings` and
@@ -310,7 +314,9 @@ plus the `cluster.stages` manifest metadata that the planner already expects but
 does not yet emit (`docs/CLUSTER.md` "Current TODOs"). Minimum useful split is 3 stages so the
 test exercises all three IO shapes: `embeddings` (`input_ids`→hidden), `transformer_layers`
 (hidden→hidden), `final_norm_head` (hidden→logits). A 2-stage split skips the pure hidden→hidden
-boundary. Conversions, downloads, and exports are out of scope for this agent — this milestone
+boundary. The committed example `docs/examples/cluster-stage-manifest.json` is one such split
+(a 4-stage layout: one `embeddings`, two `transformer_layers`, one `final_norm_head`).
+Conversions, downloads, and exports are out of scope for this agent — this milestone
 is blocked on that exporter and says so.
 
 ### 9.2 Runtime to build
