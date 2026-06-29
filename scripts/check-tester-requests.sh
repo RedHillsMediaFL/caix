@@ -37,8 +37,9 @@ done
 
 [[ -f "$DOC" ]] || { echo "error: tester request doc not found: $DOC" >&2; exit 2; }
 
-tmp="$(mktemp "${TMPDIR:-/tmp}/caix-tester-requests.XXXXXX.md")"
-trap 'rm -f "$tmp"' EXIT
+tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/caix-tester-requests.XXXXXX")"
+trap 'rm -rf "$tmpdir"' EXIT
+tmp="$tmpdir/TESTER_REQUESTS.md"
 
 args=(--manifest "$MANIFEST" --raw-dir "$RAW_DIR" --out "$tmp")
 if [[ -n "$REVISIONS" ]]; then
