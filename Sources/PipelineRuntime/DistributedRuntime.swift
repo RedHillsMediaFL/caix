@@ -87,6 +87,608 @@ public struct DistributedStageDescriptor: Codable, Hashable, Sendable {
     }
 }
 
+/// Stage layer metadata from a staged model manifest.
+public enum DistributedStageLayerSpec: Hashable, Sendable, CustomStringConvertible {
+    case label(String)
+    case range(DistributedLayerRange)
+
+    public var layerRange: DistributedLayerRange? {
+        if case .range(let range) = self { return range }
+        return nil
+    }
+
+    public var label: String? {
+        if case .label(let label) = self { return label }
+        return nil
+    }
+
+    public var description: String {
+        switch self {
+        case .label(let label):
+            return label
+        case .range(let range):
+            return range.description
+        }
+    }
+}
+
+extension DistributedStageLayerSpec: Codable {
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let values = try? container.decode([Int].self) {
+            self = try .range(Self.layerRange(from: values, codingPath: decoder.codingPath))
+            return
+        }
+        if let values = try? container.decode([String].self) {
+            let ints = values.compactMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            guard ints.count == values.count else {
+                throw DecodingError.typeMismatch(
+                    DistributedStageLayerSpec.self,
+                    DecodingError.Context(
+                        codingPath: decoder.codingPath,
+                        debugDescription: "layer range array must contain integers"))
+            }
+            self = try .range(Self.layerRange(from: ints, codingPath: decoder.codingPath))
+            return
+        }
+        if let object = try? container.decode(DistributedLayerRangeObject.self) {
+            self = .range(object.range)
+            return
+        }
+        if let value = try? container.decode(String.self) {
+            if let range = Self.parseRangeString(value) {
+                self = .range(range)
+            } else {
+                self = .label(value)
+            }
+            return
+        }
+        throw DecodingError.typeMismatch(
+            DistributedStageLayerSpec.self,
+            DecodingError.Context(
+                codingPath: decoder.codingPath,
+                debugDescription: "layers must be a label, [lower, upper], or range object"))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .label(let label):
+            try container.encode(label)
+        case .range(let range):
+            try container.encode([range.lowerBound, range.upperBound])
+        }
+    }
+
+    private static func layerRange(
+        from values: [Int],
+        codingPath: [CodingKey]
+    ) throws -> DistributedLayerRange {
+        guard values.count == 2 else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: codingPath,
+                    debugDescription: "layer range must be [lower, upper]"))
+        }
+        let range = DistributedLayerRange(lowerBound: values[0], upperBound: values[1])
+        guard range.isValid else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: codingPath,
+                    debugDescription: "layer range must be non-empty and non-negative"))
+        }
+        return range
+    }
+
+    private static func parseRangeString(_ value: String) -> DistributedLayerRange? {
+        let normalized = value
+            .replacingOccurrences(of: "..<", with: ",")
+            .replacingOccurrences(of: "-", with: ",")
+        let parts = normalized
+            .split(separator: ",", omittingEmptySubsequences: true)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard parts.count == 2, let lower = Int(parts[0]), let upper = Int(parts[1]) else {
+            return nil
+        }
+        let range = DistributedLayerRange(lowerBound: lower, upperBound: upper)
+        return range.isValid ? range : nil
+    }
+}
+
+/// One normalized stage entry from `caix.cluster.stage_manifest.v0`.
+public struct DistributedStageManifestStage: Codable, Hashable, Sendable {
+    public let id: String
+    public let role: DistributedStageRole
+    public let layerSpec: DistributedStageLayerSpec
+    public let assetName: String
+    public let resolvedAssetPath: String?
+    public let memoryGB: Double
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case role
+        case layerSpec = "layers"
+        case assetName = "asset_name"
+        case resolvedAssetPath = "resolved_asset_path"
+        case memoryGB = "memory_gb"
+    }
+
+    public init(
+        id: String,
+        role: DistributedStageRole,
+        layerSpec: DistributedStageLayerSpec,
+        assetName: String,
+        resolvedAssetPath: String? = nil,
+        memoryGB: Double
+    ) {
+        self.id = id
+        self.role = role
+        self.layerSpec = layerSpec
+        self.assetName = assetName
+        self.resolvedAssetPath = resolvedAssetPath
+        self.memoryGB = memoryGB
+    }
+
+    public var layerRange: DistributedLayerRange? {
+        layerSpec.layerRange
+    }
+
+    public var layerLabel: String? {
+        layerSpec.label
+    }
+
+    public var layerDescription: String {
+        layerSpec.description
+    }
+
+    public func descriptor(workerID: String? = nil) -> DistributedStageDescriptor {
+        DistributedStageDescriptor(
+            id: id,
+            role: role,
+            layerRange: layerRange,
+            assetName: assetName,
+            workerID: workerID)
+    }
+}
+
+/// Normalized staged manifest used by the CLI planner, same-machine harness, and future workers.
+public struct DistributedStageManifest: Hashable, Sendable {
+    public static let currentSchema = "caix.cluster.stage_manifest.v0"
+
+    public let schema: String?
+    public let modelName: String
+    public let totalLayerCount: Int
+    public let totalLayerCountDerived: Bool
+    public let stages: [DistributedStageManifestStage]
+    public let runtimePlan: DistributedStagePlan
+
+    public init(
+        schema: String? = Self.currentSchema,
+        modelName: String,
+        totalLayerCount: Int,
+        totalLayerCountDerived: Bool = false,
+        stages: [DistributedStageManifestStage]
+    ) throws {
+        self.schema = schema
+        self.modelName = modelName
+        self.totalLayerCount = totalLayerCount
+        self.totalLayerCountDerived = totalLayerCountDerived
+        self.stages = stages
+        self.runtimePlan = DistributedStagePlan(
+            modelName: modelName,
+            totalLayerCount: totalLayerCount,
+            stages: stages.map { $0.descriptor() },
+            workers: [])
+        try self.runtimePlan.validate()
+    }
+
+    public static func load(
+        from url: URL,
+        defaultModelName: String? = nil,
+        requireClusterBlock: Bool = false
+    ) throws -> DistributedStageManifest {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw DistributedStageManifestError.fileNotFound(url.path)
+        }
+        let data = try Data(contentsOf: url)
+        return try decode(
+            from: data,
+            sourceURL: url,
+            baseURL: url.deletingLastPathComponent(),
+            defaultModelName: defaultModelName,
+            requireClusterBlock: requireClusterBlock)
+    }
+
+    public static func decode(
+        from data: Data,
+        sourceURL: URL? = nil,
+        baseURL: URL? = nil,
+        defaultModelName: String? = nil,
+        requireClusterBlock: Bool = false
+    ) throws -> DistributedStageManifest {
+        let sourceDescription = sourceURL?.path ?? "<memory>"
+        let root: RawDistributedStageManifestRoot
+        do {
+            root = try JSONDecoder().decode(RawDistributedStageManifestRoot.self, from: data)
+        } catch {
+            throw DistributedStageManifestError.invalidJSON("\(sourceDescription): \(error)")
+        }
+
+        let usesClusterBlock = root.cluster != nil
+        let body: RawDistributedStageManifestBody
+        if let cluster = root.cluster {
+            body = cluster
+        } else if requireClusterBlock {
+            throw DistributedStageManifestError.missingClusterBlock(sourceDescription)
+        } else {
+            body = root.asBody
+        }
+
+        let schema = body.schema ?? (usesClusterBlock ? nil : root.schema)
+        if let schema, schema != currentSchema {
+            throw DistributedStageManifestError.invalidSchema(schema)
+        }
+
+        let modelName = firstNonEmpty([
+            body.modelName, body.model, root.modelName, root.model, root.name, defaultModelName,
+            baseURL?.lastPathComponent,
+        ])
+        guard let modelName else {
+            throw DistributedStageManifestError.invalidManifest("model_name is missing")
+        }
+
+        guard let rawStages = body.stages, !rawStages.isEmpty else {
+            throw DistributedStageManifestError.missingStages(sourceDescription)
+        }
+        let stages = try rawStages.enumerated().map { index, rawStage in
+            try normalizeStage(rawStage, index: index, baseURL: baseURL)
+        }
+
+        let explicitTotalLayerCount = body.totalLayerCount?.value ?? body.totalLayers?.value
+            ?? root.totalLayerCount?.value ?? root.totalLayers?.value
+        if let explicitTotalLayerCount, explicitTotalLayerCount <= 0 {
+            throw DistributedStageManifestError.invalidManifest(
+                "total_layer_count must be positive")
+        }
+
+        let totalLayerCount: Int
+        let totalLayerCountDerived: Bool
+        if let explicitTotalLayerCount {
+            totalLayerCount = explicitTotalLayerCount
+            totalLayerCountDerived = false
+        } else {
+            totalLayerCount = try deriveTotalLayerCount(from: stages)
+            totalLayerCountDerived = true
+        }
+
+        return try DistributedStageManifest(
+            schema: schema,
+            modelName: modelName,
+            totalLayerCount: totalLayerCount,
+            totalLayerCountDerived: totalLayerCountDerived,
+            stages: stages)
+    }
+
+    private static func normalizeStage(
+        _ rawStage: RawDistributedStageManifestStage,
+        index: Int,
+        baseURL: URL?
+    ) throws -> DistributedStageManifestStage {
+        let fallbackID = "stage-\(index + 1)"
+        let id = firstNonEmpty([rawStage.id, rawStage.name]) ?? fallbackID
+        let assetName = firstNonEmpty([
+            rawStage.path, rawStage.bundle, rawStage.bundlePath, rawStage.aimodel,
+        ])
+        guard let assetName else {
+            throw DistributedStageManifestError.missingStageField(
+                stageID: id, field: "bundle")
+        }
+        guard let rawRole = firstNonEmpty([rawStage.role, rawStage.kind]) else {
+            throw DistributedStageManifestError.missingStageField(stageID: id, field: "role")
+        }
+        guard let role = DistributedStageRole(rawValue: rawRole) else {
+            throw DistributedStageManifestError.invalidStageField(
+                stageID: id,
+                field: "role",
+                reason: "must be embeddings, transformer_layers, or final_norm_head")
+        }
+        guard let rawLayerSpec = rawStage.layers ?? rawStage.layerRange else {
+            throw DistributedStageManifestError.missingStageField(stageID: id, field: "layers")
+        }
+
+        let layerSpec: DistributedStageLayerSpec
+        if role.requiresLayerRange {
+            guard let range = rawLayerSpec.layerRange else {
+                throw DistributedStageManifestError.invalidStageField(
+                    stageID: id,
+                    field: "layers",
+                    reason: "transformer_layers stages need [lower, upper]")
+            }
+            layerSpec = .range(range)
+        } else {
+            guard let label = rawLayerSpec.label?.trimmingCharacters(in: .whitespacesAndNewlines),
+                !label.isEmpty
+            else {
+                throw DistributedStageManifestError.invalidStageField(
+                    stageID: id,
+                    field: "layers",
+                    reason: "\(role.rawValue) stages need a label")
+            }
+            layerSpec = .label(label)
+        }
+
+        let memoryGB =
+            rawStage.memoryGB?.value
+            ?? rawStage.memoryGBCamel?.value
+            ?? rawStage.requiredGB?.value
+            ?? rawStage.requiredMemoryGB?.value
+            ?? rawStage.requiredMemoryGBCamel?.value
+            ?? rawStage.estimatedMemoryGB?.value
+        guard let memoryGB else {
+            throw DistributedStageManifestError.missingStageField(
+                stageID: id, field: "memory_gb")
+        }
+        guard memoryGB > 0 else {
+            throw DistributedStageManifestError.invalidStageField(
+                stageID: id, field: "memory_gb", reason: "must be positive")
+        }
+
+        return DistributedStageManifestStage(
+            id: id,
+            role: role,
+            layerSpec: layerSpec,
+            assetName: assetName,
+            resolvedAssetPath: resolveAssetPath(assetName, baseURL: baseURL),
+            memoryGB: memoryGB)
+    }
+
+    private static func deriveTotalLayerCount(
+        from stages: [DistributedStageManifestStage]
+    ) throws -> Int {
+        let ranges = stages.compactMap { stage -> DistributedLayerRange? in
+            guard stage.role == .transformerLayers else { return nil }
+            return stage.layerRange
+        }
+        guard let last = ranges.last else {
+            throw DistributedStageManifestError.invalidManifest(
+                "cluster plan needs at least one transformer_layers stage")
+        }
+        return last.upperBound
+    }
+
+    private static func resolveAssetPath(_ assetName: String, baseURL: URL?) -> String? {
+        let expanded = (assetName as NSString).expandingTildeInPath
+        if expanded.hasPrefix("/") {
+            return URL(fileURLWithPath: expanded).standardizedFileURL.path
+        }
+        guard let baseURL else { return nil }
+        return baseURL.appendingPathComponent(expanded).standardizedFileURL.path
+    }
+
+    private static func firstNonEmpty(_ values: [String?]) -> String? {
+        for value in values {
+            guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+                !value.isEmpty
+            else { continue }
+            return value
+        }
+        return nil
+    }
+}
+
+public enum DistributedStageManifestError: Error, Equatable, Sendable, CustomStringConvertible {
+    case fileNotFound(String)
+    case invalidJSON(String)
+    case missingClusterBlock(String)
+    case missingStages(String)
+    case missingStageField(stageID: String, field: String)
+    case invalidStageField(stageID: String, field: String, reason: String)
+    case invalidSchema(String)
+    case invalidManifest(String)
+
+    public var description: String {
+        switch self {
+        case .fileNotFound(let path):
+            return "Distributed stage manifest not found: \(path)"
+        case .invalidJSON(let message):
+            return "Invalid distributed stage manifest JSON: \(message)"
+        case .missingClusterBlock(let path):
+            return "\(path) does not include cluster.stages"
+        case .missingStages(let path):
+            return "\(path) has no stage metadata"
+        case .missingStageField(let stageID, let field):
+            return "Stage \(stageID) is missing \(field) metadata"
+        case .invalidStageField(let stageID, let field, let reason):
+            return "Stage \(stageID) has invalid \(field) metadata: \(reason)"
+        case .invalidSchema(let schema):
+            return "Unsupported distributed stage manifest schema: \(schema)"
+        case .invalidManifest(let message):
+            return "Invalid distributed stage manifest: \(message)"
+        }
+    }
+}
+
+private struct RawDistributedStageManifestRoot: Decodable {
+    let schema: String?
+    let cluster: RawDistributedStageManifestBody?
+    let model: String?
+    let modelName: String?
+    let name: String?
+    let totalLayerCount: FlexibleInt?
+    let totalLayers: FlexibleInt?
+    let stages: [RawDistributedStageManifestStage]?
+
+    enum CodingKeys: String, CodingKey {
+        case schema
+        case cluster
+        case model
+        case modelName = "model_name"
+        case name
+        case totalLayerCount = "total_layer_count"
+        case totalLayers = "total_layers"
+        case stages
+    }
+
+    var asBody: RawDistributedStageManifestBody {
+        RawDistributedStageManifestBody(
+            schema: schema,
+            model: model,
+            modelName: modelName,
+            totalLayerCount: totalLayerCount,
+            totalLayers: totalLayers,
+            stages: stages)
+    }
+}
+
+private struct RawDistributedStageManifestBody: Decodable {
+    let schema: String?
+    let model: String?
+    let modelName: String?
+    let totalLayerCount: FlexibleInt?
+    let totalLayers: FlexibleInt?
+    let stages: [RawDistributedStageManifestStage]?
+
+    enum CodingKeys: String, CodingKey {
+        case schema
+        case model
+        case modelName = "model_name"
+        case totalLayerCount = "total_layer_count"
+        case totalLayers = "total_layers"
+        case stages
+    }
+}
+
+private struct RawDistributedStageManifestStage: Decodable {
+    let id: String?
+    let name: String?
+    let path: String?
+    let bundle: String?
+    let bundlePath: String?
+    let aimodel: String?
+    let role: String?
+    let kind: String?
+    let layers: DistributedStageLayerSpec?
+    let layerRange: DistributedStageLayerSpec?
+    let memoryGB: FlexibleDouble?
+    let memoryGBCamel: FlexibleDouble?
+    let requiredGB: FlexibleDouble?
+    let requiredMemoryGB: FlexibleDouble?
+    let requiredMemoryGBCamel: FlexibleDouble?
+    let estimatedMemoryGB: FlexibleDouble?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case path
+        case bundle
+        case bundlePath = "bundle_path"
+        case aimodel
+        case role
+        case kind
+        case layers
+        case layerRange = "layer_range"
+        case memoryGB = "memory_gb"
+        case memoryGBCamel = "memoryGB"
+        case requiredGB = "required_gb"
+        case requiredMemoryGB = "required_memory_gb"
+        case requiredMemoryGBCamel = "requiredMemoryGB"
+        case estimatedMemoryGB = "estimated_memory_gb"
+    }
+}
+
+private struct DistributedLayerRangeObject: Decodable {
+    let range: DistributedLayerRange
+
+    enum CodingKeys: String, CodingKey {
+        case lowerBound = "lower_bound"
+        case upperBound = "upper_bound"
+        case lower
+        case upper
+        case start
+        case end
+        case from
+        case to
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let lower =
+            try container.decodeIfPresent(FlexibleInt.self, forKey: .lowerBound)?.value
+            ?? container.decodeIfPresent(FlexibleInt.self, forKey: .lower)?.value
+            ?? container.decodeIfPresent(FlexibleInt.self, forKey: .start)?.value
+            ?? container.decodeIfPresent(FlexibleInt.self, forKey: .from)?.value
+        let upper =
+            try container.decodeIfPresent(FlexibleInt.self, forKey: .upperBound)?.value
+            ?? container.decodeIfPresent(FlexibleInt.self, forKey: .upper)?.value
+            ?? container.decodeIfPresent(FlexibleInt.self, forKey: .end)?.value
+            ?? container.decodeIfPresent(FlexibleInt.self, forKey: .to)?.value
+        guard let lower, let upper else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.lowerBound,
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "layer range object needs lower_bound and upper_bound"))
+        }
+        let range = DistributedLayerRange(lowerBound: lower, upperBound: upper)
+        guard range.isValid else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "layer range must be non-empty and non-negative"))
+        }
+        self.range = range
+    }
+}
+
+private struct FlexibleInt: Decodable {
+    let value: Int
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let value = try? container.decode(Int.self) {
+            self.value = value
+            return
+        }
+        if let value = try? container.decode(String.self),
+            let parsed = Int(value.trimmingCharacters(in: .whitespacesAndNewlines))
+        {
+            self.value = parsed
+            return
+        }
+        throw DecodingError.typeMismatch(
+            Int.self,
+            DecodingError.Context(
+                codingPath: decoder.codingPath,
+                debugDescription: "expected integer or integer string"))
+    }
+}
+
+private struct FlexibleDouble: Decodable {
+    let value: Double
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let value = try? container.decode(Double.self) {
+            self.value = value
+            return
+        }
+        if let value = try? container.decode(String.self) {
+            let cleaned = value
+                .replacingOccurrences(of: "GB", with: "", options: .caseInsensitive)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if let parsed = Double(cleaned) {
+                self.value = parsed
+                return
+            }
+        }
+        throw DecodingError.typeMismatch(
+            Double.self,
+            DecodingError.Context(
+                codingPath: decoder.codingPath,
+                debugDescription: "expected number or GB string"))
+    }
+}
+
 /// Worker address metadata. This does not define a network protocol.
 public struct DistributedWorkerEndpoint: Codable, Hashable, Sendable, CustomStringConvertible {
     public let id: String

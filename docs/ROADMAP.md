@@ -25,6 +25,8 @@ Current in-tree pieces:
 
 - `DistributedStagePlan` and validation for roles, layer coverage, workers, and hidden-state
   packet routes.
+- `DistributedStageManifest`, a shared loader for staged manifest and `metadata.json` cluster
+  blocks.
 - `caix cluster plan` dry-run placement for staged manifests.
 - Fail-closed `caix cluster join` and `caix serve --cluster` CLI stubs.
 - `DistributedSameMachinePipeline`, an in-process stage-handle harness tested with fake stages.
@@ -60,6 +62,7 @@ MacBook test gate:
 - First external test is one MacBook stage over Thunderbolt Bridge.
 - Use the same staged Qwen3-0.6B manifest that passed loopback.
 - `scripts/check-distributed-readiness.sh --brew-caix "$(command -v caix)"` must pass first.
+- Test the release path through Brew before connecting the MacBook.
 
 Do not start with:
 

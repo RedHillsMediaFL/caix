@@ -30,3 +30,4 @@ Rules:
 - Keep raw stdout/stderr or an archive. Do not record only a summary.
 - Do not ask for Thunderbolt testing until both evidence files pass
   `scripts/check-distributed-readiness.sh`.
+- The distributed readiness gate also needs a Brew-installed `caix` via `--brew-caix`.

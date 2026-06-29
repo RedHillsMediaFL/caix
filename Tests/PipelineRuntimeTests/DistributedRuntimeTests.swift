@@ -127,6 +127,72 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertEqual(decoded, plan)
     }
 
+    func testStageManifestLoadsTopLevelManifest() throws {
+        let manifest = try DistributedStageManifest.decode(
+            from: Data(stageManifestJSON(modelKey: "model", includeTotalLayerCount: true).utf8),
+            baseURL: URL(fileURLWithPath: "/tmp/caix-manifest", isDirectory: true))
+
+        XCTAssertEqual(manifest.schema, DistributedStageManifest.currentSchema)
+        XCTAssertEqual(manifest.modelName, "qwen3-0.6b-coreai")
+        XCTAssertEqual(manifest.totalLayerCount, 28)
+        XCTAssertFalse(manifest.totalLayerCountDerived)
+        XCTAssertEqual(manifest.stages.count, 4)
+        XCTAssertEqual(manifest.stages[1].layerRange, DistributedLayerRange(lowerBound: 0, upperBound: 14))
+        XCTAssertEqual(
+            manifest.stages[1].resolvedAssetPath,
+            "/tmp/caix-manifest/stages/01-layers-00-14.aimodel")
+        XCTAssertEqual(manifest.runtimePlan.stages.map(\.id), [
+            "embed", "layers-00-14", "layers-14-28", "head",
+        ])
+        XCTAssertNoThrow(try manifest.runtimePlan.validate())
+    }
+
+    func testStageManifestLoadsMetadataClusterBlockAndDerivesLayerCount() throws {
+        let json =
+            """
+            {
+              "name": "qwen3-0.6b-coreai",
+              "cluster": \(stageManifestJSON(modelKey: nil, includeTotalLayerCount: false))
+            }
+            """
+
+        let manifest = try DistributedStageManifest.decode(
+            from: Data(json.utf8),
+            baseURL: URL(fileURLWithPath: "/tmp/qwen3", isDirectory: true),
+            requireClusterBlock: true)
+
+        XCTAssertEqual(manifest.modelName, "qwen3-0.6b-coreai")
+        XCTAssertEqual(manifest.totalLayerCount, 28)
+        XCTAssertTrue(manifest.totalLayerCountDerived)
+        XCTAssertEqual(manifest.runtimePlan.stages[2].layerRange, DistributedLayerRange(lowerBound: 14, upperBound: 28))
+    }
+
+    func testStageManifestRejectsLayerCoverageGap() {
+        let json =
+            """
+            {
+              "schema": "\(DistributedStageManifest.currentSchema)",
+              "model": "qwen3-0.6b-coreai",
+              "total_layer_count": 28,
+              "stages": [
+                {"id":"embed","role":"embeddings","layers":"embeddings","bundle":"embed.aimodel","memory_gb":1},
+                {"id":"layers-00-10","role":"transformer_layers","layers":[0,10],"bundle":"layers-a.aimodel","memory_gb":2},
+                {"id":"layers-12-28","role":"transformer_layers","layers":[12,28],"bundle":"layers-b.aimodel","memory_gb":2},
+                {"id":"head","role":"final_norm_head","layers":"norm+lm_head","bundle":"head.aimodel","memory_gb":1}
+              ]
+            }
+            """
+
+        XCTAssertThrowsError(try DistributedStageManifest.decode(from: Data(json.utf8))) { error in
+            XCTAssertEqual(
+                error as? DistributedRuntimeValidationError,
+                .layerCoverageGap(
+                    expectedStart: 10,
+                    stageID: "layers-12-28",
+                    actual: DistributedLayerRange(lowerBound: 12, upperBound: 28)))
+        }
+    }
+
     func testSameMachinePipelineForwardsThroughOrderedStageHandles() async throws {
         let plan = makePlan()
         let handles = makeFakeHandles(for: plan)
@@ -235,6 +301,49 @@ final class DistributedRuntimeTests: XCTestCase {
     ) -> DistributedStageDescriptor {
         DistributedStageDescriptor(
             id: id, role: role, layerRange: range, assetName: assetName, workerID: workerID)
+    }
+
+    private func stageManifestJSON(modelKey: String?, includeTotalLayerCount: Bool) -> String {
+        let modelLine = modelKey.map { #""\#($0)": "qwen3-0.6b-coreai","# } ?? ""
+        let totalLine = includeTotalLayerCount ? #""total_layer_count": 28,"# : ""
+        return
+            """
+            {
+              "schema": "\(DistributedStageManifest.currentSchema)",
+              \(modelLine)
+              \(totalLine)
+              "stages": [
+                {
+                  "id": "embed",
+                  "role": "embeddings",
+                  "layers": "embeddings",
+                  "bundle": "stages/00-embed.aimodel",
+                  "memory_gb": 1.0
+                },
+                {
+                  "id": "layers-00-14",
+                  "role": "transformer_layers",
+                  "layers": [0, 14],
+                  "bundle": "stages/01-layers-00-14.aimodel",
+                  "memory_gb": 2.0
+                },
+                {
+                  "id": "layers-14-28",
+                  "role": "transformer_layers",
+                  "layers": {"lower_bound": 14, "upper_bound": 28},
+                  "bundle": "stages/02-layers-14-28.aimodel",
+                  "memory_gb": "2GB"
+                },
+                {
+                  "id": "head",
+                  "role": "final_norm_head",
+                  "layers": "norm+lm_head",
+                  "bundle": "stages/03-head.aimodel",
+                  "memory_gb": 1.0
+                }
+              ]
+            }
+            """
     }
 
     private func makeFakeHandles(

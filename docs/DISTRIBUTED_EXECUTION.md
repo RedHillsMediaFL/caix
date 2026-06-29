@@ -35,6 +35,8 @@ This is blunt on purpose. Where the current code cannot do something, it says so
     exactly one `final_norm_head` last, one-or-more `transformer_layers` between, contiguous
     gap-free layer coverage `0 ..< total_layer_count`, unique stage/worker ids, and
     adjacency-only packet routing (`destination == source + 1`).
+  - `DistributedStageManifest` — the shared loader for top-level staged manifests and
+    `metadata.json` cluster blocks.
   - `DistributedHiddenStatePacket`, `DistributedStageHandle`, and
     `DistributedSameMachinePipeline` — an in-process coordinator harness tested with fake
     stages. It validates stage order, packet routes, payload byte counts, and final-token
@@ -42,8 +44,8 @@ This is blunt on purpose. Where the current code cannot do something, it says so
 - A dry-run planner CLI (`Sources/PipelineCLI/Cluster.swift`, wired in `main.swift`):
   `caix cluster plan --manifest … | --model …` with greedy worker assignment. Manifest schema
   `caix.cluster.stage_manifest.v0` documented in `docs/CLUSTER.md`. JSON output includes a
-  `runtime_plan` validated with `DistributedStagePlan`. It does not load Core AI models, start
-  workers, or move tensors.
+  `runtime_plan` from the shared manifest loader. It does not load Core AI models, start workers,
+  or move tensors.
 
 **Gap:** there is no Core AI stage execution path. Nothing produces a per-stage `.aimodel`,
 nothing emits an intermediate hidden state from a graph or feeds one back in, and there is no
@@ -381,8 +383,8 @@ add transport, per §4/§5/§7.
 - **Boundary dtype export policy (§4).** `DistributedTensorScalarType` is float16/float32 only.
   The exporter still needs to record the actual boundary dtype in staged metadata and, for
   internally bfloat16 graphs, materialize a host-readable boundary.
-- **Staged exporter handoff.** `caix cluster plan` emits a validated `DistributedStagePlan`, but
-  current exports still do not record staged metadata. The exporter must write `cluster.stages`,
+- **Staged exporter handoff.** The runtime and CLI can load staged manifests, but current exports
+  still do not record staged metadata. The exporter must write `cluster.stages`,
   `total_layer_count`, stage asset names, and boundary tensor metadata before same-machine staged
   equivalence can run.
 - **`AIModel.specialize` cache keying.** Does the `.default` compile cache key cleanly per

@@ -85,3 +85,4 @@ scripts/check-publication-gates.sh --distributed --brew-caix "$(command -v caix)
 ```
 
 Then connect the second Mac and run the distributed smoke from the installed `caix`.
+Do not publish distributed release notes until this gate passes.
