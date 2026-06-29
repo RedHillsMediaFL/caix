@@ -16,6 +16,7 @@ Generate a current request sheet when assigning external tests:
 scripts/check-benchmark-coverage.sh
 scripts/check-hf-collections.sh
 scripts/check-conversion-ledger.sh
+scripts/check-token-handling.sh
 scripts/generate-tester-requests.sh \
   --revisions benchmarks/revisions.tsv \
   --out docs/TESTER_REQUESTS.md
@@ -184,6 +185,7 @@ or an archive of it.
 Before editing public docs or model cards, run:
 
 ```bash
+scripts/check-token-handling.sh
 scripts/check-public-copy.sh README.md docs web Formula
 ```
 

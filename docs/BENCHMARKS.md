@@ -40,6 +40,7 @@ Use the suite manifest to account for every known RHM caix repo:
 ```bash
 scripts/check-benchmark-coverage.sh
 scripts/check-hf-collections.sh
+scripts/check-token-handling.sh
 scripts/benchmark-suite.sh --dry-run
 scripts/collect-model-revisions.sh \
   --out benchmarks/revisions.tsv \
@@ -72,6 +73,9 @@ speed/fluff wording.
 
 Run `scripts/check-hf-model-cards.sh` before uploading card edits. It fetches only live
 `README.md` files for manifest repos and applies the public-copy guard.
+
+Run `scripts/check-token-handling.sh` before committing Hub automation or docs. It rejects direct
+HF token env reads, Bearer auth headers, and token argv patterns.
 
 Run `scripts/check-conversion-ledger.sh` after changing `models/registry.json`,
 `docs/CONVERSION_LEDGER.tsv`, or the benchmark manifest. It keeps active conversion lanes explicit:
