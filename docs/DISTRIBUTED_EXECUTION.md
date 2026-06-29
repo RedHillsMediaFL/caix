@@ -44,6 +44,9 @@ This is blunt on purpose. Where the current code cannot do something, it says so
     boundary tensor, and resolved asset URL. The pipeline validates stage order, packet routes,
     boundary tensor shape/dtype, payload byte counts, and final-token handoff without loading Core
     AI models.
+  - `DistributedWorkerMessage` frames for hello/ack, allocation, forward, reset, free, and error.
+    The `FORWARD` frame carries token ids or hidden-state metadata plus position ids; tensor bytes
+    stay outside JSON.
 - A dry-run planner CLI (`Sources/PipelineCLI/Cluster.swift`, wired in `main.swift`):
   `caix cluster plan --manifest … | --model …` with greedy worker assignment. Manifest schema
   `caix.cluster.stage_manifest.v0` documented in `docs/CLUSTER.md`. JSON output includes a

@@ -23,6 +23,8 @@
 - Added a manifest stage-handle factory path for future Core AI staged execution.
 - Added stage-handle factory context with resolved stage asset URL checks.
 - Added a stage-handle factory guard for missing resolved stage assets before Core AI stage load.
+- Added typed distributed worker control/forward message frames for loopback and Thunderbolt
+  transport work.
 - Added the cluster-plan contract check to publication gates.
 - Added fail-closed `caix cluster join` and `caix serve --cluster` CLI stubs for Brew surface tests.
 - Expanded the Homebrew formula test to cover distributed plan/join help and `serve --cluster`.

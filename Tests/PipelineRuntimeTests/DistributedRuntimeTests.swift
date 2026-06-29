@@ -74,6 +74,170 @@ final class DistributedRuntimeTests: XCTestCase {
         }
     }
 
+    func testWorkerMessageEnvelopeRoundTripsForwardFrame() throws {
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 2], scalarType: .float16))
+        let packet = try hiddenPacket(
+            requestID: "req-1",
+            source: "layers-0-16",
+            destination: "layers-16-32",
+            positionRange: DistributedSequenceRange(lowerBound: 4, upperBound: 5),
+            stepIndex: 1,
+            fill: 9)
+        let frame = DistributedStageForwardFrame(
+            stageID: "layers-16-32",
+            requestID: "req-1",
+            stepIndex: 1,
+            positionRange: DistributedSequenceRange(lowerBound: 4, upperBound: 5),
+            positionIDs: [4],
+            hiddenState: packet.metadata)
+        let message = DistributedWorkerMessage.forward(frame)
+
+        try frame.validate(against: plan)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(message)
+        let json = String(decoding: data, as: UTF8.self)
+
+        XCTAssertTrue(json.contains(#""kind":"forward""#))
+        XCTAssertTrue(json.contains(#""position_ids":[4]"#))
+        XCTAssertTrue(json.contains(#""hidden_state""#))
+        XCTAssertEqual(try JSONDecoder().decode(DistributedWorkerMessage.self, from: data), message)
+    }
+
+    func testWorkerMessageEnvelopeRoundTripsControlFrames() throws {
+        let hello = DistributedWorkerMessage.hello(
+            DistributedWorkerHello(
+                stage: stage(
+                    "layers-0-16", .transformerLayers,
+                    range: DistributedLayerRange(lowerBound: 0, upperBound: 16),
+                    assetName: "layers_0_16", workerID: "worker-a"),
+                hiddenSize: 4096,
+                boundaryScalarType: .float16,
+                cacheContract: "stateful",
+                planIntegrityHash: "abc123",
+                freeMemoryBytes: 1024,
+                computeUnit: "all"))
+        let alloc = DistributedWorkerMessage.allocate(
+            DistributedStageAllocation(requestID: "req-1", kvCapacity: 128))
+        let ack = DistributedWorkerMessage.helloAck(
+            DistributedWorkerHelloAck(
+                accepted: true, stageID: "layers-0-16", planIntegrityHash: "abc123"))
+        let reset = DistributedWorkerMessage.reset(
+            DistributedRequestControl(requestID: "req-1", stageID: "layers-0-16"))
+        let error = DistributedWorkerMessage.error(
+            DistributedWorkerErrorFrame(
+                code: "plan_mismatch",
+                detail: "worker plan hash did not match",
+                stageID: "layers-0-16"))
+
+        for message in [hello, alloc, ack, reset, error] {
+            let data = try JSONEncoder().encode(message)
+            XCTAssertEqual(try JSONDecoder().decode(DistributedWorkerMessage.self, from: data), message)
+        }
+    }
+
+    func testForwardFrameValidatesRoleSpecificInputs() throws {
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 2], scalarType: .float16))
+        let firstStage = DistributedStageForwardFrame(
+            stageID: "embed",
+            requestID: "req-1",
+            stepIndex: 0,
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 3),
+            positionIDs: [0, 1, 2],
+            tokenIDs: [10, 11, 12])
+        let packet = try hiddenPacket(
+            requestID: "req-1",
+            source: "embed",
+            destination: "layers-0-16",
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 3),
+            stepIndex: 0,
+            fill: 7)
+        let middleStage = DistributedStageForwardFrame(
+            stageID: "layers-0-16",
+            requestID: "req-1",
+            stepIndex: 0,
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 3),
+            positionIDs: [0, 1, 2],
+            hiddenState: packet.metadata)
+
+        XCTAssertNoThrow(try firstStage.validate(against: plan))
+        XCTAssertNoThrow(try middleStage.validate(against: plan))
+    }
+
+    func testForwardFrameRejectsWrongPayloadForRole() throws {
+        let plan = makePlan()
+        let badFirstStage = DistributedStageForwardFrame(
+            stageID: "embed",
+            requestID: "req-1",
+            stepIndex: 0,
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+            positionIDs: [0])
+
+        XCTAssertThrowsError(try badFirstStage.validate(against: plan)) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidForwardInput("token_ids count must match position_range"))
+        }
+
+        let badMiddleStage = DistributedStageForwardFrame(
+            stageID: "layers-0-16",
+            requestID: "req-1",
+            stepIndex: 0,
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+            positionIDs: [0],
+            tokenIDs: [7])
+
+        XCTAssertThrowsError(try badMiddleStage.validate(against: plan)) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidForwardInput("transformer_layers stage must not receive token_ids"))
+        }
+    }
+
+    func testForwardResultFrameValidatesStageOutput() throws {
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 2], scalarType: .float16))
+        let packet = try hiddenPacket(
+            requestID: "req-1",
+            source: "layers-0-16",
+            destination: "layers-16-32",
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+            stepIndex: 1,
+            fill: 3)
+        let middleOutput = DistributedStageForwardResultFrame(
+            stageID: "layers-0-16",
+            requestID: "req-1",
+            stepIndex: 1,
+            hiddenState: packet.metadata)
+        let finalOutput = DistributedStageForwardResultFrame(
+            stageID: "final",
+            requestID: "req-1",
+            stepIndex: 1,
+            tokenID: 42)
+
+        XCTAssertNoThrow(try middleOutput.validate(against: plan))
+        XCTAssertNoThrow(try finalOutput.validate(against: plan))
+    }
+
+    func testForwardResultFrameRejectsInvalidFinalOutput() throws {
+        let plan = makePlan()
+        let badFinal = DistributedStageForwardResultFrame(
+            stageID: "final",
+            requestID: "req-1",
+            stepIndex: 0)
+
+        XCTAssertThrowsError(try badFinal.validate(against: plan)) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidStageOutput("final stage must return a token id"))
+        }
+    }
+
     func testHiddenStatePacketValidatesShapeByteCountAndRoute() throws {
         let packet = DistributedHiddenStatePacketMetadata(
             requestID: "req-1",

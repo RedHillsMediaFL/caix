@@ -964,13 +964,381 @@ public struct DistributedStagePlan: Codable, Hashable, Sendable {
     }
 }
 
-public struct DistributedStageAllocation: Hashable, Sendable {
+public struct DistributedWorkerHello: Codable, Hashable, Sendable {
+    public let stage: DistributedStageDescriptor
+    public let hiddenSize: Int?
+    public let boundaryScalarType: DistributedTensorScalarType?
+    public let cacheContract: String?
+    public let planIntegrityHash: String
+    public let freeMemoryBytes: UInt64?
+    public let computeUnit: String?
+    public let labels: [String: String]
+
+    enum CodingKeys: String, CodingKey {
+        case stage
+        case hiddenSize = "hidden_size"
+        case boundaryScalarType = "boundary_scalar_type"
+        case cacheContract = "cache_contract"
+        case planIntegrityHash = "plan_integrity_hash"
+        case freeMemoryBytes = "free_memory_bytes"
+        case computeUnit = "compute_unit"
+        case labels
+    }
+
+    public init(
+        stage: DistributedStageDescriptor,
+        hiddenSize: Int? = nil,
+        boundaryScalarType: DistributedTensorScalarType? = nil,
+        cacheContract: String? = nil,
+        planIntegrityHash: String,
+        freeMemoryBytes: UInt64? = nil,
+        computeUnit: String? = nil,
+        labels: [String: String] = [:]
+    ) {
+        self.stage = stage
+        self.hiddenSize = hiddenSize
+        self.boundaryScalarType = boundaryScalarType
+        self.cacheContract = cacheContract
+        self.planIntegrityHash = planIntegrityHash
+        self.freeMemoryBytes = freeMemoryBytes
+        self.computeUnit = computeUnit
+        self.labels = labels
+    }
+}
+
+public struct DistributedWorkerHelloAck: Codable, Hashable, Sendable {
+    public let accepted: Bool
+    public let stageID: String
+    public let reason: String?
+    public let planIntegrityHash: String?
+
+    enum CodingKeys: String, CodingKey {
+        case accepted
+        case stageID = "stage_id"
+        case reason
+        case planIntegrityHash = "plan_integrity_hash"
+    }
+
+    public init(
+        accepted: Bool,
+        stageID: String,
+        reason: String? = nil,
+        planIntegrityHash: String? = nil
+    ) {
+        self.accepted = accepted
+        self.stageID = stageID
+        self.reason = reason
+        self.planIntegrityHash = planIntegrityHash
+    }
+}
+
+public struct DistributedRequestControl: Codable, Hashable, Sendable {
+    public let requestID: String
+    public let stageID: String?
+
+    enum CodingKeys: String, CodingKey {
+        case requestID = "request_id"
+        case stageID = "stage_id"
+    }
+
+    public init(requestID: String, stageID: String? = nil) {
+        self.requestID = requestID
+        self.stageID = stageID
+    }
+}
+
+public struct DistributedWorkerErrorFrame: Codable, Hashable, Sendable {
+    public let code: String
+    public let detail: String
+    public let requestID: String?
+    public let stageID: String?
+
+    enum CodingKeys: String, CodingKey {
+        case code
+        case detail
+        case requestID = "request_id"
+        case stageID = "stage_id"
+    }
+
+    public init(code: String, detail: String, requestID: String? = nil, stageID: String? = nil) {
+        self.code = code
+        self.detail = detail
+        self.requestID = requestID
+        self.stageID = stageID
+    }
+}
+
+public struct DistributedStageAllocation: Codable, Hashable, Sendable {
     public let requestID: String
     public let kvCapacity: Int
+
+    enum CodingKeys: String, CodingKey {
+        case requestID = "request_id"
+        case kvCapacity = "kv_capacity"
+    }
 
     public init(requestID: String, kvCapacity: Int) {
         self.requestID = requestID
         self.kvCapacity = kvCapacity
+    }
+}
+
+public struct DistributedStageForwardFrame: Codable, Hashable, Sendable {
+    public let stageID: String
+    public let requestID: String
+    public let stepIndex: Int
+    public let positionRange: DistributedSequenceRange
+    public let positionIDs: [Int32]
+    public let tokenIDs: [Int32]
+    public let hiddenState: DistributedHiddenStatePacketMetadata?
+
+    enum CodingKeys: String, CodingKey {
+        case stageID = "stage_id"
+        case requestID = "request_id"
+        case stepIndex = "step_index"
+        case positionRange = "position_range"
+        case positionIDs = "position_ids"
+        case tokenIDs = "token_ids"
+        case hiddenState = "hidden_state"
+    }
+
+    public init(
+        stageID: String,
+        requestID: String,
+        stepIndex: Int,
+        positionRange: DistributedSequenceRange,
+        positionIDs: [Int32],
+        tokenIDs: [Int32] = [],
+        hiddenState: DistributedHiddenStatePacketMetadata? = nil
+    ) {
+        self.stageID = stageID
+        self.requestID = requestID
+        self.stepIndex = stepIndex
+        self.positionRange = positionRange
+        self.positionIDs = positionIDs
+        self.tokenIDs = tokenIDs
+        self.hiddenState = hiddenState
+    }
+
+    public func validate(against plan: DistributedStagePlan) throws {
+        guard !requestID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw DistributedStageExecutionError.invalidForwardInput("request_id is empty")
+        }
+        guard stepIndex >= 0 else {
+            throw DistributedStageExecutionError.invalidForwardInput("step_index must be non-negative")
+        }
+        guard positionRange.isValid else {
+            throw DistributedStageExecutionError.invalidForwardInput("position_range is invalid")
+        }
+        guard positionIDs.count == positionRange.count else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "position_ids count must match position_range")
+        }
+        guard let descriptor = plan.stage(id: stageID) else {
+            throw DistributedStageExecutionError.invalidForwardInput("unknown stage_id \(stageID)")
+        }
+
+        switch descriptor.role {
+        case .embeddings:
+            guard tokenIDs.count == positionRange.count else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "token_ids count must match position_range")
+            }
+            guard hiddenState == nil else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "embeddings stage must not receive a hidden state")
+            }
+        case .transformerLayers, .finalNormHead:
+            guard tokenIDs.isEmpty else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "\(descriptor.role.rawValue) stage must not receive token_ids")
+            }
+            guard let hiddenState else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "\(descriptor.role.rawValue) stage requires a hidden state")
+            }
+            try plan.validate(hiddenStatePacket: hiddenState)
+            guard hiddenState.requestID == requestID else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "hidden_state request_id does not match request")
+            }
+            guard hiddenState.stepIndex == stepIndex else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "hidden_state step_index does not match request")
+            }
+            guard hiddenState.positionRange == positionRange else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "hidden_state position_range does not match request")
+            }
+            guard hiddenState.destinationStageID == stageID else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "hidden_state destination_stage_id does not match stage_id")
+            }
+        }
+    }
+}
+
+public struct DistributedStageForwardResultFrame: Codable, Hashable, Sendable {
+    public let stageID: String
+    public let requestID: String
+    public let stepIndex: Int
+    public let hiddenState: DistributedHiddenStatePacketMetadata?
+    public let tokenID: Int32?
+
+    enum CodingKeys: String, CodingKey {
+        case stageID = "stage_id"
+        case requestID = "request_id"
+        case stepIndex = "step_index"
+        case hiddenState = "hidden_state"
+        case tokenID = "token_id"
+    }
+
+    public init(
+        stageID: String,
+        requestID: String,
+        stepIndex: Int,
+        hiddenState: DistributedHiddenStatePacketMetadata? = nil,
+        tokenID: Int32? = nil
+    ) {
+        self.stageID = stageID
+        self.requestID = requestID
+        self.stepIndex = stepIndex
+        self.hiddenState = hiddenState
+        self.tokenID = tokenID
+    }
+
+    public func validate(against plan: DistributedStagePlan) throws {
+        guard !requestID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw DistributedStageExecutionError.invalidStageOutput("request_id is empty")
+        }
+        guard stepIndex >= 0 else {
+            throw DistributedStageExecutionError.invalidStageOutput("step_index must be non-negative")
+        }
+        guard let descriptor = plan.stage(id: stageID) else {
+            throw DistributedStageExecutionError.invalidStageOutput("unknown stage_id \(stageID)")
+        }
+
+        if descriptor.role == .finalNormHead {
+            guard hiddenState == nil else {
+                throw DistributedStageExecutionError.invalidStageOutput(
+                    "final stage must not return a hidden state")
+            }
+            guard tokenID != nil else {
+                throw DistributedStageExecutionError.invalidStageOutput(
+                    "final stage must return a token id")
+            }
+            return
+        }
+
+        guard tokenID == nil else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "non-final stage must not return a token id")
+        }
+        guard let hiddenState else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "non-final stage must return a hidden state")
+        }
+        try plan.validate(hiddenStatePacket: hiddenState)
+        guard hiddenState.requestID == requestID else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "hidden_state request_id does not match request")
+        }
+        guard hiddenState.stepIndex == stepIndex else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "hidden_state step_index does not match request")
+        }
+        guard hiddenState.sourceStageID == stageID else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "hidden_state source_stage_id does not match stage_id")
+        }
+    }
+}
+
+public enum DistributedWorkerMessage: Codable, Hashable, Sendable {
+    case hello(DistributedWorkerHello)
+    case helloAck(DistributedWorkerHelloAck)
+    case allocate(DistributedStageAllocation)
+    case forward(DistributedStageForwardFrame)
+    case forwardResult(DistributedStageForwardResultFrame)
+    case reset(DistributedRequestControl)
+    case free(DistributedRequestControl)
+    case error(DistributedWorkerErrorFrame)
+
+    private enum Kind: String, Codable {
+        case hello
+        case helloAck = "hello_ack"
+        case alloc
+        case forward
+        case forwardResult = "forward_result"
+        case reset
+        case free
+        case error
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case hello
+        case helloAck = "hello_ack"
+        case alloc
+        case forward
+        case forwardResult = "forward_result"
+        case reset
+        case free
+        case error
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(Kind.self, forKey: .kind) {
+        case .hello:
+            self = .hello(try container.decode(DistributedWorkerHello.self, forKey: .hello))
+        case .helloAck:
+            self = .helloAck(
+                try container.decode(DistributedWorkerHelloAck.self, forKey: .helloAck))
+        case .alloc:
+            self = .allocate(try container.decode(DistributedStageAllocation.self, forKey: .alloc))
+        case .forward:
+            self = .forward(try container.decode(DistributedStageForwardFrame.self, forKey: .forward))
+        case .forwardResult:
+            self = .forwardResult(
+                try container.decode(DistributedStageForwardResultFrame.self, forKey: .forwardResult))
+        case .reset:
+            self = .reset(try container.decode(DistributedRequestControl.self, forKey: .reset))
+        case .free:
+            self = .free(try container.decode(DistributedRequestControl.self, forKey: .free))
+        case .error:
+            self = .error(try container.decode(DistributedWorkerErrorFrame.self, forKey: .error))
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .hello(let value):
+            try container.encode(Kind.hello, forKey: .kind)
+            try container.encode(value, forKey: .hello)
+        case .helloAck(let value):
+            try container.encode(Kind.helloAck, forKey: .kind)
+            try container.encode(value, forKey: .helloAck)
+        case .allocate(let value):
+            try container.encode(Kind.alloc, forKey: .kind)
+            try container.encode(value, forKey: .alloc)
+        case .forward(let value):
+            try container.encode(Kind.forward, forKey: .kind)
+            try container.encode(value, forKey: .forward)
+        case .forwardResult(let value):
+            try container.encode(Kind.forwardResult, forKey: .kind)
+            try container.encode(value, forKey: .forwardResult)
+        case .reset(let value):
+            try container.encode(Kind.reset, forKey: .kind)
+            try container.encode(value, forKey: .reset)
+        case .free(let value):
+            try container.encode(Kind.free, forKey: .kind)
+            try container.encode(value, forKey: .free)
+        case .error(let value):
+            try container.encode(Kind.error, forKey: .kind)
+            try container.encode(value, forKey: .error)
+        }
     }
 }
 

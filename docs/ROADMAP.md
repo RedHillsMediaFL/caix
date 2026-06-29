@@ -31,6 +31,7 @@ Current in-tree pieces:
 - Fail-closed `caix cluster join` and `caix serve --cluster` CLI stubs.
 - `DistributedSameMachinePipeline`, an in-process stage-handle harness tested with fake stages,
   manifest-ordered handle maps, and a stage-handle factory context with resolved stage asset paths.
+- Typed worker message frames for hello/ack, allocation, forward, reset, free, and error.
 
 Still missing before real staged inference:
 
