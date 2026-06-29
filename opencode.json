@@ -44,6 +44,13 @@
             "output": 2048
           }
         },
+        "glm-z1-9b-0414-coreai": {
+          "name": "GLM-Z1 9B 0414 Core AI",
+          "limit": {
+            "context": 8192,
+            "output": 2048
+          }
+        },
         "glm-4-32b-0414-coreai": {
           "name": "GLM-4 32B 0414 Core AI",
           "limit": {

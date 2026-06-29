@@ -11,6 +11,7 @@ temperature, streaming mode, warmup count, measured run count, and chat-template
 
 | repo | revision | local dir | request | notes |
 |---|---|---|---|---|
+| `redhillsmediafl/rhm-glm-z1-9b-0414-caix` | `995b04ba06b75fb9cb76ab7adf45f0c014f11274` | `glm-z1-9b-0414-coreai` | load, generation, benchmark | cataloged |
 
 ## Existing Raw Evidence
 
@@ -42,9 +43,9 @@ temperature, streaming mode, warmup count, measured run count, and chat-template
 
 | repo | revision | local dir | request | notes |
 |---|---|---|---|---|
-| `redhillsmediafl/rhm-gemma-4-31b-it-mtp-caix` | `0c68d17473cdc0fee45e4d27540d50897f81334a` | `gemma-4-31b-it-mtp-coreai` | blocked; do not test | draft graph is standard two-input assistant; rebuild package with dependent EAGLE draft |
-| `redhillsmediafl/rhm-gemma-4-26b-a4b-draft-caix` | `d190359eaaaab2e8ce63d86ed41ed9433e555899` | `gemma-4-26b-a4b-draft-coreai` | component; do not test alone | draft component; benchmark with matching target |
-| `redhillsmediafl/rhm-gemma-4-31b-it-draft-caix` | `776b4befe3dc5c945b160dec2b6cdcfafb62840c` | `gemma-4-31b-it-draft-coreai` | component; do not test alone | draft component; benchmark with matching target |
+| `redhillsmediafl/rhm-gemma-4-31b-it-mtp-caix` | `028218bc59b0a2c2a10c95b6185f023359b7282f` | `gemma-4-31b-it-mtp-coreai` | blocked; do not test | draft graph is standard two-input assistant; rebuild package with dependent EAGLE draft |
+| `redhillsmediafl/rhm-gemma-4-26b-a4b-draft-caix` | `80c73658a137c4211185bd9f171b339e4f8f2ce8` | `gemma-4-26b-a4b-draft-coreai` | component; do not test alone | draft component; benchmark with matching target |
+| `redhillsmediafl/rhm-gemma-4-31b-it-draft-caix` | `9a8933fed037085123dcafc5ab2a6de31ea01457` | `gemma-4-31b-it-draft-coreai` | component; do not test alone | draft component; benchmark with matching target |
 
 ## Run Template
 

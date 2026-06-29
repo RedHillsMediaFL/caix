@@ -9,6 +9,7 @@ redhillsmediafl/rhm-qwen3-14b-caix	qwen3-14b-coreai	standalone	decode	eligible	v
 redhillsmediafl/rhm-ornith-1.0-9b-caix	ornith-1.0-9b-coreai	standalone	decode	eligible	cataloged
 redhillsmediafl/rhm-qwythos-9b-caix	qwythos-9b-coreai	standalone	decode	eligible	cataloged
 redhillsmediafl/rhm-glm-4-9b-0414-caix	glm-4-9b-0414-coreai	standalone	decode	eligible	cataloged
+redhillsmediafl/rhm-glm-z1-9b-0414-caix	glm-z1-9b-0414-coreai	standalone	decode	eligible	cataloged
 redhillsmediafl/rhm-glm-4-32b-0414-caix	glm-4-32b-0414-coreai	standalone	decode	eligible	cataloged
 redhillsmediafl/rhm-gpt-oss-20b-caix	gpt-oss-20b-coreai	standalone	decode	eligible	verified
 redhillsmediafl/rhm-mistral-7b-instruct-v0.3-caix	mistral-7b-instruct-v0.3-coreai	standalone	decode	eligible	verified

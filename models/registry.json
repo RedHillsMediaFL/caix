@@ -4,6 +4,7 @@
     "gemma-4-31B-it-assistant",
     "gemma-4-31B-it",
     "Qwythos-9B",
+    "GLM-Z1-9B-0414",
     "ornith-1.0-35b",
     "Qwen3.6-27B",
     "diffusiongemma-26B-A4B-it",
@@ -43,6 +44,16 @@
       "min_kv_capacity": 512,
       "downloaded": true,
       "notes": "Non-standard op family: linear-attention/SSM state + conv1d. Convert text-only first. Highest per-param novelty risk."
+    },
+    "GLM-Z1-9B-0414": {
+      "hf_repo": "zai-org/GLM-Z1-9B-0414", "model_type": "glm4",
+      "architecture": "Glm4ForCausalLM", "op_family": "standard-gqa", "role": "target",
+      "params_b": 9.29, "bf16_gb": 18.8, "shards": 4,
+      "layers": 40, "hidden": 4096, "heads": 32, "kv_heads": 2, "head_dim": 128,
+      "vocab": 151552, "context": 32768, "rope": "theta10000", "tie_embeddings": false,
+      "prompt_template": "chatglm", "mtp": "none", "compression": "4bit",
+      "downloaded": true,
+      "notes": "Published 4-bit bfloat16 Core AI bundle with an 8192 export context cap."
     },
     "ornith-1.0-35b": {
       "hf_repo": "deepreinforce-ai/Ornith-1.0-35B", "model_type": "qwen3_5_moe",

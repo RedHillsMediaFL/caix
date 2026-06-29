@@ -182,6 +182,7 @@ These are pre-converted Core AI `.aimodel` repos, named `rhm-...-caix`.
 | [`rhm-ornith-1.0-9b-caix`](https://huggingface.co/redhillsmediafl/rhm-ornith-1.0-9b-caix) | Ornith-1.0-9B (DeepReinforce) | ~17 GB (f16) |
 | [`rhm-qwythos-9b-caix`](https://huggingface.co/redhillsmediafl/rhm-qwythos-9b-caix) | Qwythos-9B-Claude-Mythos-5-1M — qwen3_5 hybrid with visible-content template patch | ~4.7 GB |
 | [`rhm-glm-4-9b-0414-caix`](https://huggingface.co/redhillsmediafl/rhm-glm-4-9b-0414-caix) | GLM-4-9B-0414 — dense bilingual model | ~5.0 GB |
+| [`rhm-glm-z1-9b-0414-caix`](https://huggingface.co/redhillsmediafl/rhm-glm-z1-9b-0414-caix) | GLM-Z1-9B-0414 — reasoning GLM model | ~5.0 GB |
 | [`rhm-glm-4-32b-0414-caix`](https://huggingface.co/redhillsmediafl/rhm-glm-4-32b-0414-caix) | GLM-4-32B-0414 — dense chat model | ~17 GB |
 | [`rhm-gpt-oss-20b-caix`](https://huggingface.co/redhillsmediafl/rhm-gpt-oss-20b-caix) | OpenAI gpt-oss-20b — verified 4-bit Core AI bundle | ~10 GB |
 | [`rhm-mistral-7b-instruct-v0.3-caix`](https://huggingface.co/redhillsmediafl/rhm-mistral-7b-instruct-v0.3-caix) | Mistral-7B-Instruct-v0.3 — verified | ~3.8 GB |
