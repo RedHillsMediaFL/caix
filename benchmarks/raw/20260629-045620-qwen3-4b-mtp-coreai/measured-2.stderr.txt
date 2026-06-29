@@ -1,0 +1,10 @@
+[coreai] loading model qwen3-4b-coreai.aimodel + tokenizer …
+[coreai] loading model qwen3-0.6b-coreai.aimodel + tokenizer …
+[coreai] dtypes: logits=float16 keyCache=float16 valueCache=float16
+[coreai] dtypes: logits=float16 keyCache=float16 valueCache=float16
+[coreai] model+tokenizer ready in 4.93s
+[coreai] model+tokenizer ready in 4.92s
+[coreai] speculative: target=qwen3-4b-coreai draft=qwen3-0.6b-coreai K=4
+[coreai] speculative prompt -> 6 tokens, K=4, KV target=146 draft=146
+[coreai] speculative decode 128 tokens in 20.910s (6.1 tok/s) over 30 target passes; drafts 120 accepted 100 (83.3% accept), stop=maxTokens
+[coreai] speculative: 6 prompt tok, 128 generated, stop=maxTokens, K=4, 100/120 drafts accepted (83.3%), 4.27 tok/target-pass, load=4.93s prefill=1.61s decode=20.91s (6.1 tok/s)
