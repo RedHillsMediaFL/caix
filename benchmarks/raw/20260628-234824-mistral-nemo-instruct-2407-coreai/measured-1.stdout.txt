@@ -1,0 +1,22 @@
+ here.
+
+# Welcome to Local Inference!
+
+Local Inference is a Python library that enables you to perform inference tasks on your local machine without having to upload your data to the cloud. This is particularly useful when dealing with sensitive data that you cannot upload to the cloud due to privacy concerns.
+
+## Installation
+
+You can install Local Inference using pip:
+
+```bash
+pip install local-inference
+```
+
+## Usage
+
+Here's a simple example of how to use Local Inference to perform binary classification using a pre-trained model:
+
+```python
+from local_inference import LocalInference
+
+# Initialize Local Inference with the path to the pre

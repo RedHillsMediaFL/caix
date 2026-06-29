@@ -1,0 +1,7 @@
+[fast] language bundle ok: mistral-nemo-instruct-2407-coreai
+[fast] creating engine (auto→pipelined) …
+[fast] engine + tokenizer ready
+[fast] warming up engine …
+[fast] warmup done; generating 128 tokens …
+[fast] generate done in 19.21s
+[coreai] 7 prompt tok, 129 generated, stop=maxTokens, load=24.92s prefill=0.00s decode=19.21s (6.7 tok/s)
