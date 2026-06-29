@@ -165,7 +165,7 @@ heavy_task_guard() {
     return 2
   fi
   if ps -axo command \
-    | grep -E 'coreai\.llm\.export|convert\.py|hf (download|upload)|\.build/(debug|release)/caix (run|eagle)|(^|/)(caix|coreai-pipeline) (run|eagle)|(^|/)swift (build|test)|swift-package|swiftc|swift-frontend|xctest' \
+    | grep -E 'coreai\.llm\.export|convert\.py|hf (download|upload|upload-large-folder)|\.build/(debug|release)/caix (run|eagle)|(^|/)(caix|coreai-pipeline) (run|eagle)|(^|/)swift (build|test)|swift-package|swiftc|swift-frontend|xctest' \
     | grep -v grep >/dev/null; then
     echo "error: another heavy build, conversion, upload, verification, or benchmark is active" >&2
     return 2
