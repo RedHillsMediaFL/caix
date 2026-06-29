@@ -54,6 +54,8 @@ This is blunt on purpose. Where the current code cannot do something, it says so
   - `DistributedWorkerFrameExecutor` dispatches validated request frames to one
     `DistributedStageHandle` and returns `forward_result` frames. It is transport-independent
     worker logic for the loopback and Thunderbolt paths.
+  - `DistributedRemoteStageHandle` wraps a worker frame round trip so the coordinator can mix local
+    and remote stages through the same `DistributedStageHandle` interface.
   - `DistributedStagePlan.integrityHash()` gives coordinator and workers the same SHA-256 plan
     identity for handshake rejection.
 - A dry-run planner CLI (`Sources/PipelineCLI/Cluster.swift`, wired in `main.swift`):

@@ -1624,6 +1624,7 @@ public final class DistributedWorkerFrameExecutor {
                 requestID: frame.requestID,
                 stepIndex: frame.stepIndex,
                 positionRange: frame.positionRange,
+                positionIDs: frame.positionIDs,
                 tokenIDs: frame.tokenIDs,
                 hiddenState: hiddenState))
             guard output.stageID == handle.descriptor.id else {
@@ -1695,6 +1696,7 @@ public struct DistributedStageForwardInput: Hashable, Sendable {
     public let requestID: String
     public let stepIndex: Int
     public let positionRange: DistributedSequenceRange
+    public let positionIDs: [Int32]
     public let tokenIDs: [Int32]
     public let hiddenState: DistributedHiddenStatePacket?
 
@@ -1702,14 +1704,118 @@ public struct DistributedStageForwardInput: Hashable, Sendable {
         requestID: String,
         stepIndex: Int,
         positionRange: DistributedSequenceRange,
+        positionIDs: [Int32],
         tokenIDs: [Int32] = [],
         hiddenState: DistributedHiddenStatePacket? = nil
     ) {
         self.requestID = requestID
         self.stepIndex = stepIndex
         self.positionRange = positionRange
+        self.positionIDs = positionIDs
         self.tokenIDs = tokenIDs
         self.hiddenState = hiddenState
+    }
+}
+
+public typealias DistributedWorkerFrameRoundTrip =
+    (DistributedWorkerWireFrame) async throws -> DistributedWorkerWireFrame?
+
+public final class DistributedRemoteStageHandle: DistributedStageHandle {
+    public let descriptor: DistributedStageDescriptor
+    public let plan: DistributedStagePlan
+    private let roundTrip: DistributedWorkerFrameRoundTrip
+
+    public init(
+        plan: DistributedStagePlan,
+        descriptor: DistributedStageDescriptor,
+        roundTrip: @escaping DistributedWorkerFrameRoundTrip
+    ) throws {
+        try plan.validate()
+        guard let expectedDescriptor = plan.stage(id: descriptor.id) else {
+            throw DistributedStageExecutionError.missingStageHandle(descriptor.id)
+        }
+        guard expectedDescriptor == descriptor else {
+            throw DistributedStageExecutionError.stageDescriptorMismatch(
+                expected: expectedDescriptor.id, actual: descriptor.id)
+        }
+        self.plan = plan
+        self.descriptor = descriptor
+        self.roundTrip = roundTrip
+    }
+
+    public func allocate(_ allocation: DistributedStageAllocation) async throws {
+        let response = try await roundTrip(DistributedWorkerWireFrame(
+            message: .allocate(allocation)))
+        try expectNoResponse(response, for: "alloc")
+    }
+
+    public func forward(
+        _ input: DistributedStageForwardInput
+    ) async throws -> DistributedStageForwardOutput {
+        let request = DistributedWorkerWireFrame(
+            message: .forward(DistributedStageForwardFrame(
+                stageID: descriptor.id,
+                requestID: input.requestID,
+                stepIndex: input.stepIndex,
+                positionRange: input.positionRange,
+                positionIDs: input.positionIDs,
+                tokenIDs: input.tokenIDs,
+                hiddenState: input.hiddenState?.metadata)),
+            payload: input.hiddenState?.payload ?? [])
+        try request.validate(against: plan)
+
+        guard let response = try await roundTrip(request) else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "forward response is missing")
+        }
+        try response.validate(against: plan)
+        guard case .forwardResult(let result) = response.message else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "expected forward_result response")
+        }
+        guard result.stageID == descriptor.id else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "response stage_id \(result.stageID) does not match remote stage \(descriptor.id)")
+        }
+        guard result.requestID == input.requestID else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "response request_id does not match request")
+        }
+        guard result.stepIndex == input.stepIndex else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "response step_index does not match request")
+        }
+        let hiddenState = try result.hiddenState.map { metadata in
+            try DistributedHiddenStatePacket(metadata: metadata, payload: response.payload)
+        }
+        return DistributedStageForwardOutput(
+            stageID: result.stageID,
+            stepIndex: result.stepIndex,
+            hiddenState: hiddenState,
+            tokenID: result.tokenID)
+    }
+
+    public func reset(requestID: String) async throws {
+        let response = try await roundTrip(DistributedWorkerWireFrame(
+            message: .reset(DistributedRequestControl(
+                requestID: requestID, stageID: descriptor.id))))
+        try expectNoResponse(response, for: "reset")
+    }
+
+    public func free(requestID: String) async {
+        _ = try? await roundTrip(DistributedWorkerWireFrame(
+            message: .free(DistributedRequestControl(
+                requestID: requestID, stageID: descriptor.id))))
+    }
+
+    private func expectNoResponse(
+        _ response: DistributedWorkerWireFrame?,
+        for operation: String
+    ) throws {
+        guard response == nil else {
+            throw DistributedStageExecutionError.invalidControlFrame(
+                "\(operation) must not return a response")
+        }
     }
 }
 
@@ -1925,12 +2031,14 @@ public final class DistributedSameMachinePipeline {
 
         var hiddenState: DistributedHiddenStatePacket?
         var tokenID: Int32?
+        let positionIDs = try Self.positionIDs(for: positionRange)
 
         for (index, stage) in stages.enumerated() {
             let input = DistributedStageForwardInput(
                 requestID: requestID,
                 stepIndex: stepIndex,
                 positionRange: positionRange,
+                positionIDs: positionIDs,
                 tokenIDs: index == 0 ? tokenIDs : [],
                 hiddenState: hiddenState)
             let output = try await stage.forward(input)
@@ -1948,6 +2056,18 @@ public final class DistributedSameMachinePipeline {
             stepIndex: stepIndex,
             hiddenState: hiddenState,
             tokenID: tokenID)
+    }
+
+    private static func positionIDs(
+        for positionRange: DistributedSequenceRange
+    ) throws -> [Int32] {
+        guard positionRange.lowerBound >= Int(Int32.min),
+            positionRange.upperBound <= Int(Int32.max)
+        else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "position_ids exceed Int32 range")
+        }
+        return (positionRange.lowerBound..<positionRange.upperBound).map { Int32($0) }
     }
 
     public func reset(requestID: String) async throws {

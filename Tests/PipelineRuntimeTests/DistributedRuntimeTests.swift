@@ -438,6 +438,86 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertTrue(handle.inputs.isEmpty)
     }
 
+    func testRemoteStageHandleRoundTripsThroughWorkerExecutor() async throws {
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 2], scalarType: .float16))
+        let handles = makeFakeHandles(for: plan)
+        let workerExecutor = try DistributedWorkerFrameExecutor(plan: plan, handle: handles[1])
+        let remote = try DistributedRemoteStageHandle(
+            plan: plan,
+            descriptor: handles[1].descriptor
+        ) { request in
+            let encodedRequest = try DistributedWorkerMessageCodec.encodeWireFrame(request)
+            let decodedRequest = try DistributedWorkerMessageCodec.decodeWireFrame(encodedRequest)
+            guard let response = try await workerExecutor.process(decodedRequest) else {
+                return nil
+            }
+            let encodedResponse = try DistributedWorkerMessageCodec.encodeWireFrame(response)
+            return try DistributedWorkerMessageCodec.decodeWireFrame(encodedResponse)
+        }
+        let pipeline = try DistributedSameMachinePipeline(
+            plan: plan,
+            stages: [handles[0], remote, handles[2], handles[3]])
+
+        try await pipeline.allocate(requestID: "req-remote", kvCapacity: 16)
+        let output = try await pipeline.forward(
+            requestID: "req-remote",
+            stepIndex: 0,
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 3),
+            tokenIDs: [1, 2, 3])
+
+        XCTAssertEqual(output.tokenID, 42)
+        XCTAssertEqual(handles[1].allocatedRequests, ["req-remote"])
+        XCTAssertEqual(handles[1].inputs.count, 1)
+        XCTAssertEqual(handles[1].inputs[0].positionIDs, [0, 1, 2])
+        XCTAssertEqual(handles[1].inputs[0].hiddenState?.metadata.sourceStageID, "embed")
+        XCTAssertEqual(handles[2].inputs[0].hiddenState?.metadata.sourceStageID, "layers-0-16")
+    }
+
+    func testRemoteStageHandleRejectsMissingForwardResponse() async throws {
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 2], scalarType: .float16))
+        let remote = try DistributedRemoteStageHandle(
+            plan: plan,
+            descriptor: try XCTUnwrap(plan.stage(id: "embed"))
+        ) { _ in nil }
+
+        await XCTAssertThrowsErrorAsync(
+            try await remote.forward(DistributedStageForwardInput(
+                requestID: "req-1",
+                stepIndex: 0,
+                positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+                positionIDs: [0],
+                tokenIDs: [7]))
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidStageOutput("forward response is missing"))
+        }
+    }
+
+    func testRemoteStageHandleRejectsUnexpectedControlResponse() async throws {
+        let plan = makePlan()
+        let remote = try DistributedRemoteStageHandle(
+            plan: plan,
+            descriptor: try XCTUnwrap(plan.stage(id: "layers-0-16"))
+        ) { _ in
+            DistributedWorkerWireFrame(message: .error(DistributedWorkerErrorFrame(
+                code: "bad_request", detail: "unexpected response")))
+        }
+
+        await XCTAssertThrowsErrorAsync(
+            try await remote.allocate(DistributedStageAllocation(
+                requestID: "req-1", kvCapacity: 16))
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidControlFrame("alloc must not return a response"))
+        }
+    }
+
     func testWorkerHelloValidatesPlanIntegrityAndStageClaim() throws {
         let plan = makePlan(
             boundaryTensor: DistributedBoundaryTensorSpec(

@@ -36,6 +36,7 @@
 - Added full distributed worker wire-frame encoding and decoding for header-plus-payload transport.
 - Added a distributed worker frame executor that dispatches validated request frames to a stage
   handle and returns forward-result frames.
+- Added a remote distributed stage handle for coordinator-to-worker frame round trips.
 - Added same-machine pipeline guards for invalid position ranges and reset request IDs.
 - Added the cluster-plan contract check to publication gates.
 - Added fail-closed `caix cluster join` and `caix serve --cluster` CLI stubs for Brew surface tests.
