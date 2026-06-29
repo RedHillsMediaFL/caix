@@ -81,6 +81,10 @@ Run `scripts/audit-conversion-gaps.sh --out docs/CONVERSION_GAP_AUDIT.tsv` to re
 metadata for active conversion lanes. It reads Hub metadata only.
 Run `scripts/check-conversion-gap-audit.sh` before committing the refreshed TSV.
 
+Run `scripts/check-tester-requests.sh` after changing the manifest, raw benchmark logs, or
+`docs/TESTER_REQUESTS.md`. It regenerates the request sheet and fails if the committed sheet is
+stale.
+
 Create `benchmarks/revisions.tsv` before a publishable run:
 
 ```bash
