@@ -33,6 +33,7 @@
 - Added whole-message validation for distributed worker frames, including ACK and error frames.
 - Added a JSON-line codec for distributed worker message headers.
 - Added payload byte-count validation for distributed worker wire frames.
+- Added full distributed worker wire-frame encoding and decoding for header-plus-payload transport.
 - Added same-machine pipeline guards for invalid position ranges and reset request IDs.
 - Added the cluster-plan contract check to publication gates.
 - Added fail-closed `caix cluster join` and `caix serve --cluster` CLI stubs for Brew surface tests.

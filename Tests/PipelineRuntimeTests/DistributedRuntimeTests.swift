@@ -264,6 +264,57 @@ final class DistributedRuntimeTests: XCTestCase {
         }
     }
 
+    func testWorkerMessageCodecRoundTripsWireFrameWithPayloadBytes() throws {
+        let packet = try hiddenPacket(
+            requestID: "req-1",
+            source: "layers-0-16",
+            destination: "layers-16-32",
+            positionRange: DistributedSequenceRange(lowerBound: 4, upperBound: 7),
+            stepIndex: 1,
+            fill: 9)
+        let message = DistributedWorkerMessage.forward(
+            DistributedStageForwardFrame(
+                stageID: "layers-16-32",
+                requestID: "req-1",
+                stepIndex: 1,
+                positionRange: DistributedSequenceRange(lowerBound: 4, upperBound: 7),
+                positionIDs: [4, 5, 6],
+                hiddenState: packet.metadata))
+        let payload: [UInt8] = [0, 10, 13, 1, 2, 3, 4, 5, 6, 7, 8, 255]
+        let frame = DistributedWorkerWireFrame(message: message, payload: payload)
+
+        let encoded = try DistributedWorkerMessageCodec.encodeWireFrame(frame)
+        let decoded = try DistributedWorkerMessageCodec.decodeWireFrame(encoded)
+
+        XCTAssertEqual(decoded, frame)
+        XCTAssertEqual(encoded.filter { $0 == 0x0A }.count, 2)
+    }
+
+    func testWorkerMessageCodecRejectsWireFrameWithoutHeaderLineEnding() {
+        XCTAssertThrowsError(
+            try DistributedWorkerMessageCodec.decodeWireFrame(Data(#"{"kind":"alloc"}"#.utf8))
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidWireFrame("worker wire frame header is missing line ending"))
+        }
+    }
+
+    func testWorkerMessageCodecRejectsExtraControlPayloadBytes() throws {
+        let message = DistributedWorkerMessage.allocate(
+            DistributedStageAllocation(requestID: "req-1", kvCapacity: 128))
+        var encoded = try DistributedWorkerMessageCodec.encodeJSONLine(message)
+        encoded.append(0x01)
+
+        XCTAssertThrowsError(
+            try DistributedWorkerMessageCodec.decodeWireFrame(encoded)
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidWireFrame("payload byte count 1 does not match header 0"))
+        }
+    }
+
     func testWorkerHelloValidatesPlanIntegrityAndStageClaim() throws {
         let plan = makePlan(
             boundaryTensor: DistributedBoundaryTensorSpec(

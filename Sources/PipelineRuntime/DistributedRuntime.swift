@@ -1533,6 +1533,26 @@ public enum DistributedWorkerMessageCodec {
         }
         return try JSONDecoder().decode(DistributedWorkerMessage.self, from: Data(bytes))
     }
+
+    public static func encodeWireFrame(_ frame: DistributedWorkerWireFrame) throws -> Data {
+        try frame.message.validatePayloadByteCount(frame.payload.count)
+        var data = try encodeJSONLine(frame.message)
+        data.append(contentsOf: frame.payload)
+        return data
+    }
+
+    public static func decodeWireFrame(_ data: Data) throws -> DistributedWorkerWireFrame {
+        guard let headerEnd = data.firstIndex(of: 0x0A) else {
+            throw DistributedStageExecutionError.invalidWireFrame(
+                "worker wire frame header is missing line ending")
+        }
+        let header = data.prefix(through: headerEnd)
+        let message = try decodeJSONLine(Data(header))
+        let payloadStart = data.index(after: headerEnd)
+        let payload = Array(data[payloadStart..<data.endIndex])
+        try message.validatePayloadByteCount(payload.count)
+        return DistributedWorkerWireFrame(message: message, payload: payload)
+    }
 }
 
 public struct DistributedWorkerWireFrame: Hashable, Sendable {
