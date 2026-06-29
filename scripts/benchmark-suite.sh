@@ -31,6 +31,7 @@ USAGE
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+LOCK="${CAIX_HEAVY_TASK_LOCK:-$REPO_DIR/.agent-heavy-task.lock}"
 
 MANIFEST="$REPO_DIR/benchmarks/MANIFEST.tsv"
 REVISIONS=""
@@ -122,7 +123,7 @@ eagle_backbone_for_bundle() {
 }
 
 heavy_task_guard() {
-  local lock="$REPO_DIR/.agent-heavy-task.lock"
+  local lock="$LOCK"
   if [[ -e "$lock" && "$FORCE" != "1" ]]; then
     echo "error: heavy-task lock exists: $lock" >&2
     return 2

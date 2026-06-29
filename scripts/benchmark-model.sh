@@ -83,10 +83,11 @@ CAIX_BIN="${CAIX_BIN:-./caix}"
 [[ -x "$CAIX_BIN" ]] || { echo "error: no caix binary found; set CAIX_BIN" >&2; exit 2; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+LOCK="${CAIX_HEAVY_TASK_LOCK:-$REPO_DIR/.agent-heavy-task.lock}"
 DISK_FLOOR_GIB="${CAIX_STOP_FLOOR_GIB:-500}"
 "$SCRIPT_DIR/check-disk-pressure.sh" --path /Volumes/SSD --floor-gib "$DISK_FLOOR_GIB" --quiet
 
-LOCK=".agent-heavy-task.lock"
 if [[ -e "$LOCK" && "$FORCE" != "1" ]]; then
   echo "error: heavy-task lock exists: $LOCK" >&2
   exit 2
@@ -124,8 +125,8 @@ trap 'rm -f "$LOCK"' EXIT
   echo "repo=$REPO"
   echo "repo_revision=$REPO_REVISION"
   echo "caix_bin=$CAIX_BIN"
-  echo "caix_commit=$(git rev-parse HEAD 2>/dev/null || true)"
-  echo "git_status=$(git status --short 2>/dev/null | wc -l | tr -d ' ') dirty entries"
+  echo "caix_commit=$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || true)"
+  echo "git_status=$(git -C "$REPO_DIR" status --short 2>/dev/null | wc -l | tr -d ' ') dirty entries"
   echo "machine=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || true)"
   echo "memory_bytes=$(sysctl -n hw.memsize 2>/dev/null || true)"
   echo "os=$(sw_vers -productVersion 2>/dev/null || true) ($(sw_vers -buildVersion 2>/dev/null || true))"
