@@ -355,6 +355,10 @@ final class DistributedRuntimeTests: XCTestCase {
 
         XCTAssertEqual(factory.requestedStageIDs, manifest.stages.map(\.id))
         XCTAssertEqual(factory.requestedAssetNames.first, "stages/00-embed.aimodel")
+        XCTAssertEqual(
+            factory.requestedAssetPaths.first,
+            "/tmp/caix-manifest/stages/00-embed.aimodel")
+        XCTAssertEqual(factory.requestedBoundaryShapes.first, [1, -1, 1024])
         XCTAssertEqual(output.stageID, "head")
         XCTAssertEqual(output.tokenID, 42)
     }
@@ -375,6 +379,21 @@ final class DistributedRuntimeTests: XCTestCase {
             XCTAssertEqual(
                 error as? DistributedStageExecutionError,
                 .missingStageHandle("layers-14-28"))
+        }
+    }
+
+    func testSameMachinePipelineFactoryRequiresResolvedAssetPath() async throws {
+        let manifest = try DistributedStageManifest.decode(
+            from: Data(stageManifestJSON(modelKey: "model", includeTotalLayerCount: true).utf8))
+        let factory = ResolvingDistributedStageHandleFactory()
+
+        await XCTAssertThrowsErrorAsync(
+            try await DistributedSameMachinePipeline.make(
+                manifest: manifest, handleFactory: factory)
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .missingStageAssetPath("embed"))
         }
     }
 
@@ -619,6 +638,8 @@ private final class FakeDistributedStageHandle: DistributedStageHandle {
 private final class FakeDistributedStageHandleFactory: DistributedStageHandleFactory {
     var requestedStageIDs: [String] = []
     var requestedAssetNames: [String] = []
+    var requestedAssetPaths: [String] = []
+    var requestedBoundaryShapes: [[Int]] = []
     private let handlesByStageID: [String: FakeDistributedStageHandle]
 
     init(handles: [FakeDistributedStageHandle]) {
@@ -628,15 +649,26 @@ private final class FakeDistributedStageHandleFactory: DistributedStageHandleFac
     }
 
     func makeStageHandle(
-        for stage: DistributedStageManifestStage,
-        in manifest: DistributedStageManifest
+        for context: DistributedStageHandleFactoryContext
     ) async throws -> DistributedStageHandle {
+        let stage = context.stage
         requestedStageIDs.append(stage.id)
         requestedAssetNames.append(stage.assetName)
+        requestedAssetPaths.append(try context.requireResolvedAssetURL().path)
+        requestedBoundaryShapes.append(context.boundaryTensor?.shape ?? [])
         guard let handle = handlesByStageID[stage.id] else {
             throw DistributedStageExecutionError.missingStageHandle(stage.id)
         }
         return handle
+    }
+}
+
+private final class ResolvingDistributedStageHandleFactory: DistributedStageHandleFactory {
+    func makeStageHandle(
+        for context: DistributedStageHandleFactoryContext
+    ) async throws -> DistributedStageHandle {
+        _ = try context.requireResolvedAssetURL()
+        throw DistributedStageExecutionError.missingStageHandle(context.stage.id)
     }
 }
 

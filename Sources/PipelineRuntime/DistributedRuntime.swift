@@ -1024,10 +1024,40 @@ public protocol DistributedStageHandle: AnyObject {
     func free(requestID: String) async
 }
 
+public struct DistributedStageHandleFactoryContext: Hashable, Sendable {
+    public let stage: DistributedStageManifestStage
+    public let manifest: DistributedStageManifest
+    public let descriptor: DistributedStageDescriptor
+
+    public init(
+        stage: DistributedStageManifestStage,
+        manifest: DistributedStageManifest,
+        descriptor: DistributedStageDescriptor
+    ) {
+        self.stage = stage
+        self.manifest = manifest
+        self.descriptor = descriptor
+    }
+
+    public var boundaryTensor: DistributedBoundaryTensorSpec? {
+        manifest.boundaryTensor
+    }
+
+    public var resolvedAssetURL: URL? {
+        stage.resolvedAssetPath.map { URL(fileURLWithPath: $0) }
+    }
+
+    public func requireResolvedAssetURL() throws -> URL {
+        guard let resolvedAssetURL else {
+            throw DistributedStageExecutionError.missingStageAssetPath(stage.id)
+        }
+        return resolvedAssetURL
+    }
+}
+
 public protocol DistributedStageHandleFactory {
     func makeStageHandle(
-        for stage: DistributedStageManifestStage,
-        in manifest: DistributedStageManifest
+        for context: DistributedStageHandleFactoryContext
     ) async throws -> DistributedStageHandle
 }
 
@@ -1036,6 +1066,7 @@ public enum DistributedStageExecutionError: Error, Equatable, Sendable, CustomSt
     case stageDescriptorMismatch(expected: String, actual: String)
     case duplicateStageHandle(String)
     case missingStageHandle(String)
+    case missingStageAssetPath(String)
     case invalidForwardInput(String)
     case invalidStageOutput(String)
 
@@ -1049,6 +1080,8 @@ public enum DistributedStageExecutionError: Error, Equatable, Sendable, CustomSt
             return "Duplicate stage handle: \(id)"
         case .missingStageHandle(let id):
             return "Missing stage handle: \(id)"
+        case .missingStageAssetPath(let id):
+            return "Missing stage asset path: \(id)"
         case .invalidForwardInput(let message):
             return "Invalid distributed forward input: \(message)"
         case .invalidStageOutput(let message):
@@ -1105,7 +1138,12 @@ public final class DistributedSameMachinePipeline {
         var handles: [DistributedStageHandle] = []
         handles.reserveCapacity(manifest.stages.count)
         for stage in manifest.stages {
-            handles.append(try await handleFactory.makeStageHandle(for: stage, in: manifest))
+            guard let descriptor = manifest.runtimePlan.stage(id: stage.id) else {
+                throw DistributedStageExecutionError.missingStageHandle(stage.id)
+            }
+            let context = DistributedStageHandleFactoryContext(
+                stage: stage, manifest: manifest, descriptor: descriptor)
+            handles.append(try await handleFactory.makeStageHandle(for: context))
         }
         return try DistributedSameMachinePipeline(plan: manifest.runtimePlan, stages: handles)
     }

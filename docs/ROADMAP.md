@@ -30,7 +30,7 @@ Current in-tree pieces:
 - `caix cluster plan` dry-run placement for staged manifests.
 - Fail-closed `caix cluster join` and `caix serve --cluster` CLI stubs.
 - `DistributedSameMachinePipeline`, an in-process stage-handle harness tested with fake stages,
-  manifest-ordered handle maps, and a stage-handle factory path.
+  manifest-ordered handle maps, and a stage-handle factory context with resolved stage asset paths.
 
 Still missing before real staged inference:
 
