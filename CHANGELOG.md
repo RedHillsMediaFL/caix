@@ -12,6 +12,7 @@
 - Added a distributed readiness gate so Thunderbolt testing stays blocked until same-machine,
   loopback, Brew install, `cluster join`, and `serve --cluster` are ready.
 - Added fail-closed `caix cluster join` and `caix serve --cluster` CLI stubs for Brew surface tests.
+- Expanded the Homebrew formula test to cover distributed plan/join help and `serve --cluster`.
 - Published verified RHM Qwen2.5-0.5B-Instruct and Qwen2.5-3B-Instruct Core AI bundles and
   documented them in the README model table.
 - Published verified RHM Qwen3-8B Core AI bundle and documented it in the README model table.
