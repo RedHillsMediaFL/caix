@@ -54,6 +54,7 @@
 - Added a CoreAI stage KV-cache contract classifier for future staged execution.
 - Added typed hidden-state packet payload helpers for distributed stage transport.
 - Added CoreAI stage KV-cache allocation state for distributed stage handles.
+- Added CoreAI stage NDArray IO builders for future distributed stage execution.
 - Tightened distributed worker `FREE` handling so unknown request IDs are rejected before stage
   teardown runs.
 - Threaded `HELLO`/ACK through the loopback worker transport so handshake frames use the same

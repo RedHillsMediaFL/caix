@@ -2090,6 +2090,106 @@ final class DistributedRuntimeTests: XCTestCase {
         }
     }
 
+    func testCoreAINDArrayShapeResolvesMatrixInputs() throws {
+        let inputIDs = try DistributedCoreAIStageNDArrayShape.resolvedMatrix(
+            [1, -1],
+            columns: 3,
+            tensorName: "input_ids")
+        let positionIDs = try DistributedCoreAIStageNDArrayShape.resolvedMatrix(
+            [1, 3],
+            columns: 3,
+            tensorName: "position_ids")
+
+        XCTAssertEqual(inputIDs, [1, 3])
+        XCTAssertEqual(positionIDs, [1, 3])
+    }
+
+    func testCoreAINDArrayShapeRejectsMatrixStaticMismatch() {
+        XCTAssertThrowsError(
+            try DistributedCoreAIStageNDArrayShape.resolvedMatrix(
+                [1, 2],
+                columns: 3,
+                tensorName: "input_ids")
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidForwardInput(
+                    "input_ids descriptor shape [1, 2] does not match runtime shape [1, 3]"))
+        }
+    }
+
+    func testCoreAINDArrayShapeResolvesHiddenStatesFromPacket() throws {
+        let shape = try DistributedCoreAIStageNDArrayShape.resolvedHiddenStates(
+            [1, -1, 4],
+            packetShape: [1, 2, 4])
+
+        XCTAssertEqual(shape, [1, 2, 4])
+    }
+
+    func testCoreAINDArrayShapeResolvesHiddenStatesOutputFromBoundary() throws {
+        let shape = try DistributedCoreAIStageNDArrayShape.resolvedHiddenStatesOutput(
+            [1, -1, 4],
+            positionCount: 2,
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states",
+                shape: [1, -1, 4],
+                scalarType: .float16))
+
+        XCTAssertEqual(shape, [1, 2, 4])
+    }
+
+    func testCoreAINDArrayShapeRejectsHiddenStatesOutputWithoutBoundary() {
+        XCTAssertThrowsError(
+            try DistributedCoreAIStageNDArrayShape.resolvedHiddenStatesOutput(
+                [1, -1, 4],
+                positionCount: 2,
+                boundaryTensor: nil)
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidForwardInput("hidden_states output requires boundary tensor metadata"))
+        }
+    }
+
+    func testCoreAINDArrayShapeRejectsHiddenStatesOutputBoundarySequenceMismatch() {
+        XCTAssertThrowsError(
+            try DistributedCoreAIStageNDArrayShape.resolvedHiddenStatesOutput(
+                [1, -1, 4],
+                positionCount: 3,
+                boundaryTensor: DistributedBoundaryTensorSpec(
+                    name: "hidden_states",
+                    shape: [1, 2, 4],
+                    scalarType: .float16))
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidForwardInput(
+                    "hidden_states position count 3 does not match boundary sequence dimension 2"))
+        }
+    }
+
+    func testCoreAINDArrayShapeResolvesLogitsOutput() throws {
+        let shape = try DistributedCoreAIStageNDArrayShape.resolvedLogitsOutput(
+            [1, -1, -1],
+            positionCount: 2,
+            vocabSize: 8)
+
+        XCTAssertEqual(shape, [1, 2, 8])
+    }
+
+    func testCoreAINDArrayShapeRejectsInvalidVocabSize() {
+        XCTAssertThrowsError(
+            try DistributedCoreAIStageNDArrayShape.resolvedLogitsOutput(
+                [1, -1, -1],
+                positionCount: 2,
+                vocabSize: 0)
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidForwardInput("vocab_size must be positive"))
+        }
+    }
+
     func testHiddenStatePacketRejectsMismatchedByteCount() {
         let packet = DistributedHiddenStatePacketMetadata(
             requestID: "req-1",

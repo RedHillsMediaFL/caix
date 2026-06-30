@@ -380,6 +380,137 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
     }
 }
 
+enum DistributedCoreAIStageNDArrayIO {
+    static func makeInputIDs(
+        tokenIDs: [Int32],
+        descriptor: NDArrayDescriptor
+    ) throws -> NDArray {
+        try requireScalarType(.int32, descriptor: descriptor, tensorName: "input_ids")
+        var array = NDArray(
+            descriptor: descriptor.resolvingDynamicDimensions(
+                try DistributedCoreAIStageNDArrayShape.resolvedMatrix(
+                    descriptor.shape,
+                    columns: tokenIDs.count,
+                    tensorName: "input_ids")))
+        fillInt32(&array, tokenIDs)
+        return array
+    }
+
+    static func makePositionIDs(
+        positionIDs: [Int32],
+        descriptor: NDArrayDescriptor
+    ) throws -> NDArray {
+        try requireScalarType(.int32, descriptor: descriptor, tensorName: "position_ids")
+        var array = NDArray(
+            descriptor: descriptor.resolvingDynamicDimensions(
+                try DistributedCoreAIStageNDArrayShape.resolvedMatrix(
+                    descriptor.shape,
+                    columns: positionIDs.count,
+                    tensorName: "position_ids")))
+        fillInt32(&array, positionIDs)
+        return array
+    }
+
+    static func makeHiddenStates(
+        packet: DistributedHiddenStatePacket,
+        descriptor: NDArrayDescriptor
+    ) throws -> NDArray {
+        let shape = try DistributedCoreAIStageNDArrayShape.resolvedHiddenStates(
+            descriptor.shape,
+            packetShape: packet.metadata.shape)
+        var array = NDArray(descriptor: descriptor.resolvingDynamicDimensions(shape))
+        switch (descriptor.scalarType, packet.metadata.scalarType) {
+        case (.float16, .float16):
+            var view = array.mutableView(as: Float16.self)
+            view.copyElements(fromContentsOf: try packet.float16Values())
+        case (.float32, .float32):
+            var view = array.mutableView(as: Float.self)
+            view.copyElements(fromContentsOf: try packet.float32Values())
+        default:
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "hidden_states scalar type \(descriptor.scalarType) does not match packet \(packet.metadata.scalarType.rawValue)")
+        }
+        return array
+    }
+
+    static func makeHiddenStatesOutput(
+        positionCount: Int,
+        descriptor: NDArrayDescriptor,
+        boundaryTensor: DistributedBoundaryTensorSpec?
+    ) throws -> NDArray {
+        try requireFloatingScalarType(descriptor, tensorName: "hidden_states")
+        let shape = try DistributedCoreAIStageNDArrayShape.resolvedHiddenStatesOutput(
+            descriptor.shape,
+            positionCount: positionCount,
+            boundaryTensor: boundaryTensor)
+        if let boundaryTensor {
+            try requireBoundaryScalarType(
+                boundaryTensor.scalarType,
+                descriptor: descriptor,
+                tensorName: "hidden_states")
+        }
+        return NDArray(
+            descriptor: descriptor.resolvingDynamicDimensions(shape))
+    }
+
+    static func makeLogitsOutput(
+        positionCount: Int,
+        vocabSize: Int,
+        descriptor: NDArrayDescriptor
+    ) throws -> NDArray {
+        try requireFloatingScalarType(descriptor, tensorName: "logits")
+        return NDArray(
+            descriptor: descriptor.resolvingDynamicDimensions(
+                try DistributedCoreAIStageNDArrayShape.resolvedLogitsOutput(
+                    descriptor.shape,
+                    positionCount: positionCount,
+                    vocabSize: vocabSize)))
+    }
+
+    private static func fillInt32(_ array: inout NDArray, _ elements: [Int32]) {
+        var view = array.mutableView(as: Int32.self)
+        view.copyElements(fromContentsOf: elements)
+    }
+
+    private static func requireScalarType(
+        _ expected: NDArray.ScalarType,
+        descriptor: NDArrayDescriptor,
+        tensorName: String
+    ) throws {
+        guard descriptor.scalarType == expected else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "\(tensorName) scalar type \(descriptor.scalarType) does not match \(expected)")
+        }
+    }
+
+    private static func requireFloatingScalarType(
+        _ descriptor: NDArrayDescriptor,
+        tensorName: String
+    ) throws {
+        switch descriptor.scalarType {
+        case .float16, .float32:
+            return
+        default:
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "\(tensorName) scalar type \(descriptor.scalarType) is not supported for distributed stage IO")
+        }
+    }
+
+    private static func requireBoundaryScalarType(
+        _ expected: DistributedTensorScalarType,
+        descriptor: NDArrayDescriptor,
+        tensorName: String
+    ) throws {
+        switch (expected, descriptor.scalarType) {
+        case (.float16, .float16), (.float32, .float32):
+            return
+        default:
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "\(tensorName) scalar type \(descriptor.scalarType) does not match boundary \(expected.rawValue)")
+        }
+    }
+}
+
 private struct DistributedCoreAIStageRequestState {
     let requestID: String
     let kvCapacity: Int
@@ -425,5 +556,107 @@ enum DistributedCoreAIStageKVCacheShape {
                 "KV cache descriptor shape \(descriptorShape) resolves to invalid shape \(resolved)")
         }
         return resolved
+    }
+}
+
+enum DistributedCoreAIStageNDArrayShape {
+    static func resolvedMatrix(
+        _ descriptorShape: [Int],
+        columns: Int,
+        tensorName: String
+    ) throws -> [Int] {
+        guard columns > 0 else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "\(tensorName) count must be positive")
+        }
+        return try resolvedExact(
+            descriptorShape,
+            actualShape: [1, columns],
+            tensorName: tensorName)
+    }
+
+    static func resolvedHiddenStates(
+        _ descriptorShape: [Int],
+        packetShape: [Int]
+    ) throws -> [Int] {
+        try resolvedExact(
+            descriptorShape,
+            actualShape: try positiveShape(packetShape, tensorName: "hidden_states"),
+            tensorName: "hidden_states")
+    }
+
+    static func resolvedHiddenStatesOutput(
+        _ descriptorShape: [Int],
+        positionCount: Int,
+        boundaryTensor: DistributedBoundaryTensorSpec?
+    ) throws -> [Int] {
+        guard positionCount > 0 else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "hidden_states position count must be positive")
+        }
+        guard let boundaryTensor else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "hidden_states output requires boundary tensor metadata")
+        }
+        if let message = boundaryTensor.validationErrorMessage {
+            throw DistributedStageExecutionError.invalidForwardInput(message)
+        }
+        if boundaryTensor.shape[1] != -1 && boundaryTensor.shape[1] != positionCount {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "hidden_states position count \(positionCount) does not match boundary sequence dimension \(boundaryTensor.shape[1])")
+        }
+        return try resolvedExact(
+            descriptorShape,
+            actualShape: [boundaryTensor.shape[0], positionCount, boundaryTensor.shape[2]],
+            tensorName: "hidden_states")
+    }
+
+    static func resolvedLogitsOutput(
+        _ descriptorShape: [Int],
+        positionCount: Int,
+        vocabSize: Int
+    ) throws -> [Int] {
+        guard positionCount > 0 else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "logits position count must be positive")
+        }
+        guard vocabSize > 0 else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "vocab_size must be positive")
+        }
+        return try resolvedExact(
+            descriptorShape,
+            actualShape: [1, positionCount, vocabSize],
+            tensorName: "logits")
+    }
+
+    private static func resolvedExact(
+        _ descriptorShape: [Int],
+        actualShape: [Int],
+        tensorName: String
+    ) throws -> [Int] {
+        guard descriptorShape.count == actualShape.count else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "\(tensorName) descriptor shape \(descriptorShape) rank does not match runtime shape \(actualShape)")
+        }
+        for dimension in descriptorShape where dimension == 0 {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "\(tensorName) descriptor shape \(descriptorShape) has invalid zero dimension")
+        }
+        for (descriptorDimension, actualDimension) in zip(descriptorShape, actualShape)
+            where descriptorDimension > 0 && descriptorDimension != actualDimension
+        {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "\(tensorName) descriptor shape \(descriptorShape) does not match runtime shape \(actualShape)")
+        }
+        return actualShape
+    }
+
+    private static func positiveShape(_ shape: [Int], tensorName: String) throws -> [Int] {
+        guard !shape.isEmpty, shape.allSatisfy({ $0 > 0 }) else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "\(tensorName) runtime shape \(shape) must be positive")
+        }
+        return shape
     }
 }
