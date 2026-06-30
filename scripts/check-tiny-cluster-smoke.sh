@@ -376,8 +376,12 @@ if ! wait "$coord_pid"; then
 fi
 coord_pid=""
 
-for pid in "${worker_pids[@]}"; do
-  wait "$pid" >/dev/null 2>&1 || true
+for i in "${!worker_pids[@]}"; do
+  pid="${worker_pids[$i]}"
+  stage_id="${stage_ids[$i]}"
+  if ! wait "$pid"; then
+    die "worker $stage_id failed; logs: $work_dir"
+  fi
 done
 
 expected_remote="$(IFS=,; echo "${stage_ids[*]}")"
