@@ -36,11 +36,12 @@ Current in-tree pieces:
 - Worker frame execution, handshake admission, in-process loopback framing, and request-state
   guards for allocate-before-forward, step order, processed-token position, KV capacity, reset,
   and free.
+- Core AI distributed stage handle pieces for descriptor validation, allocation, NDArray IO,
+  output readback, and `.none`/`.stateful` forward/reset execution.
 
 Still missing before real staged inference:
 
 - Stage exporter output for per-stage `.aimodel` bundles and `cluster.stages` metadata.
-- A Core AI `DistributedStageHandle`.
 - Token-for-token Qwen3-0.6B same-machine evidence against the monolithic bundle.
 - Cross-process loopback worker/coordinator transport.
 - Thunderbolt Bridge test evidence.
@@ -55,7 +56,7 @@ Why this path:
 
 Do first:
 
-1. Build the stage exporter and Core AI `DistributedStageHandle`.
+1. Build the stage exporter for stateful stage bundles and metadata.
 2. Prove same-machine staged execution with Qwen3-0.6B.
 3. Verify staged output matches the monolithic Core AI bundle.
 4. Split the stages into two local processes over loopback.

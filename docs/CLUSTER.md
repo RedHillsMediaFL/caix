@@ -126,4 +126,6 @@ use `-1` for dynamic sequence length. `scalar_type` must be `float16` or `float3
 - `caix cluster join --help` exists; worker runtime is not implemented.
 - `caix serve --cluster` is advertised; coordinator runtime is not implemented.
 - Stage export metadata is not emitted by the converter yet.
+- Core AI stage execution exists for `.none` and `.stateful` stage graphs; `.explicitOutputs`
+  remains fail-closed.
 - Runtime tensor transport and worker protocols are intentionally outside this dry-run command.

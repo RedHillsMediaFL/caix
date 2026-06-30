@@ -1,9 +1,9 @@
 # Distributed Execution (v0 architecture)
 
-Status: design plus in-process harness. A typed plan/validation layer, dry-run planner command,
-and same-machine fake-stage coordinator already landed in the tree (see §0). Core AI stage
-execution and cross-process transport are not implemented yet. This document defines the
-execution contract those pieces are heading toward, and the exact first milestone.
+Status: design plus partial runtime. A typed plan/validation layer, dry-run planner command,
+same-machine coordinator, worker frame path, and stateful/no-cache Core AI stage handle have
+landed in the tree (see §0). Explicit-cache stage execution, staged export assets, real
+same-machine token-match evidence, and cross-process transport are still missing.
 
 Goal (from `docs/ROADMAP.md`): run a model that does not fit on one Mac by splitting Core AI
 execution into stage shards across Macs. Pipeline parallelism only. No tensor parallelism, no
@@ -74,11 +74,16 @@ This is blunt on purpose. Where the current code cannot do something, it says so
   `caix.cluster.stage_manifest.v0` documented in `docs/CLUSTER.md`. JSON output includes a
   `runtime_plan` from the shared manifest loader, including the boundary tensor contract. It does
   not load Core AI models, start workers, or move tensors.
+- `DistributedCoreAIStageHandle` loads stage assets, validates Core AI descriptors, allocates
+  request KV state, runs `.none`/`.stateful` stage functions, compacts hidden-state outputs, and
+  reads final logits for greedy token selection. `.explicitOutputs` stage execution remains
+  fail-closed.
 
-**Gap:** there is no Core AI stage execution path. Nothing produces a per-stage `.aimodel`,
-nothing emits an intermediate hidden state from a graph or feeds one back in, and there is no
-cross-process forward. The same-machine harness is ready for real `StageHandle`s once the
-exporter and Core AI stage wrapper exist; the monolithic path stays as the oracle.
+**Gap:** there is no staged exporter output or token-match evidence yet. The Core AI
+`DistributedStageHandle` can run `.none` and `.stateful` cache contracts and keeps
+`.explicitOutputs` fail-closed, but nothing in-tree produces per-stage `.aimodel` assets or the
+tracked evidence required by the readiness gate. There is still no cross-process forward. The
+monolithic path stays as the oracle.
 
 ---
 
@@ -357,20 +362,19 @@ boundary. The committed example `docs/examples/cluster-stage-manifest.json` is o
 Conversions, downloads, and exports are out of scope for this agent — this milestone
 is blocked on that exporter and says so.
 
-### 9.2 Runtime to build
+### 9.2 Runtime status
 
-`DistributedSameMachinePipeline` now validates ordered stage handles and stage-to-stage packet
-handoff with fake stages. The remaining runtime work is a concrete Core AI `StageHandle` and a
-thin `StagedEngine` wrapper:
+`DistributedSameMachinePipeline` validates ordered stage handles and stage-to-stage packet
+handoff. `DistributedStagedEngine` owns the token loop. `DistributedCoreAIStageHandle` now loads
+stage functions, allocates per-request KV state, runs `.none` and `.stateful` Core AI stages,
+relays hidden packets between non-final stages, and samples the final stage with greedy
+`Sampler.argmax`.
 
-- Load N handles from a stage manifest (each handle = `LLMEngine` specialized to one
-  stage bundle, reusing `AIModel.specialize` with the persistent compile cache,
-  `LLMEngine.swift:106-123`).
-- `generate(promptTokens:options:)` reuses the monolithic loop (`LLMEngine.generate`) but
-  replaces the single `step` with: `embeddings` forward → relay hidden packet → … →
-  `final_norm_head` forward → sample. Coordinator-owned `position_ids`, stop logic, and capacity
-  math are unchanged.
-- Greedy only for this milestone.
+Still held:
+
+- `.explicitOutputs` Core AI stage execution remains fail-closed.
+- The staged exporter has not emitted real per-stage `.aimodel` assets and manifest metadata.
+- Same-machine Qwen3-0.6B token-match evidence is not present.
 
 ### 9.3 Equivalence procedure
 
@@ -413,10 +417,11 @@ add transport, per §4/§5/§7.
 - **Boundary dtype export policy (§4).** `DistributedTensorScalarType` is float16/float32 only.
   Staged metadata can record the boundary tensor contract now; for internally bfloat16 graphs, the
   exporter still needs to materialize a host-readable boundary.
-- **Staged exporter handoff.** The runtime and CLI can load staged manifests, but current exports
-  still do not record staged metadata. The exporter must write `cluster.stages`,
-  `total_layer_count`, `position_mode`, stage asset names, `function_map`, optional decode assets,
-  `vocab_size`, and boundary tensor metadata before same-machine staged equivalence can run.
+- **Staged exporter handoff.** The runtime and CLI can load staged manifests and the Core AI stage
+  handle can execute `.none`/`.stateful` stage graphs, but current exports still do not record
+  staged metadata. The exporter must write `cluster.stages`, `total_layer_count`, `position_mode`,
+  stage asset names, `function_map`, optional decode assets, `vocab_size`, and boundary tensor
+  metadata before same-machine staged equivalence can run.
 - **`AIModel.specialize` cache keying.** Does the `.default` compile cache key cleanly per
   stage graph, or do same-named functions (`main`/`decode`) across stage bundles collide?
   Settle during 9.2.
