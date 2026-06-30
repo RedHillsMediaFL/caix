@@ -421,16 +421,160 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
     public func forward(
         _ input: DistributedStageForwardInput
     ) async throws -> DistributedStageForwardOutput {
-        guard requestStates[input.requestID] != nil else {
+        guard var requestState = requestStates[input.requestID] else {
             throw DistributedStageExecutionError.invalidForwardInput(
                 "request_id \(input.requestID) is not allocated")
         }
-        throw unimplemented("forward")
+        try validateForwardInput(input, requestState: requestState)
+
+        let positionCount = input.positionRange.count
+        let positionIDs = try DistributedCoreAIStageNDArrayIO.makePositionIDs(
+            positionIDs: input.positionIDs,
+            descriptor: executionIO.positionIDs.descriptor)
+        let activeFunction = activeFunction(positionCount: positionCount)
+
+        let output: DistributedStageForwardOutput
+        switch descriptor.role {
+        case .embeddings:
+            guard let inputIDsBinding = executionIO.inputIDs,
+                let hiddenOutputBinding = executionIO.hiddenStatesOutput
+            else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "distributed embeddings stage IO bindings are incomplete")
+            }
+            guard let nextStageID else {
+                throw DistributedStageExecutionError.invalidStageOutput(
+                    "embeddings stage has no next stage")
+            }
+            let inputIDs = try DistributedCoreAIStageNDArrayIO.makeInputIDs(
+                tokenIDs: input.tokenIDs,
+                descriptor: inputIDsBinding.descriptor)
+            var hiddenStates = try DistributedCoreAIStageNDArrayIO.makeHiddenStatesOutput(
+                positionCount: positionCount,
+                descriptor: hiddenOutputBinding.descriptor,
+                boundaryTensor: boundaryTensor)
+            var outputViews = InferenceFunction.MutableViews()
+            outputViews.insert(&hiddenStates, for: hiddenOutputBinding.name)
+            try await run(
+                activeFunction,
+                inputs: [
+                    inputIDsBinding.name: inputIDs,
+                    executionIO.positionIDs.name: positionIDs,
+                ],
+                outputViews: consume outputViews,
+                requestState: &requestState)
+            output = DistributedStageForwardOutput(
+                stageID: descriptor.id,
+                stepIndex: input.stepIndex,
+                hiddenState: try DistributedCoreAIStageNDArrayIO.makeHiddenStatePacket(
+                    from: hiddenStates,
+                    requestID: input.requestID,
+                    sourceStageID: descriptor.id,
+                    destinationStageID: nextStageID,
+                    positionRange: input.positionRange,
+                    stepIndex: input.stepIndex))
+
+        case .transformerLayers:
+            guard let hiddenInputBinding = executionIO.hiddenStatesInput,
+                let hiddenOutputBinding = executionIO.hiddenStatesOutput
+            else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "distributed transformer_layers stage IO bindings are incomplete")
+            }
+            guard let hiddenStatePacket = input.hiddenState else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "transformer_layers stage requires hidden_state")
+            }
+            guard let nextStageID else {
+                throw DistributedStageExecutionError.invalidStageOutput(
+                    "transformer_layers stage has no next stage")
+            }
+            let hiddenInput = try DistributedCoreAIStageNDArrayIO.makeHiddenStates(
+                packet: hiddenStatePacket,
+                descriptor: hiddenInputBinding.descriptor)
+            var hiddenOutput = try DistributedCoreAIStageNDArrayIO.makeHiddenStatesOutput(
+                positionCount: positionCount,
+                descriptor: hiddenOutputBinding.descriptor,
+                boundaryTensor: boundaryTensor)
+            var outputViews = InferenceFunction.MutableViews()
+            outputViews.insert(&hiddenOutput, for: hiddenOutputBinding.name)
+            try await run(
+                activeFunction,
+                inputs: [
+                    hiddenInputBinding.name: hiddenInput,
+                    executionIO.positionIDs.name: positionIDs,
+                ],
+                outputViews: consume outputViews,
+                requestState: &requestState)
+            output = DistributedStageForwardOutput(
+                stageID: descriptor.id,
+                stepIndex: input.stepIndex,
+                hiddenState: try DistributedCoreAIStageNDArrayIO.makeHiddenStatePacket(
+                    from: hiddenOutput,
+                    requestID: input.requestID,
+                    sourceStageID: descriptor.id,
+                    destinationStageID: nextStageID,
+                    positionRange: input.positionRange,
+                    stepIndex: input.stepIndex))
+
+        case .finalNormHead:
+            guard let hiddenInputBinding = executionIO.hiddenStatesInput,
+                let logitsOutputBinding = executionIO.logitsOutput
+            else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "distributed final_norm_head stage IO bindings are incomplete")
+            }
+            guard let hiddenStatePacket = input.hiddenState else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "final_norm_head stage requires hidden_state")
+            }
+            guard let vocabSize else {
+                throw DistributedStageExecutionError.invalidStageOutput(
+                    "final_norm_head stage requires vocab_size")
+            }
+            let hiddenInput = try DistributedCoreAIStageNDArrayIO.makeHiddenStates(
+                packet: hiddenStatePacket,
+                descriptor: hiddenInputBinding.descriptor)
+            var logits = try DistributedCoreAIStageNDArrayIO.makeLogitsOutput(
+                positionCount: positionCount,
+                vocabSize: vocabSize,
+                descriptor: logitsOutputBinding.descriptor)
+            var outputViews = InferenceFunction.MutableViews()
+            outputViews.insert(&logits, for: logitsOutputBinding.name)
+            try await run(
+                activeFunction,
+                inputs: [
+                    hiddenInputBinding.name: hiddenInput,
+                    executionIO.positionIDs.name: positionIDs,
+                ],
+                outputViews: consume outputViews,
+                requestState: &requestState)
+            let tokenID = Sampler.argmax(
+                try DistributedCoreAIStageNDArrayIO.readLastLogitsRow(
+                    logits,
+                    vocabSize: vocabSize))
+            guard tokenID <= Int(Int32.max) else {
+                throw DistributedStageExecutionError.invalidStageOutput(
+                    "token id \(tokenID) exceeds Int32.max")
+            }
+            output = DistributedStageForwardOutput(
+                stageID: descriptor.id,
+                stepIndex: input.stepIndex,
+                tokenID: Int32(tokenID))
+        }
+
+        requestState.processedTokenCount += positionCount
+        requestStates[input.requestID] = requestState
+        return output
     }
 
     public func reset(requestID: String) async throws {
-        _ = requestID
-        throw unimplemented("reset")
+        guard var requestState = requestStates[requestID] else {
+            throw DistributedStageExecutionError.invalidControlFrame(
+                "request_id \(requestID) is not allocated")
+        }
+        requestState.processedTokenCount = 0
+        requestStates[requestID] = requestState
     }
 
     public func free(requestID: String) async {
@@ -444,6 +588,108 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
         )
         return .modelContract(
             "distributed Core AI stage \(operation) is not implemented yet")
+    }
+
+    private func activeFunction(positionCount: Int) -> InferenceFunction {
+        positionCount == 1 ? decodeFunction : prefillFunction
+    }
+
+    private func validateForwardInput(
+        _ input: DistributedStageForwardInput,
+        requestState: DistributedCoreAIStageRequestState
+    ) throws {
+        guard input.stepIndex >= 0 else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "step_index must be non-negative")
+        }
+        guard input.positionRange.isValid else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "position_range is invalid")
+        }
+        guard input.positionRange.lowerBound == requestState.processedTokenCount else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "position_range lower_bound \(input.positionRange.lowerBound) does not match processed_token_count \(requestState.processedTokenCount)")
+        }
+        guard input.positionRange.upperBound <= requestState.kvCapacity else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "position_range upper_bound \(input.positionRange.upperBound) exceeds kv_capacity \(requestState.kvCapacity)")
+        }
+        guard input.positionIDs.count >= input.positionRange.count else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "position_ids count must cover position_range")
+        }
+
+        switch descriptor.role {
+        case .embeddings:
+            guard input.tokenIDs.count == input.positionRange.count else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "token_ids count must match position_range")
+            }
+            guard input.hiddenState == nil else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "embeddings stage must not receive hidden_state")
+            }
+        case .transformerLayers, .finalNormHead:
+            guard input.tokenIDs.isEmpty else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "\(descriptor.role.rawValue) stage must not receive token_ids")
+            }
+            guard let hiddenState = input.hiddenState else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "\(descriptor.role.rawValue) stage requires hidden_state")
+            }
+            guard hiddenState.metadata.destinationStageID == descriptor.id else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "hidden_state destination_stage_id does not match stage")
+            }
+            guard hiddenState.metadata.requestID == input.requestID else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "hidden_state request_id does not match request")
+            }
+            guard hiddenState.metadata.stepIndex == input.stepIndex else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "hidden_state step_index does not match request")
+            }
+            guard hiddenState.metadata.positionRange == input.positionRange else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "hidden_state position_range does not match request")
+            }
+        }
+    }
+
+    private func run(
+        _ function: InferenceFunction,
+        inputs: [String: NDArray],
+        outputViews: consuming InferenceFunction.MutableViews,
+        requestState: inout DistributedCoreAIStageRequestState
+    ) async throws {
+        switch cacheIO.contract {
+        case .none:
+            _ = try await function.run(
+                inputs: inputs,
+                outputViews: consume outputViews)
+        case .stateful:
+            guard var keyCache = requestState.keyCache,
+                var valueCache = requestState.valueCache,
+                let keyCacheName = cacheIO.keyCacheName,
+                let valueCacheName = cacheIO.valueCacheName
+            else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "distributed stage stateful KV cache is missing")
+            }
+            var states = InferenceFunction.MutableViews()
+            states.insert(&keyCache, for: keyCacheName)
+            states.insert(&valueCache, for: valueCacheName)
+            _ = try await function.run(
+                inputs: inputs,
+                states: consume states,
+                outputViews: consume outputViews)
+            requestState.keyCache = keyCache
+            requestState.valueCache = valueCache
+        case .explicitOutputs:
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "distributed Core AI explicit-cache stage execution is not implemented yet")
+        }
     }
 
     private static func loadFunction(
