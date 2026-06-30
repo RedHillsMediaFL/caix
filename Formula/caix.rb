@@ -79,6 +79,7 @@ class Caix < Formula
     assert_match("--connect-timeout", shell_output("#{bin}/caix cluster join --help"))
     assert_match("--speed-bytes", shell_output("#{bin}/caix deploy verify --help"))
     assert_match("--min-mbps", shell_output("#{bin}/caix deploy verify --help"))
+    assert_match("--fail-on-warn", shell_output("#{bin}/caix deploy verify --help"))
     assert_match("--cluster", shell_output("#{bin}/caix --help"))
     assert_match("--prompt-tokens", shell_output("#{bin}/caix serve --help"))
     assert_match("--join-timeout", shell_output("#{bin}/caix serve --help"))

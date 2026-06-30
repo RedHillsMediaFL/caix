@@ -3,11 +3,11 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/check-brew-distributed.sh [--caix <path>] [--ready] [--manifest <path>] [--endpoint <target>...]
+Usage: scripts/check-brew-distributed.sh [--caix <path>] [--ready] [--manifest <path>] [--endpoint <target>...] [--allow-warnings]
 
 Checks the Homebrew-installed caix surface needed before Thunderbolt distributed tests.
 It does not start workers or run inference. If endpoints are supplied, it also runs
-caix deploy verify with machine identity, version, and link-speed warnings.
+caix deploy verify with machine identity, version, and link-speed blocker warnings.
 USAGE
 }
 
@@ -19,6 +19,7 @@ min_machines=2
 speed_bytes=4194304
 min_mbps=500
 max_latency_ms=20
+allow_warnings=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -31,6 +32,7 @@ while [[ $# -gt 0 ]]; do
     --speed-bytes) speed_bytes="${2:?}"; shift 2 ;;
     --min-mbps) min_mbps="${2:?}"; shift 2 ;;
     --max-latency-ms) max_latency_ms="${2:?}"; shift 2 ;;
+    --allow-warnings) allow_warnings=1; shift ;;
     -h|--help) usage; exit 0 ;;
     --*) echo "error: unknown option: $1" >&2; usage >&2; exit 2 ;;
     *) echo "error: unexpected argument: $1" >&2; usage >&2; exit 2 ;;
@@ -104,11 +106,15 @@ if [[ "$require_ready" == "1" ]]; then
   "$caix_binary" cluster join --help 2>/dev/null | grep -q -- '--connect-timeout'
   "$caix_binary" deploy verify --help 2>/dev/null | grep -q -- '--speed-bytes'
   "$caix_binary" deploy verify --help 2>/dev/null | grep -q -- '--min-mbps'
+  "$caix_binary" deploy verify --help 2>/dev/null | grep -q -- '--fail-on-warn'
 fi
 
 if [[ "${#endpoints[@]}" -gt 0 ]]; then
   args=(deploy verify --min-machines "$min_machines" --speed-bytes "$speed_bytes" \
     --min-mbps "$min_mbps" --max-latency-ms "$max_latency_ms")
+  if [[ "$allow_warnings" != "1" ]]; then
+    args+=(--fail-on-warn)
+  fi
   for endpoint in "${endpoints[@]}"; do
     [[ -n "$endpoint" ]] && args+=(--endpoint "$endpoint")
   done

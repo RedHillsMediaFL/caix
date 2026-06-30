@@ -12,6 +12,7 @@ private struct DeployVerifyConfig: Sendable {
     var speedBytes: Int
     var minMbps: Double
     var maxLatencyMS: Int
+    var failOnWarn: Bool
 }
 
 private struct DeployVerifyEndpoint: Sendable {
@@ -121,6 +122,7 @@ private func deployUsage() {
           --min-mbps <N>           Warn below this download rate (default: 500)
           --max-latency-ms <N>     Warn above this /api/server latency (default: 20)
           --no-speed-test          Skip download speed probe
+          --fail-on-warn           Exit non-zero for blocker warnings
           --json                   Emit machine-readable JSON
 
         Verifies caix HTTP visibility and link speed. It does not load models or run inference.
@@ -137,6 +139,7 @@ private func deployVerifyCommand(_ argv: [String]) {
     var speedBytes = 4 * 1024 * 1024
     var minMbps = 500.0
     var maxLatencyMS = 20
+    var failOnWarn = false
 
     func fail(_ message: String) -> Never {
         FileHandle.standardError.write(Data("error: \(message)\n".utf8))
@@ -193,6 +196,8 @@ private func deployVerifyCommand(_ argv: [String]) {
             maxLatencyMS = parsed
         case "--no-speed-test":
             speedTest = false
+        case "--fail-on-warn":
+            failOnWarn = true
         case "--json":
             emitJSON = true
         case "-h", "--help":
@@ -222,7 +227,8 @@ private func deployVerifyCommand(_ argv: [String]) {
         speedTest: speedTest,
         speedBytes: speedBytes,
         minMbps: minMbps,
-        maxLatencyMS: maxLatencyMS)
+        maxLatencyMS: maxLatencyMS,
+        failOnWarn: failOnWarn)
     let semaphore = DispatchSemaphore(value: 0)
     nonisolated(unsafe) var exitCode: Int32 = 0
 
@@ -263,7 +269,7 @@ private func runDeployVerify(_ config: DeployVerifyConfig) async throws -> Deplo
 
     let reachable = results.filter(\.reachable)
     let reachableMachines = Set(reachable.map(deployVerifyMachineKey)).count
-    let ok = reachableMachines >= config.minMachines && reachable.count >= config.minMachines
+    let reachableOK = reachableMachines >= config.minMachines && reachable.count >= config.minMachines
     var warnings = results.flatMap { result in
         result.warnings.map { "\(result.host):\(result.port): \($0)" }
     }
@@ -271,6 +277,7 @@ private func runDeployVerify(_ config: DeployVerifyConfig) async throws -> Deplo
         warnings.append(
             "reachable endpoints collapse to \(reachableMachines) machine identity; use distinct Macs, not aliases or extra ports on one Mac")
     }
+    let ok = reachableOK && !(config.failOnWarn && warnings.contains(where: deployVerifyWarningIsBlocking))
     return DeployVerifyOutput(
         ok: ok,
         requiredMachines: config.minMachines,
@@ -583,6 +590,10 @@ private func deployVerifySameMachine(_ remoteName: String?, _ localName: String)
         return false
     }
     return remote.lowercased() == localName.lowercased()
+}
+
+private func deployVerifyWarningIsBlocking(_ warning: String) -> Bool {
+    !warning.contains("local machine endpoint;")
 }
 
 private func deployVerifyBool(_ object: [String: Any], keys: [String]) -> Bool? {

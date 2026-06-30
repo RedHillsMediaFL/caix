@@ -157,6 +157,11 @@ func printUsage() {
           --min-machines <N>       Distinct reachable machine identities required (default: 2)
           --timeout <seconds>      Per-endpoint HTTP timeout (default: 2)
           --path <path>            Probe path when endpoint has no path (default: /api/server)
+          --speed-bytes <N>        Download bytes per endpoint (default: 4194304)
+          --min-mbps <N>           Warn below this download rate (default: 500)
+          --max-latency-ms <N>     Warn above this /api/server latency (default: 20)
+          --no-speed-test          Skip download speed probe
+          --fail-on-warn           Exit non-zero for blocker warnings
           --json                   Emit machine-readable JSON
 
         DIFFUSION (auto-detected from bundle metadata kind/diffusion block):
