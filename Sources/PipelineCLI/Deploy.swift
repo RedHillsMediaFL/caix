@@ -29,6 +29,7 @@ private struct DeployVerifyEndpointResult: Codable, Sendable {
     var statusCode: Int?
     var elapsedMS: Int
     var serverName: String?
+    var machineName: String?
     var runtimeLinked: Bool?
     var computeUnit: String?
     var speedBytes: Int?
@@ -46,6 +47,7 @@ private struct DeployVerifyEndpointResult: Codable, Sendable {
         case statusCode = "status_code"
         case elapsedMS = "elapsed_ms"
         case serverName = "server_name"
+        case machineName = "machine_name"
         case runtimeLinked = "runtime_linked"
         case computeUnit = "compute_unit"
         case speedBytes = "speed_bytes"
@@ -109,7 +111,7 @@ private func deployUsage() {
         verify OPTIONS:
           --endpoint, -e <target>  caix server endpoint; repeatable
           --endpoints <list>       Comma-separated endpoints
-          --min-machines <N>       Distinct reachable endpoint hosts required (default: 2)
+          --min-machines <N>       Distinct reachable machine identities required (default: 2)
           --timeout <seconds>      Per-endpoint HTTP timeout (default: 2)
           --path <path>            Probe path when endpoint has no path (default: /api/server)
           --speed-bytes <N>        Download bytes per endpoint (default: 4194304)
@@ -257,10 +259,14 @@ private func runDeployVerify(_ config: DeployVerifyConfig) async throws -> Deplo
     }
 
     let reachable = results.filter(\.reachable)
-    let reachableMachines = Set(reachable.map { $0.host.lowercased() }).count
+    let reachableMachines = Set(reachable.map(deployVerifyMachineKey)).count
     let ok = reachableMachines >= config.minMachines && reachable.count >= config.minMachines
-    let warnings = results.flatMap { result in
+    var warnings = results.flatMap { result in
         result.warnings.map { "\(result.host):\(result.port): \($0)" }
+    }
+    if reachable.count >= config.minMachines && reachableMachines < config.minMachines {
+        warnings.append(
+            "reachable endpoints collapse to \(reachableMachines) machine identity; use distinct Macs, not aliases or extra ports on one Mac")
     }
     return DeployVerifyOutput(
         ok: ok,
@@ -339,6 +345,7 @@ private func requestDeployVerifyEndpoint(
         }
         let serverOK = deployVerifyBool(object, keys: ["ok"])
         let name = deployVerifyString(object, keys: ["name"])
+        let machineName = deployVerifyString(object, keys: ["machineName", "machine_name"])
         let runtimeLinked = deployVerifyBool(object, keys: ["runtimeLinked", "runtime_linked"])
         let computeUnit = deployVerifyString(object, keys: ["computeUnit", "compute_unit"])
         guard serverOK == true else {
@@ -347,6 +354,7 @@ private func requestDeployVerifyEndpoint(
                 statusCode: http.statusCode,
                 elapsedMS: elapsedMS,
                 serverName: name,
+                machineName: machineName,
                 runtimeLinked: runtimeLinked,
                 computeUnit: computeUnit,
                 error: "caix server ok=false or missing")
@@ -372,6 +380,7 @@ private func requestDeployVerifyEndpoint(
             statusCode: http.statusCode,
             elapsedMS: elapsedMS,
             serverName: name,
+            machineName: machineName,
             runtimeLinked: runtimeLinked,
             computeUnit: computeUnit,
             speedBytes: speed?.bytes,
@@ -459,6 +468,7 @@ private func deployVerifyResult(
     statusCode: Int?,
     elapsedMS: Int,
     serverName: String? = nil,
+    machineName: String? = nil,
     runtimeLinked: Bool? = nil,
     computeUnit: String? = nil,
     speedBytes: Int? = nil,
@@ -476,6 +486,7 @@ private func deployVerifyResult(
         statusCode: statusCode,
         elapsedMS: elapsedMS,
         serverName: serverName,
+        machineName: machineName,
         runtimeLinked: runtimeLinked,
         computeUnit: computeUnit,
         speedBytes: speedBytes,
@@ -500,6 +511,9 @@ private func renderDeployVerify(_ output: DeployVerifyOutput) -> String {
         fields.append("ms=\(result.elapsedMS)")
         if let serverName = result.serverName {
             fields.append("name=\(serverName)")
+        }
+        if let machineName = result.machineName {
+            fields.append("machine=\(machineName)")
         }
         if let runtimeLinked = result.runtimeLinked {
             fields.append("runtime_linked=\(runtimeLinked)")
@@ -530,6 +544,15 @@ private func renderDeployVerify(_ output: DeployVerifyOutput) -> String {
 
 private func elapsedMilliseconds(since start: Date) -> Int {
     max(0, Int((Date().timeIntervalSince(start) * 1000).rounded()))
+}
+
+private func deployVerifyMachineKey(_ result: DeployVerifyEndpointResult) -> String {
+    if let machineName = result.machineName?.trimmingCharacters(in: .whitespacesAndNewlines),
+        !machineName.isEmpty
+    {
+        return "machine:\(machineName.lowercased())"
+    }
+    return "host:\(result.host.lowercased())"
 }
 
 private func deployVerifyBool(_ object: [String: Any], keys: [String]) -> Bool? {

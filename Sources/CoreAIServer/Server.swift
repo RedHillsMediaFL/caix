@@ -280,6 +280,7 @@ final class ServerRuntime: Sendable {
         let info = ServerInfo(
             ok: true,
             name: "coreai-pipeline",
+            machineName: MachineStats.machineName(),
             pid: Int(ProcessInfo.processInfo.processIdentifier),
             runtimeLinked: CoreAIPipeline.isLinked,
             host: host,
@@ -1017,6 +1018,7 @@ struct ServerInfo: Codable, Sendable {
     }
     var ok: Bool
     var name: String
+    var machineName: String
     var pid: Int
     var runtimeLinked: Bool
     var host: String

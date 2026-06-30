@@ -2,6 +2,12 @@ import XCTest
 @testable import MachineStats
 
 final class MachineStatsTests: XCTestCase {
+    func testMachineNameIsAvailable() {
+        let name = MachineStats.machineName()
+        XCTAssertFalse(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        XCTAssertNotEqual(name, "unknown")
+    }
+
     func testSnapshotHasSaneValues() {
         let s = MachineStats.snapshot()
         XCTAssertFalse(s.chip.isEmpty)

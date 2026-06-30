@@ -154,7 +154,7 @@ func printUsage() {
         deploy verify OPTIONS:
           --endpoint, -e <target>  caix server endpoint; repeatable
           --endpoints <list>       Comma-separated endpoints
-          --min-machines <N>       Distinct reachable endpoint hosts required (default: 2)
+          --min-machines <N>       Distinct reachable machine identities required (default: 2)
           --timeout <seconds>      Per-endpoint HTTP timeout (default: 2)
           --path <path>            Probe path when endpoint has no path (default: /api/server)
           --json                   Emit machine-readable JSON

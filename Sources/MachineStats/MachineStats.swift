@@ -16,12 +16,25 @@ public struct MachineSnapshot: Codable, Sendable {
 /// Off the inference hot path, so the GPU read may shell to ioreg for now.
 public enum MachineStats {
 
+    public static func machineName() -> String {
+        var buffer = [CChar](repeating: 0, count: 256)
+        let status = buffer.withUnsafeMutableBufferPointer { pointer in
+            gethostname(pointer.baseAddress, pointer.count)
+        }
+        if status == 0 {
+            let value = MachineStats.string(fromNullTerminated: buffer)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !value.isEmpty { return value }
+        }
+        return sysctlString("kern.hostname") ?? "unknown"
+    }
+
     public static func sysctlString(_ name: String) -> String? {
         var size = 0
         guard sysctlbyname(name, nil, &size, nil, 0) == 0, size > 0 else { return nil }
         var buf = [CChar](repeating: 0, count: size)
         guard sysctlbyname(name, &buf, &size, nil, 0) == 0 else { return nil }
-        return String(cString: buf)
+        return string(fromNullTerminated: buf)
     }
 
     public static func sysctlUInt64(_ name: String) -> UInt64? {
@@ -85,5 +98,10 @@ public enum MachineStats {
             gpuUtilizationPercent: gpu.utilizationPercent,
             gpuInUseMemoryBytes: gpu.inUseMemoryBytes
         )
+    }
+
+    private static func string(fromNullTerminated buffer: [CChar]) -> String {
+        let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+        return String(decoding: bytes, as: UTF8.self)
     }
 }

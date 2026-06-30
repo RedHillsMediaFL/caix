@@ -21,8 +21,8 @@ caix serve --cluster stage-manifest.json --prompt-tokens 1,2,3 --max-tokens 1 --
 caix cluster join --coordinator main.local:1237 --manifest stage-manifest.json --stage stages/01-layers.aimodel --connect-timeout 120
 ```
 
-`caix deploy verify` checks caix HTTP visibility and link speed across distinct endpoint hosts. It
-does not load models, run staged inference, or prove tensor transport.
+`caix deploy verify` checks caix HTTP visibility and link speed across distinct machine identities.
+It does not load models, run staged inference, or prove tensor transport.
 
 `--model` reads `metadata.json` from the bundle and expects a `cluster.stages` block. Current
 single-bundle exports do not include that block, so the command reports a TODO telling the exporter
