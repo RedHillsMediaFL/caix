@@ -44,6 +44,9 @@ case "catalog":
 case "cluster":
     clusterCommand(Array(args.dropFirst(2)))
 
+case "deploy":
+    deployCommand(Array(args.dropFirst(2)))
+
 case "eagle":
     eagleCommand(Array(args.dropFirst(2)))
 
@@ -72,6 +75,7 @@ func printUsage() {
           caix catalog <owner/search|collection-slug> [options]
           caix cluster plan --manifest <stage-manifest.json> [options]
           caix cluster join --coordinator <host:port> --stage <stage-dir> [options]
+          caix deploy verify --endpoint <host[:port]|url> --endpoint <host[:port]|url> [options]
           caix serve [--port 1237] [--host 127.0.0.1]
           caix serve --cluster <stage-manifest.json> [options]
 
@@ -139,6 +143,14 @@ func printUsage() {
                                   Coordinator address for this worker
           --stage <dir>           Local staged .aimodel bundle directory
           --listen <host:port>    Worker listen address (default: 127.0.0.1:0)
+
+        deploy verify OPTIONS:
+          --endpoint, -e <target>  caix server endpoint; repeatable
+          --endpoints <list>       Comma-separated endpoints
+          --min-machines <N>       Distinct reachable endpoint hosts required (default: 2)
+          --timeout <seconds>      Per-endpoint HTTP timeout (default: 2)
+          --path <path>            Probe path when endpoint has no path (default: /api/server)
+          --json                   Emit machine-readable JSON
 
         DIFFUSION (auto-detected from bundle metadata kind/diffusion block):
           run routes diffusion bundles to the host denoise loop (random-canvas init →

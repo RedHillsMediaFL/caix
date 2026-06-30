@@ -13,7 +13,11 @@ the runtime validates, including `boundary_tensor`.
 caix cluster plan --manifest qwen3-stages.json --workers main=64,mbp=32,mini=16
 caix cluster plan --model models/exports/qwen3-staged --worker main=64 --worker mini=16
 caix cluster plan --manifest qwen3-stages.json --json
+caix deploy verify --endpoint main.local:1237 --endpoint mbp.local:1237
 ```
+
+`caix deploy verify` checks caix HTTP visibility across distinct endpoint hosts. It does not load
+models, run staged inference, or prove tensor transport.
 
 `--model` reads `metadata.json` from the bundle and expects a `cluster.stages` block. Current
 single-bundle exports do not include that block, so the command reports a TODO telling the exporter
