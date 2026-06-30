@@ -44,8 +44,8 @@ scripts/check-publication-gates.sh --distributed --brew-caix "$(command -v caix)
 ```
 
 The formula test must keep checking `caix cluster plan --help`, `caix cluster join --help`,
-top-level `caix --help` advertising `--cluster`, exact `caix --version`, and the staged Qwen3
-manifest plan contract.
+`caix deploy verify --help` advertising speed checks, top-level `caix --help` advertising
+`--cluster`, exact `caix --version`, and the staged manifest plan contract.
 
 Any release that exposes distributed inference must ship that surface through the tap formula. Use
 the installed binary for Thunderbolt tests, not a loose debug build.

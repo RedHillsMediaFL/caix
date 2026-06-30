@@ -90,5 +90,16 @@ brew test caix
 scripts/check-publication-gates.sh --distributed --brew-caix "$(command -v caix)"
 ```
 
-Then connect the second Mac and run the distributed smoke from the installed `caix`.
+Then connect the second Mac and verify the link from the installed `caix`:
+
+```bash
+caix_prefix="$(brew --prefix caix)"
+"$caix_prefix/share/caix/scripts/check-brew-distributed.sh" --caix "$(command -v caix)" --ready \
+  --manifest /path/to/qwen3-tiny-random-coreai-staged-rope-input-f16-2x1/stage-manifest.json \
+  --endpoint <main-mac-host>:1237 --endpoint <macbook-host>:1237 \
+  --min-machines 2 --speed-bytes 4194304 --min-mbps 500 --max-latency-ms 20
+```
+
+If that warns, fix wiring before running the cluster smoke. Run the distributed smoke from the
+installed `caix`, not a checkout binary.
 Do not publish distributed release notes until this gate passes.

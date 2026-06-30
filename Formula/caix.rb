@@ -77,7 +77,10 @@ class Caix < Formula
     system bin/"caix", "doctor", "--no-fail"
     system bin/"caix", "cluster", "plan", "--help"
     system bin/"caix", "cluster", "join", "--help"
+    assert_match("--speed-bytes", shell_output("#{bin}/caix deploy verify --help"))
+    assert_match("--min-mbps", shell_output("#{bin}/caix deploy verify --help"))
     assert_match("--cluster", shell_output("#{bin}/caix --help"))
+    assert_match("--prompt-tokens", shell_output("#{bin}/caix serve --help"))
 
     output = shell_output("#{bin}/caix cluster plan " \
                           "--manifest #{pkgshare}/examples/cluster-stage-manifest.json " \
