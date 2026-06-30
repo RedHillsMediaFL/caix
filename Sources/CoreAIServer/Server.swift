@@ -22,6 +22,7 @@ public enum CoreAIServer {
         webDir: String,
         convertScript: String,
         pythonExecutable: String = "python3",
+        caixVersion: String = "unknown",
         verbose: Bool = false,
         eagleConfig: EagleConfig? = nil,
         statsFile: String? = nil
@@ -37,6 +38,7 @@ public enum CoreAIServer {
             webDir: URL(fileURLWithPath: webDir, isDirectory: true),
             convertScript: convertScript,
             pythonExecutable: pythonExecutable,
+            caixVersion: caixVersion,
             verbose: verbose,
             eagleConfig: eagleConfig)
 
@@ -79,13 +81,14 @@ final class ServerRuntime: Sendable {
     let registryPath: URL
     let convertScript: String
     let pythonExecutable: String
+    let caixVersion: String
     let indexHTML: String
     let chatHTML: String
     let verbose: Bool
 
     init(
         host: String, port: Int, exportsDir: URL, registryPath: URL, webDir: URL, convertScript: String,
-        pythonExecutable: String, verbose: Bool, eagleConfig: EagleConfig? = nil
+        pythonExecutable: String, caixVersion: String, verbose: Bool, eagleConfig: EagleConfig? = nil
     ) {
         self.host = host
         self.port = port
@@ -98,6 +101,7 @@ final class ServerRuntime: Sendable {
         self.registryPath = registryPath
         self.convertScript = convertScript
         self.pythonExecutable = pythonExecutable
+        self.caixVersion = caixVersion
         self.verbose = verbose
         let indexURL = webDir.appendingPathComponent("index.html")
         self.indexHTML =
@@ -280,6 +284,7 @@ final class ServerRuntime: Sendable {
         let info = ServerInfo(
             ok: true,
             name: "coreai-pipeline",
+            caixVersion: caixVersion,
             machineName: MachineStats.machineName(),
             pid: Int(ProcessInfo.processInfo.processIdentifier),
             runtimeLinked: CoreAIPipeline.isLinked,
@@ -1018,6 +1023,7 @@ struct ServerInfo: Codable, Sendable {
     }
     var ok: Bool
     var name: String
+    var caixVersion: String
     var machineName: String
     var pid: Int
     var runtimeLinked: Bool

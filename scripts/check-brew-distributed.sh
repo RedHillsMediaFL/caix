@@ -7,7 +7,7 @@ Usage: scripts/check-brew-distributed.sh [--caix <path>] [--ready] [--manifest <
 
 Checks the Homebrew-installed caix surface needed before Thunderbolt distributed tests.
 It does not start workers or run inference. If endpoints are supplied, it also runs
-caix deploy verify with link-speed warnings.
+caix deploy verify with machine identity, version, and link-speed warnings.
 USAGE
 }
 

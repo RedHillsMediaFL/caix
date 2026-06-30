@@ -100,10 +100,11 @@ caix_prefix="$(brew --prefix caix)"
   --min-machines 2 --speed-bytes 4194304 --min-mbps 500 --max-latency-ms 20
 ```
 
-If that warns, fix wiring before running the cluster smoke. Run the distributed smoke from the
-installed `caix`, not a checkout binary. Use `caix serve --cluster ... --join-timeout 120` on the
-coordinator and `caix cluster join ... --connect-timeout 120` on workers so failures exit cleanly.
-Do not publish distributed release notes until this gate passes.
+If that warns about identity, version, local endpoints, or link speed, fix it before the cluster
+smoke. Run the distributed smoke from the installed `caix`, not a checkout binary. Use `caix serve
+--cluster ... --join-timeout 120` on the coordinator and `caix cluster join ... --connect-timeout
+120` on workers so failures exit cleanly. Do not publish distributed release notes until this gate
+passes.
 
 To print exact commands for the tiny staged smoke:
 

@@ -30,6 +30,7 @@ private struct DeployVerifyEndpointResult: Codable, Sendable {
     var statusCode: Int?
     var elapsedMS: Int
     var serverName: String?
+    var caixVersion: String?
     var machineName: String?
     var runtimeLinked: Bool?
     var computeUnit: String?
@@ -48,6 +49,7 @@ private struct DeployVerifyEndpointResult: Codable, Sendable {
         case statusCode = "status_code"
         case elapsedMS = "elapsed_ms"
         case serverName = "server_name"
+        case caixVersion = "caix_version"
         case machineName = "machine_name"
         case runtimeLinked = "runtime_linked"
         case computeUnit = "compute_unit"
@@ -346,6 +348,7 @@ private func requestDeployVerifyEndpoint(
         }
         let serverOK = deployVerifyBool(object, keys: ["ok"])
         let name = deployVerifyString(object, keys: ["name"])
+        let caixVersion = deployVerifyString(object, keys: ["caixVersion", "caix_version"])
         let machineName = deployVerifyString(object, keys: ["machineName", "machine_name"])
         let runtimeLinked = deployVerifyBool(object, keys: ["runtimeLinked", "runtime_linked"])
         let computeUnit = deployVerifyString(object, keys: ["computeUnit", "compute_unit"])
@@ -355,6 +358,7 @@ private func requestDeployVerifyEndpoint(
                 statusCode: http.statusCode,
                 elapsedMS: elapsedMS,
                 serverName: name,
+                caixVersion: caixVersion,
                 machineName: machineName,
                 runtimeLinked: runtimeLinked,
                 computeUnit: computeUnit,
@@ -372,6 +376,12 @@ private func requestDeployVerifyEndpoint(
         if elapsedMS > config.maxLatencyMS {
             warnings.append("latency \(elapsedMS) ms exceeds \(config.maxLatencyMS) ms")
         }
+        if let caixVersion,
+            !caixVersion.isEmpty,
+            caixVersion != CaixBuildInfo.version
+        {
+            warnings.append("server version \(caixVersion) differs from client \(CaixBuildInfo.version)")
+        }
         if deployVerifySameMachine(machineName, MachineStats.machineName()) {
             warnings.append("local machine endpoint; speed and latency do not prove the second-machine link")
         }
@@ -384,6 +394,7 @@ private func requestDeployVerifyEndpoint(
             statusCode: http.statusCode,
             elapsedMS: elapsedMS,
             serverName: name,
+            caixVersion: caixVersion,
             machineName: machineName,
             runtimeLinked: runtimeLinked,
             computeUnit: computeUnit,
@@ -472,6 +483,7 @@ private func deployVerifyResult(
     statusCode: Int?,
     elapsedMS: Int,
     serverName: String? = nil,
+    caixVersion: String? = nil,
     machineName: String? = nil,
     runtimeLinked: Bool? = nil,
     computeUnit: String? = nil,
@@ -490,6 +502,7 @@ private func deployVerifyResult(
         statusCode: statusCode,
         elapsedMS: elapsedMS,
         serverName: serverName,
+        caixVersion: caixVersion,
         machineName: machineName,
         runtimeLinked: runtimeLinked,
         computeUnit: computeUnit,
@@ -515,6 +528,9 @@ private func renderDeployVerify(_ output: DeployVerifyOutput) -> String {
         fields.append("ms=\(result.elapsedMS)")
         if let serverName = result.serverName {
             fields.append("name=\(serverName)")
+        }
+        if let caixVersion = result.caixVersion {
+            fields.append("version=\(caixVersion)")
         }
         if let machineName = result.machineName {
             fields.append("machine=\(machineName)")

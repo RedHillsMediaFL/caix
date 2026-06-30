@@ -816,6 +816,7 @@ func serveCommand(_ argv: [String]) {
                 webDir: webDir,
                 convertScript: convertScript,
                 pythonExecutable: python,
+                caixVersion: CaixBuildInfo.version,
                 verbose: verbose,
                 eagleConfig: eagleConfig,
                 statsFile: statsFile)
