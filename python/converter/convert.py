@@ -13,7 +13,7 @@ Usage:
   convert.py gemma-4-31B-it --num-layers 2 --dry-run
 """
 from __future__ import annotations
-import argparse, json, os, subprocess, sys
+import argparse, json, math, os, subprocess, sys
 from pathlib import Path
 
 PIPELINE_ROOT = Path(__file__).resolve().parents[2]
@@ -318,6 +318,35 @@ def _validate_function_map(stage: dict, stage_id: str) -> None:
             raise _cluster_error(f"stage {stage_id} function_map.decode must be non-empty")
 
 
+def _validate_rope(stage: dict, stage_id: str, role: str | None) -> None:
+    rope = stage.get("rope")
+    if rope is None:
+        return
+    if role != "transformer_layers":
+        raise _cluster_error(f"stage {stage_id} rope inputs are only valid for transformer_layers")
+    if not isinstance(rope, dict):
+        raise _cluster_error(f"stage {stage_id} rope must be an object")
+    cos_input = _first_non_empty(rope.get("cos_input"))
+    sin_input = _first_non_empty(rope.get("sin_input"))
+    if not cos_input:
+        raise _cluster_error(f"stage {stage_id} rope cos_input must be non-empty")
+    if not sin_input:
+        raise _cluster_error(f"stage {stage_id} rope sin_input must be non-empty")
+    if cos_input == sin_input:
+        raise _cluster_error(f"stage {stage_id} rope cos_input and sin_input must differ")
+    head_dim = rope.get("head_dim")
+    if isinstance(head_dim, bool) or not isinstance(head_dim, int) or head_dim <= 0 or head_dim % 2:
+        raise _cluster_error(f"stage {stage_id} rope head_dim must be a positive even integer")
+    theta = rope.get("theta")
+    if (
+        isinstance(theta, bool)
+        or not isinstance(theta, (int, float))
+        or not math.isfinite(float(theta))
+        or theta <= 0
+    ):
+        raise _cluster_error(f"stage {stage_id} rope theta must be positive")
+
+
 def _normalize_boundary(cluster: dict) -> None:
     boundary = cluster.get("boundary")
     if boundary is None and isinstance(cluster.get("boundary_tensor"), dict):
@@ -406,6 +435,7 @@ def _cluster_block(raw_manifest: dict, bundle: Path, model_name: str) -> dict:
         role = stage.get("role")
         _positive_number(stage.get("memory_gb"), f"stage {stage_id} memory_gb")
         _validate_function_map(stage, stage_id)
+        _validate_rope(stage, stage_id, role)
         _bundle_asset_path(bundle, _stage_asset_name(stage, stage_id), f"stage {stage_id} bundle")
         decode_asset = _first_non_empty(
             stage.get("decode_asset"),

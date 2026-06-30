@@ -66,6 +66,12 @@ cat > "$manifest" <<'JSON'
       "layers": [0, 28],
       "bundle": "stages/01-layers.aimodel",
       "function_map": {"main": ["main"]},
+      "rope": {
+        "cos_input": "rotary_emb_cos",
+        "sin_input": "rotary_emb_sin",
+        "head_dim": 128,
+        "theta": 1000000
+      },
       "memory_gb": 2.0
     },
     {
@@ -106,7 +112,52 @@ if [stage.get("role") for stage in cluster.get("stages", [])] != [
     "final_norm_head",
 ]:
     sys.exit("bad stage roles")
+rope = cluster.get("stages", [])[1].get("rope")
+if rope != {
+    "cos_input": "rotary_emb_cos",
+    "sin_input": "rotary_emb_sin",
+    "head_dim": 128,
+    "theta": 1000000,
+}:
+    sys.exit("bad rope metadata")
 PY
+
+bad_rope_manifest="$tmpdir/bad-rope-manifest.json"
+python3 - "$manifest" "$bad_rope_manifest" <<'PY'
+import json
+import sys
+src, dst = sys.argv[1:]
+doc = json.load(open(src))
+doc["stages"][1]["rope"]["head_dim"] = 127
+open(dst, "w").write(json.dumps(doc, indent=2) + "\n")
+PY
+if python3 "$REPO_DIR/python/converter/convert.py" \
+    --bundle "$bundle" \
+    --attach-cluster-manifest "$bad_rope_manifest" >/dev/null 2>&1; then
+  echo "error: converter accepted malformed staged RoPE metadata" >&2
+  exit 1
+fi
+
+bad_embed_rope_manifest="$tmpdir/bad-embed-rope-manifest.json"
+python3 - "$manifest" "$bad_embed_rope_manifest" <<'PY'
+import json
+import sys
+src, dst = sys.argv[1:]
+doc = json.load(open(src))
+doc["stages"][0]["rope"] = {
+    "cos_input": "rotary_emb_cos",
+    "sin_input": "rotary_emb_sin",
+    "head_dim": 128,
+    "theta": 1000000,
+}
+open(dst, "w").write(json.dumps(doc, indent=2) + "\n")
+PY
+if python3 "$REPO_DIR/python/converter/convert.py" \
+    --bundle "$bundle" \
+    --attach-cluster-manifest "$bad_embed_rope_manifest" >/dev/null 2>&1; then
+  echo "error: converter accepted RoPE metadata on a non-transformer stage" >&2
+  exit 1
+fi
 
 rm -rf "$bundle/stages/02-head.aimodel"
 if python3 "$REPO_DIR/python/converter/convert.py" \
