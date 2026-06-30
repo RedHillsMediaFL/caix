@@ -64,6 +64,22 @@ public struct Sampler {
         }
     }
 
+    public static func topK(_ logits: [Float], count: Int) -> [(index: Int, logit: Float)] {
+        guard count > 0, !logits.isEmpty else { return [] }
+        let candidates: [Candidate]
+        if count < logits.count {
+            candidates = topKCandidates(logits, k: count)
+        } else {
+            candidates = logits.indices.map { Candidate(index: $0, logit: logits[$0]) }
+        }
+        return candidates
+            .sorted {
+                if $0.logit == $1.logit { return $0.index < $1.index }
+                return $0.logit > $1.logit
+            }
+            .map { (index: $0.index, logit: $0.logit) }
+    }
+
     private struct Candidate {
         let index: Int
         let logit: Float

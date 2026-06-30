@@ -574,10 +574,13 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
                 ],
                 outputViews: consume outputViews,
                 requestState: &requestState)
-            let tokenID = Sampler.argmax(
-                try DistributedCoreAIStageNDArrayIO.readLastLogitsRow(
-                    logits,
-                    vocabSize: vocabSize))
+            let logitsRow = try DistributedCoreAIStageNDArrayIO.readLastLogitsRow(
+                logits,
+                vocabSize: vocabSize)
+            Self.traceLogitsIfRequested(
+                logitsRow,
+                label: "staged stage=\(descriptor.id) step=\(input.stepIndex)")
+            let tokenID = Sampler.argmax(logitsRow)
             guard tokenID <= Int(Int32.max) else {
                 throw DistributedStageExecutionError.invalidStageOutput(
                     "token id \(tokenID) exceeds Int32.max")
@@ -617,6 +620,22 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
 
     private func activeFunction(positionCount: Int) -> InferenceFunction {
         positionCount == 1 ? decodeFunction : prefillFunction
+    }
+
+    private static func traceLogitsIfRequested(_ logits: [Float], label: String) {
+        guard let rawLimit = ProcessInfo.processInfo.environment["CAIX_LOGIT_TRACE_TOPK"],
+            let limit = Int(rawLimit),
+            limit > 0
+        else {
+            return
+        }
+        let top = Sampler.topK(logits, count: min(limit, logits.count))
+        let margin = top.count > 1 ? top[0].logit - top[1].logit : .nan
+        let fields = top.map { "\($0.index):\(String(format: "%.6g", Double($0.logit)))" }
+            .joined(separator: ",")
+        let line = "[caix-logits] \(label) top=\(fields) "
+            + "margin=\(String(format: "%.6g", Double(margin)))\n"
+        FileHandle.standardError.write(Data(line.utf8))
     }
 
     private func validateForwardInput(

@@ -78,7 +78,11 @@ final class DistributedCoreAIStageAssetIntegrationTests: XCTestCase {
             try await pipeline.allocate(requestID: requestID, kvCapacity: capacity)
 
             let prompt32 = promptTokens.map(Int32.init)
-            var baselineNext = Int32(Sampler.argmax(try await baseline.step(tokens: prompt32)))
+            let baselinePrefillLogits = try await baseline.step(tokens: prompt32)
+            traceLogitsIfRequested(
+                baselinePrefillLogits,
+                label: "baseline prompt=\(index) step=0")
+            var baselineNext = Int32(Sampler.argmax(baselinePrefillLogits))
             var stagedNext = try await nextStagedToken(
                 pipeline: pipeline,
                 requestID: requestID,
@@ -94,7 +98,11 @@ final class DistributedCoreAIStageAssetIntegrationTests: XCTestCase {
             }
 
             for step in 1..<maxTokens {
-                baselineNext = Int32(Sampler.argmax(try await baseline.step(tokens: [baselineNext])))
+                let baselineDecodeLogits = try await baseline.step(tokens: [baselineNext])
+                traceLogitsIfRequested(
+                    baselineDecodeLogits,
+                    label: "baseline prompt=\(index) step=\(step)")
+                baselineNext = Int32(Sampler.argmax(baselineDecodeLogits))
                 stagedNext = try await nextStagedToken(
                     pipeline: pipeline,
                     requestID: requestID,
@@ -210,5 +218,21 @@ final class DistributedCoreAIStageAssetIntegrationTests: XCTestCase {
                 upperBound: lowerBound + tokenIDs.count),
             tokenIDs: tokenIDs)
         return try XCTUnwrap(output.tokenID)
+    }
+
+    private func traceLogitsIfRequested(_ logits: [Float], label: String) {
+        guard let rawLimit = ProcessInfo.processInfo.environment["CAIX_LOGIT_TRACE_TOPK"],
+            let limit = Int(rawLimit),
+            limit > 0
+        else {
+            return
+        }
+        let top = Sampler.topK(logits, count: min(limit, logits.count))
+        let margin = top.count > 1 ? top[0].logit - top[1].logit : .nan
+        let fields = top.map { "\($0.index):\(String(format: "%.6g", Double($0.logit)))" }
+            .joined(separator: ",")
+        let line = "[caix-logits] \(label) top=\(fields) "
+            + "margin=\(String(format: "%.6g", Double(margin)))\n"
+        FileHandle.standardError.write(Data(line.utf8))
     }
 }

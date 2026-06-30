@@ -26,6 +26,13 @@ final class SamplerTests: XCTestCase {
         XCTAssertEqual(Sampler.argmax(logits), 777)
     }
 
+    func testTopKReturnsDescendingLogitsWithStableTieOrder() {
+        let top = Sampler.topK([1, 9, 9, -2, 4], count: 3)
+
+        XCTAssertEqual(top.map(\.index), [1, 2, 4])
+        XCTAssertEqual(top.map(\.logit), [9, 9, 4])
+    }
+
     func testEmptyInputReturnsZero() {
         var rng = TestRNG(state: 1)
         let sampler = Sampler(temperature: 1)
