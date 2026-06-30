@@ -325,6 +325,92 @@ final class DistributedCoreAIStageAssetIntegrationTests: XCTestCase {
         #endif
     }
 
+    func testRealTransformerStageMatchesHiddenFixtureSummary() async throws {
+        guard let manifestPath = ProcessInfo.processInfo.environment["CAIX_STAGE_MANIFEST"],
+            !manifestPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw XCTSkip("set CAIX_STAGE_MANIFEST to a real staged manifest")
+        }
+        guard let stageID = ProcessInfo.processInfo.environment["CAIX_TRANSFORMER_STAGE_ID"],
+            !stageID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw XCTSkip("set CAIX_TRANSFORMER_STAGE_ID to a transformer stage id")
+        }
+        guard let hiddenPath = ProcessInfo.processInfo.environment["CAIX_TRANSFORMER_HIDDEN_F16"],
+            !hiddenPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw XCTSkip("set CAIX_TRANSFORMER_HIDDEN_F16 to a float16 hidden-state fixture")
+        }
+        guard let expectedL2 = loadDoubleEnvironment("CAIX_TRANSFORMER_EXPECTED_L2"),
+            let expectedSumAbs = loadDoubleEnvironment("CAIX_TRANSFORMER_EXPECTED_SUM_ABS")
+        else {
+            throw XCTSkip("set CAIX_TRANSFORMER_EXPECTED_L2 and CAIX_TRANSFORMER_EXPECTED_SUM_ABS")
+        }
+        let tolerance = loadDoubleEnvironment("CAIX_TRANSFORMER_SUMMARY_TOLERANCE") ?? 0.02
+
+        #if COREAI_RUNTIME
+        let manifest = try DistributedStageManifest.load(
+            from: URL(fileURLWithPath: manifestPath).standardizedFileURL)
+        guard let boundaryTensor = manifest.boundaryTensor else {
+            throw XCTSkip("manifest has no boundary tensor metadata")
+        }
+        XCTAssertEqual(boundaryTensor.scalarType, .float16)
+        let hiddenSize = try XCTUnwrap(boundaryTensor.shape.last)
+        let hiddenData = try Data(contentsOf: URL(fileURLWithPath: hiddenPath))
+        XCTAssertEqual(hiddenData.count % boundaryTensor.scalarType.byteWidth, 0)
+        let elementCount = hiddenData.count / boundaryTensor.scalarType.byteWidth
+        XCTAssertEqual(elementCount % hiddenSize, 0)
+        let positionCount = elementCount / hiddenSize
+        XCTAssertGreaterThan(positionCount, 0)
+
+        let stageIndex = try XCTUnwrap(manifest.runtimePlan.stages.firstIndex { $0.id == stageID })
+        let descriptor = manifest.runtimePlan.stages[stageIndex]
+        XCTAssertEqual(descriptor.role, .transformerLayers)
+        let stage = try XCTUnwrap(manifest.stages.first { $0.id == descriptor.id })
+        let sourceStageID = stageIndex > 0 ? manifest.runtimePlan.stages[stageIndex - 1].id : "fixture"
+        let requestID = "transformer-fixture"
+        let positionRange = DistributedSequenceRange(lowerBound: 0, upperBound: positionCount)
+        let metadata = DistributedHiddenStatePacketMetadata(
+            requestID: requestID,
+            sourceStageID: sourceStageID,
+            destinationStageID: descriptor.id,
+            positionRange: positionRange,
+            shape: [1, positionCount, hiddenSize],
+            scalarType: .float16,
+            byteCount: hiddenData.count,
+            stepIndex: 0)
+        let packet = try DistributedHiddenStatePacket(
+            metadata: metadata,
+            payload: Array(hiddenData))
+
+        let context = DistributedStageHandleFactoryContext(
+            stage: stage,
+            manifest: manifest,
+            descriptor: descriptor)
+        let handle = try await DistributedCoreAIStageHandleFactory()
+            .makeStageHandle(for: context)
+        try await handle.allocate(DistributedStageAllocation(
+            requestID: requestID,
+            kvCapacity: positionCount + 1))
+        let output = try await handle.forward(DistributedStageForwardInput(
+            requestID: requestID,
+            stepIndex: 0,
+            positionRange: positionRange,
+            positionIDs: manifest.positionMode.positionIDs(for: positionRange),
+            hiddenState: packet))
+        await handle.free(requestID: requestID)
+
+        let outputPacket = try XCTUnwrap(output.hiddenState)
+        XCTAssertEqual(outputPacket.metadata.sourceStageID, descriptor.id)
+        let summary = try summarizeFloat16Payload(outputPacket.payload)
+        XCTAssertEqual(summary.count, elementCount)
+        assertClose(summary.l2, expectedL2, tolerance: tolerance, label: "l2")
+        assertClose(summary.sumAbs, expectedSumAbs, tolerance: tolerance, label: "sum_abs")
+        #else
+        throw XCTSkip("requires COREAI_RUNTIME=1")
+        #endif
+    }
+
     private func loadPrompts(path: String?) throws -> [String] {
         guard let path, !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return ["The future of local inference is"]
@@ -422,5 +508,57 @@ final class DistributedCoreAIStageAssetIntegrationTests: XCTestCase {
         for (rowIndex, row) in rows.enumerated() {
             traceLogitsIfRequested(row, label: "\(label) row=\(rowIndex)")
         }
+    }
+
+    private func loadDoubleEnvironment(_ name: String) -> Double? {
+        guard let raw = ProcessInfo.processInfo.environment[name],
+            !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            return nil
+        }
+        return Double(raw)
+    }
+
+    private struct Float16Summary {
+        let count: Int
+        let sumAbs: Double
+        let l2: Double
+    }
+
+    private func summarizeFloat16Payload(_ payload: [UInt8]) throws -> Float16Summary {
+        guard payload.count % MemoryLayout<UInt16>.size == 0 else {
+            throw XCTSkip("float16 payload byte count is not even")
+        }
+        var sumAbs = 0.0
+        var sumSquares = 0.0
+        var count = 0
+        var index = 0
+        while index < payload.count {
+            let bitPattern = UInt16(payload[index]) | (UInt16(payload[index + 1]) << 8)
+            let value = Double(Float(Float16(bitPattern: bitPattern)))
+            guard value.isFinite else {
+                XCTFail("float16 payload contains non-finite value")
+                break
+            }
+            sumAbs += abs(value)
+            sumSquares += value * value
+            count += 1
+            index += MemoryLayout<UInt16>.size
+        }
+        return Float16Summary(count: count, sumAbs: sumAbs, l2: sqrt(sumSquares))
+    }
+
+    private func assertClose(
+        _ actual: Double,
+        _ expected: Double,
+        tolerance: Double,
+        label: String
+    ) {
+        let scale = max(abs(expected), 1.0)
+        let relativeError = abs(actual - expected) / scale
+        XCTAssertLessThanOrEqual(
+            relativeError,
+            tolerance,
+            "\(label) relative error \(relativeError) exceeds \(tolerance); actual=\(actual) expected=\(expected)")
     }
 }
