@@ -122,6 +122,7 @@ final class ServerRuntime: Sendable {
         router.get("/api/models") { _, _ in JSONResponder.encode(await self.manager.listModels()) }
         router.get("/api/jobs") { _, _ in JSONResponder.encode(await self.jobs.snapshot()) }
         router.get("/api/server") { _, _ in await self.serverInfoHandler() }
+        router.get("/api/network-test/:bytes") { _, ctx in self.networkTestHandler(ctx) }
         router.post("/api/load") { req, ctx in try await self.loadHandler(req, ctx) }
         router.post("/api/offload") { req, ctx in try await self.offloadHandler(req, ctx) }
         router.post("/api/offload-all") { _, _ in await self.offloadAllHandler() }
@@ -295,6 +296,24 @@ final class ServerRuntime: Sendable {
             verbose: verbose,
             eagle: eagle)
         return JSONResponder.encode(info)
+    }
+
+    /// `GET /api/network-test/:bytes` — bounded payload for deploy link-speed checks.
+    private func networkTestHandler(_ context: BasicRequestContext) -> Response {
+        guard let raw = context.parameters.get("bytes"),
+            let requested = Int(raw),
+            requested > 0
+        else {
+            return JSONResponder.error("bytes must be positive", status: .badRequest)
+        }
+        let bytes = min(requested, 64 * 1024 * 1024)
+        var headers = HTTPFields()
+        headers[.contentType] = "application/octet-stream"
+        headers[.cacheControl] = "no-store"
+        return Response(
+            status: .ok,
+            headers: headers,
+            body: ResponseBody(byteBuffer: ByteBuffer(bytes: [UInt8](repeating: 0x63, count: bytes))))
     }
 
     /// `POST /api/check-support` {hf_repo} — returns the raw check JSON (supported/flagged + reason).
