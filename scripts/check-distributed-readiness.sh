@@ -90,6 +90,66 @@ check_repo_evidence_path() {
   fi
 }
 
+check_evidence_manifest_plan() {
+  local label="$1"
+  local manifest="$2"
+  local file="$3"
+
+  if [[ -z "$caix_binary" || ! -x "$caix_binary" ]]; then
+    missing "$label evidence manifest cannot be validated without caix binary: $file"
+    return 1
+  fi
+
+  local manifest_path="$REPO_DIR/$manifest"
+  if json="$("$caix_binary" cluster plan --manifest "$manifest_path" --json 2>"$plan_err")"; then
+    if EVIDENCE_MANIFEST_JSON="$json" python3 - <<'PY'
+import json
+import os
+import sys
+
+doc = json.loads(os.environ["EVIDENCE_MANIFEST_JSON"])
+runtime = doc.get("runtime_plan")
+if doc.get("dry_run") is not True or not isinstance(runtime, dict):
+    sys.exit(1)
+roles = [stage.get("role") for stage in runtime.get("stages", [])]
+if len(roles) < 3 or roles[0] != "embeddings" or roles[-1] != "final_norm_head":
+    sys.exit(1)
+if any(role != "transformer_layers" for role in roles[1:-1]):
+    sys.exit(1)
+if not isinstance(runtime.get("total_layer_count"), int) or runtime["total_layer_count"] <= 0:
+    sys.exit(1)
+if runtime.get("position_mode") not in ("full_prefix", "current"):
+    sys.exit(1)
+boundary = runtime.get("boundary_tensor")
+if not isinstance(boundary, dict):
+    sys.exit(1)
+if boundary.get("name") != "hidden_states":
+    sys.exit(1)
+shape = boundary.get("shape")
+if not (
+    isinstance(shape, list)
+    and len(shape) == 3
+    and shape[0] == 1
+    and (shape[1] == -1 or (isinstance(shape[1], int) and shape[1] > 0))
+    and isinstance(shape[2], int)
+    and shape[2] > 0
+):
+    sys.exit(1)
+if boundary.get("scalar_type") not in ("float16", "float32"):
+    sys.exit(1)
+PY
+    then
+      ready "$label evidence manifest validates with cluster plan"
+    else
+      missing "$label evidence manifest did not produce a valid runtime_plan: $manifest"
+      return 1
+    fi
+  else
+    missing "$label evidence manifest failed cluster plan: $(tr '\n' ' ' <"$plan_err" | sed 's/[[:space:]]*$//')"
+    return 1
+  fi
+}
+
 prompt_count() {
   local path="$1"
   awk 'NF { count += 1 } END { print count + 0 }' "$path"
@@ -141,6 +201,8 @@ check_token_match_evidence() {
   elif [[ -z "$raw_log" ]]; then
     missing "$label evidence raw_log is missing: $file"
   elif ! check_repo_evidence_path "$label" manifest "$manifest" "$file"; then
+    return
+  elif ! check_evidence_manifest_plan "$label" "$manifest" "$file"; then
     return
   elif ! check_repo_evidence_path "$label" prompt_set "$prompt_set" "$file"; then
     return
