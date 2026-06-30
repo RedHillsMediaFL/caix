@@ -2059,12 +2059,34 @@ final class DistributedRuntimeTests: XCTestCase {
 
     func testCoreAIKVCacheShapeRejectsUnresolvedInvalidDimension() {
         XCTAssertThrowsError(
-            try DistributedCoreAIStageKVCacheShape.resolved([1, 32, 0, 128], capacity: 256)
+            try DistributedCoreAIStageKVCacheShape.resolved([1, 32, -1, 0], capacity: 256)
         ) { error in
             XCTAssertEqual(
                 error as? DistributedStageExecutionError,
                 .invalidControlFrame(
-                    "KV cache descriptor shape [1, 32, 0, 128] resolves to invalid shape [1, 32, 0, 128]"))
+                    "KV cache descriptor shape [1, 32, -1, 0] resolves to invalid shape [1, 32, 256, 0]"))
+        }
+    }
+
+    func testCoreAIKVCacheShapeRejectsMissingDynamicCapacityDimension() {
+        XCTAssertThrowsError(
+            try DistributedCoreAIStageKVCacheShape.resolved([1, 32, 256, 128], capacity: 256)
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidControlFrame(
+                    "KV cache descriptor shape [1, 32, 256, 128] must have exactly one dynamic capacity dimension"))
+        }
+    }
+
+    func testCoreAIKVCacheShapeRejectsMultipleDynamicCapacityDimensions() {
+        XCTAssertThrowsError(
+            try DistributedCoreAIStageKVCacheShape.resolved([1, -1, -1, 128], capacity: 256)
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidControlFrame(
+                    "KV cache descriptor shape [1, -1, -1, 128] must have exactly one dynamic capacity dimension"))
         }
     }
 

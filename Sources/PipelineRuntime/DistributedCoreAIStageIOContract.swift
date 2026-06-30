@@ -413,9 +413,13 @@ enum DistributedCoreAIStageKVCacheShape {
             throw DistributedStageExecutionError.invalidControlFrame(
                 "KV cache descriptor shape is empty")
         }
-        let resolved = descriptorShape.map { dimension in
-            dimension < 0 ? capacity : dimension
+        let dynamicIndexes = descriptorShape.indices.filter { descriptorShape[$0] < 0 }
+        guard dynamicIndexes.count == 1, let dynamicIndex = dynamicIndexes.first else {
+            throw DistributedStageExecutionError.invalidControlFrame(
+                "KV cache descriptor shape \(descriptorShape) must have exactly one dynamic capacity dimension")
         }
+        var resolved = descriptorShape
+        resolved[dynamicIndex] = capacity
         guard resolved.allSatisfy({ $0 > 0 }) else {
             throw DistributedStageExecutionError.invalidControlFrame(
                 "KV cache descriptor shape \(descriptorShape) resolves to invalid shape \(resolved)")
