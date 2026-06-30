@@ -7,18 +7,28 @@ struct ClusterPlanStage: Codable {
     var path: String?
     var resolvedPath: String?
     var pathExists: Bool?
+    var decodePath: String?
+    var resolvedDecodePath: String?
+    var decodePathExists: Bool?
     var role: String?
     var layers: String?
     var memoryGB: Double?
+    var assetGB: Double?
+    var planningMemoryGB: Double?
 
     enum CodingKeys: String, CodingKey {
         case name
         case path
         case resolvedPath = "resolved_path"
         case pathExists = "path_exists"
+        case decodePath = "decode_path"
+        case resolvedDecodePath = "resolved_decode_path"
+        case decodePathExists = "decode_path_exists"
         case role
         case layers
         case memoryGB = "memory_gb"
+        case assetGB = "asset_gb"
+        case planningMemoryGB = "planning_memory_gb"
     }
 }
 
@@ -373,14 +383,24 @@ private func loadClusterPlanSource(
     }
 
     let stages = manifest.stages.map { stage in
-        ClusterPlanStage(
+        let assetGB = stageAssetFootprintGB(
+            paths: [stage.resolvedAssetPath, stage.resolvedDecodeAssetPath].compactMap { $0 })
+        let planningMemoryGB = [stage.memoryGB, assetGB].compactMap { $0 }.max()
+        return ClusterPlanStage(
             name: stage.id,
             path: stage.assetName,
             resolvedPath: stage.resolvedAssetPath,
             pathExists: stage.resolvedAssetPath.map { FileManager.default.fileExists(atPath: $0) },
+            decodePath: stage.decodeAssetName,
+            resolvedDecodePath: stage.resolvedDecodeAssetPath,
+            decodePathExists: stage.resolvedDecodeAssetPath.map {
+                FileManager.default.fileExists(atPath: $0)
+            },
             role: stage.role.rawValue,
             layers: stage.layerDescription,
-            memoryGB: stage.memoryGB)
+            memoryGB: stage.memoryGB,
+            assetGB: assetGB,
+            planningMemoryGB: planningMemoryGB)
     }
     return ClusterPlanSource(
         modelName: manifest.modelName,
@@ -413,13 +433,28 @@ private func assignClusterStages(
     var used = Dictionary(uniqueKeysWithValues: workers.map { ($0.name, 0.0) })
     var assignments: [ClusterAssignment] = []
     for (index, stage) in stages.enumerated() {
-        guard let need = stage.memoryGB else {
+        guard let need = stage.planningMemoryGB else {
             let worker = workers[index % workers.count].name
             assignments.append(
                 ClusterAssignment(stage: stage.name, worker: worker, reason: "stage memory not specified"))
             continue
         }
-        if let worker = workers.first(where: { (used[$0.name] ?? 0) + need <= $0.memoryGB }) {
+        let candidates = workers.filter { (used[$0.name] ?? 0) + need <= $0.memoryGB }
+        if let worker = candidates.min(by: { lhs, rhs in
+            let lhsUsed = used[lhs.name] ?? 0
+            let rhsUsed = used[rhs.name] ?? 0
+            let lhsRatio = lhsUsed / lhs.memoryGB
+            let rhsRatio = rhsUsed / rhs.memoryGB
+            if lhsRatio != rhsRatio {
+                return lhsRatio < rhsRatio
+            }
+            let lhsRemaining = lhs.memoryGB - lhsUsed
+            let rhsRemaining = rhs.memoryGB - rhsUsed
+            if lhsRemaining != rhsRemaining {
+                return lhsRemaining > rhsRemaining
+            }
+            return lhs.name < rhs.name
+        }) {
             used[worker.name, default: 0] += need
             assignments.append(ClusterAssignment(stage: stage.name, worker: worker.name, reason: nil))
         } else {
@@ -444,6 +479,19 @@ private func clusterWarnings(
     let missing = stages.filter { $0.pathExists == false }.map(\.name)
     if !missing.isEmpty {
         warnings.append("Missing local stage bundle paths: \(missing.joined(separator: ", ")).")
+    }
+    let missingDecode = stages.filter { $0.decodePath != nil && $0.decodePathExists == false }
+        .map(\.name)
+    if !missingDecode.isEmpty {
+        warnings.append("Missing local decode stage bundle paths: \(missingDecode.joined(separator: ", ")).")
+    }
+    if stages.contains(where: { stage in
+        guard let assetGB = stage.assetGB, let memoryGB = stage.memoryGB else { return false }
+        return assetGB > memoryGB
+    }) {
+        warnings.append(
+            "Local asset footprint exceeds manifest memory_gb for one or more stages; "
+                + "placement used asset size as a lower bound. Runtime memory can be higher.")
     }
     if !workers.isEmpty && assignments.contains(where: { $0.worker == nil }) {
         warnings.append("One or more stages could not be placed with the supplied worker budgets.")
@@ -483,8 +531,12 @@ private func renderClusterPlan(_ output: ClusterPlanOutput) -> String {
             stage.role.map { "role=\($0)" },
             stage.layers.map { "layers=\($0)" },
             stage.memoryGB.map { "memory=\(formatGB($0))" },
+            stage.assetGB.map { "asset=\(formatGB($0))" },
+            stage.planningMemoryGB.map { "plan_memory=\(formatGB($0))" },
             stage.resolvedPath.map { "path=\($0)" },
             stage.pathExists.map { $0 ? "path_status=ok" : "path_status=missing" },
+            stage.resolvedDecodePath.map { "decode_path=\($0)" },
+            stage.decodePathExists.map { $0 ? "decode_status=ok" : "decode_status=missing" },
         ].compactMap { $0 }
         lines.append("- \(stage.name)" + (parts.isEmpty ? "" : "  " + parts.joined(separator: " ")))
     }
@@ -517,6 +569,41 @@ private func expandPath(_ path: String) -> String {
 
 private func formatGB(_ value: Double) -> String {
     value.rounded() == value ? "\(Int(value))GB" : String(format: "%.1fGB", value)
+}
+
+private func stageAssetFootprintGB(paths: [String]) -> Double? {
+    let bytes = paths.compactMap { stageAssetFootprintBytes(path: $0) }.reduce(0, +)
+    guard bytes > 0 else { return nil }
+    return Double(bytes) / 1_073_741_824
+}
+
+private func stageAssetFootprintBytes(path: String) -> UInt64? {
+    let fileManager = FileManager.default
+    var isDirectory: ObjCBool = false
+    guard fileManager.fileExists(atPath: path, isDirectory: &isDirectory) else {
+        return nil
+    }
+    if !isDirectory.boolValue {
+        return (try? fileManager.attributesOfItem(atPath: path)[.size] as? NSNumber)?.uint64Value
+    }
+
+    guard let enumerator = fileManager.enumerator(
+        at: URL(fileURLWithPath: path),
+        includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
+        options: [.skipsHiddenFiles])
+    else {
+        return nil
+    }
+
+    var total: UInt64 = 0
+    for case let url as URL in enumerator {
+        let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+        guard values?.isRegularFile == true, let size = values?.fileSize else {
+            continue
+        }
+        total += UInt64(size)
+    }
+    return total
 }
 
 private struct ClusterPlanError: Error, CustomStringConvertible {
