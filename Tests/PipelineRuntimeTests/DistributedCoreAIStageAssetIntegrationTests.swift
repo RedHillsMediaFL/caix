@@ -78,7 +78,11 @@ final class DistributedCoreAIStageAssetIntegrationTests: XCTestCase {
             try await pipeline.allocate(requestID: requestID, kvCapacity: capacity)
 
             let prompt32 = promptTokens.map(Int32.init)
-            let baselinePrefillLogits = try await baseline.step(tokens: prompt32)
+            let baselinePrefillRows = try await baseline.forwardAllRows(tokens: prompt32)
+            traceLogitRowsIfRequested(
+                baselinePrefillRows,
+                label: "baseline prompt=\(index) prefill")
+            let baselinePrefillLogits = try XCTUnwrap(baselinePrefillRows.last)
             traceLogitsIfRequested(
                 baselinePrefillLogits,
                 label: "baseline prompt=\(index) step=0")
@@ -189,6 +193,80 @@ final class DistributedCoreAIStageAssetIntegrationTests: XCTestCase {
         #endif
     }
 
+    func testRealHeadStageMatchesHiddenFixtureGreedyToken() async throws {
+        guard let manifestPath = ProcessInfo.processInfo.environment["CAIX_STAGE_MANIFEST"],
+            !manifestPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw XCTSkip("set CAIX_STAGE_MANIFEST to a real staged manifest")
+        }
+        guard let hiddenPath = ProcessInfo.processInfo.environment["CAIX_HEAD_HIDDEN_F16"],
+            !hiddenPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw XCTSkip("set CAIX_HEAD_HIDDEN_F16 to a float16 hidden-state fixture")
+        }
+        guard let rawExpected = ProcessInfo.processInfo.environment["CAIX_HEAD_EXPECTED_TOKEN"],
+            let expectedToken = Int32(rawExpected)
+        else {
+            throw XCTSkip("set CAIX_HEAD_EXPECTED_TOKEN to the expected greedy token")
+        }
+
+        #if COREAI_RUNTIME
+        let manifest = try DistributedStageManifest.load(
+            from: URL(fileURLWithPath: manifestPath).standardizedFileURL)
+        guard let boundaryTensor = manifest.boundaryTensor else {
+            throw XCTSkip("manifest has no boundary tensor metadata")
+        }
+        let hiddenSize = try XCTUnwrap(boundaryTensor.shape.last)
+        let hiddenData = try Data(contentsOf: URL(fileURLWithPath: hiddenPath))
+        XCTAssertEqual(hiddenData.count % boundaryTensor.scalarType.byteWidth, 0)
+        XCTAssertEqual(boundaryTensor.scalarType, .float16)
+        let elementCount = hiddenData.count / boundaryTensor.scalarType.byteWidth
+        XCTAssertEqual(elementCount % hiddenSize, 0)
+        let positionCount = elementCount / hiddenSize
+        XCTAssertGreaterThan(positionCount, 0)
+
+        let headIndex = try XCTUnwrap(
+            manifest.runtimePlan.stages.firstIndex { $0.role == .finalNormHead })
+        let headDescriptor = manifest.runtimePlan.stages[headIndex]
+        let headStage = try XCTUnwrap(manifest.stages.first { $0.id == headDescriptor.id })
+        let sourceStageID = headIndex > 0 ? manifest.runtimePlan.stages[headIndex - 1].id : "fixture"
+        let requestID = "head-fixture"
+        let positionRange = DistributedSequenceRange(lowerBound: 0, upperBound: positionCount)
+        let metadata = DistributedHiddenStatePacketMetadata(
+            requestID: requestID,
+            sourceStageID: sourceStageID,
+            destinationStageID: headDescriptor.id,
+            positionRange: positionRange,
+            shape: [1, positionCount, hiddenSize],
+            scalarType: .float16,
+            byteCount: hiddenData.count,
+            stepIndex: 0)
+        let packet = try DistributedHiddenStatePacket(
+            metadata: metadata,
+            payload: Array(hiddenData))
+
+        let context = DistributedStageHandleFactoryContext(
+            stage: headStage,
+            manifest: manifest,
+            descriptor: headDescriptor)
+        let handle = try await DistributedCoreAIStageHandleFactory()
+            .makeStageHandle(for: context)
+        try await handle.allocate(DistributedStageAllocation(
+            requestID: requestID,
+            kvCapacity: positionCount + 1))
+        let output = try await handle.forward(DistributedStageForwardInput(
+            requestID: requestID,
+            stepIndex: 0,
+            positionRange: positionRange,
+            positionIDs: manifest.positionMode.positionIDs(for: positionRange),
+            hiddenState: packet))
+        await handle.free(requestID: requestID)
+        XCTAssertEqual(output.tokenID, expectedToken)
+        #else
+        throw XCTSkip("requires COREAI_RUNTIME=1")
+        #endif
+    }
+
     private func loadPrompts(path: String?) throws -> [String] {
         guard let path, !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return ["The future of local inference is"]
@@ -234,5 +312,14 @@ final class DistributedCoreAIStageAssetIntegrationTests: XCTestCase {
         let line = "[caix-logits] \(label) top=\(fields) "
             + "margin=\(String(format: "%.6g", Double(margin)))\n"
         FileHandle.standardError.write(Data(line.utf8))
+    }
+
+    private func traceLogitRowsIfRequested(_ rows: [[Float]], label: String) {
+        guard ProcessInfo.processInfo.environment["CAIX_TRACE_BASELINE_ROWS"] != nil else {
+            return
+        }
+        for (rowIndex, row) in rows.enumerated() {
+            traceLogitsIfRequested(row, label: "\(label) row=\(rowIndex)")
+        }
     }
 }
