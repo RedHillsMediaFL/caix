@@ -1773,6 +1773,61 @@ final class DistributedRuntimeTests: XCTestCase {
         }
     }
 
+    func testStageIOContractAllowsManifestDeclaredRoPEInputs() throws {
+        let boundary = DistributedBoundaryTensorSpec(
+            name: "hidden_states", shape: [1, -1, 2], scalarType: .float16)
+        let rope = DistributedStageRoPEInputSpec(
+            cosInputName: "rotary_emb_cos",
+            sinInputName: "rotary_emb_sin",
+            headDim: 128,
+            theta: 1_000_000)
+        let descriptor = stage(
+            "layers-0-16", .transformerLayers,
+            range: DistributedLayerRange(lowerBound: 0, upperBound: 16),
+            assetName: "layers_0_16",
+            rope: rope)
+        let contract = DistributedStageIOContract(
+            inputs: [
+                ioTensor(.hiddenStates, .float16, [1, -1, 2]),
+                ioTensor(.positionIDs, .int32, [1, -1]),
+                ioTensor("rotary_emb_cos", .float16, [1, -1, 128]),
+                ioTensor("rotary_emb_sin", .float16, [1, -1, 128]),
+            ],
+            outputs: [
+                ioTensor(.hiddenStates, .float16, [1, -1, 2])
+            ])
+
+        XCTAssertNoThrow(try contract.validate(for: descriptor, boundaryTensor: boundary))
+    }
+
+    func testStageIOContractRejectsUndeclaredRoPEInputs() {
+        let boundary = DistributedBoundaryTensorSpec(
+            name: "hidden_states", shape: [1, -1, 2], scalarType: .float16)
+        let descriptor = stage(
+            "layers-0-16", .transformerLayers,
+            range: DistributedLayerRange(lowerBound: 0, upperBound: 16),
+            assetName: "layers_0_16")
+        let contract = DistributedStageIOContract(
+            inputs: [
+                ioTensor(.hiddenStates, .float16, [1, -1, 2]),
+                ioTensor(.positionIDs, .int32, [1, -1]),
+                ioTensor("rotary_emb_cos", .float16, [1, -1, 128]),
+            ],
+            outputs: [
+                ioTensor(.hiddenStates, .float16, [1, -1, 2])
+            ])
+
+        XCTAssertThrowsError(
+            try contract.validate(for: descriptor, boundaryTensor: boundary)
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidStageIOContract(
+                    stageID: "layers-0-16",
+                    reason: "transformer_layers stage must not declare input rotary_emb_cos"))
+        }
+    }
+
     func testStageHandleContextValidatesStageIOContractAgainstManifestBoundary() throws {
         let manifest = try DistributedStageManifest.decode(
             from: Data(stageManifestJSON(modelKey: "model", includeTotalLayerCount: true).utf8),
@@ -2383,6 +2438,85 @@ final class DistributedRuntimeTests: XCTestCase {
             "embed", "layers-00-14", "layers-14-28", "head",
         ])
         XCTAssertNoThrow(try manifest.runtimePlan.validate())
+    }
+
+    func testStageManifestLoadsTransformerRoPEInputMetadata() throws {
+        let json =
+            """
+            {
+              "schema": "\(DistributedStageManifest.currentSchema)",
+              "model": "qwen3-0.6b-coreai",
+              "total_layer_count": 28,
+              "position_mode": "full_prefix",
+              "boundary": {
+                "hidden_state": {
+                  "name": "hidden_states",
+                  "shape": [1, -1, 1024],
+                  "scalar_type": "float16"
+                }
+              },
+              "stages": [
+                {"id":"embed","role":"embeddings","layers":"embeddings","bundle":"stages/embed.aimodel","memory_gb":1.0},
+                {
+                  "id": "layers",
+                  "role": "transformer_layers",
+                  "layers": [0, 28],
+                  "bundle": "stages/layers.aimodel",
+                  "memory_gb": 2.0,
+                  "rope": {
+                    "cos_input": "rotary_emb_cos",
+                    "sin_input": "rotary_emb_sin",
+                    "head_dim": 128,
+                    "theta": 1000000
+                  }
+                },
+                {"id":"head","role":"final_norm_head","layers":"norm+lm_head","bundle":"stages/head.aimodel","memory_gb":1.0}
+              ]
+            }
+            """
+
+        let manifest = try DistributedStageManifest.decode(from: Data(json.utf8))
+        let stage = try XCTUnwrap(manifest.stages.first { $0.id == "layers" })
+        let descriptor = try XCTUnwrap(manifest.runtimePlan.stage(id: "layers"))
+
+        XCTAssertEqual(stage.rope?.cosInputName, "rotary_emb_cos")
+        XCTAssertEqual(stage.rope?.sinInputName, "rotary_emb_sin")
+        XCTAssertEqual(stage.rope?.headDim, 128)
+        XCTAssertEqual(stage.rope?.theta, 1_000_000)
+        XCTAssertEqual(descriptor.rope, stage.rope)
+        XCTAssertNoThrow(try manifest.runtimePlan.validate())
+    }
+
+    func testStageManifestRejectsRoPEMetadataOnNonTransformerStage() {
+        let json =
+            """
+            {
+              "schema": "\(DistributedStageManifest.currentSchema)",
+              "model": "qwen3-0.6b-coreai",
+              "total_layer_count": 28,
+              "stages": [
+                {
+                  "id": "embed",
+                  "role": "embeddings",
+                  "layers": "embeddings",
+                  "bundle": "stages/embed.aimodel",
+                  "memory_gb": 1.0,
+                  "rope": {"cos_input": "rotary_emb_cos", "sin_input": "rotary_emb_sin", "head_dim": 128, "theta": 1000000}
+                },
+                {"id":"layers","role":"transformer_layers","layers":[0,28],"bundle":"stages/layers.aimodel","memory_gb":2.0},
+                {"id":"head","role":"final_norm_head","layers":"norm+lm_head","bundle":"stages/head.aimodel","memory_gb":1.0}
+              ]
+            }
+            """
+
+        XCTAssertThrowsError(try DistributedStageManifest.decode(from: Data(json.utf8))) { error in
+            XCTAssertEqual(
+                error as? DistributedStageManifestError,
+                .invalidStageField(
+                    stageID: "embed",
+                    field: "rope",
+                    reason: "rope inputs are only valid for transformer_layers stages"))
+        }
     }
 
     func testStageManifestLoadsPerStageFunctionMetadata() throws {
@@ -3188,15 +3322,29 @@ final class DistributedRuntimeTests: XCTestCase {
         DistributedStageIOTensor(name, shape: shape, scalarType: scalarType)
     }
 
+    private func ioTensor(
+        _ name: String,
+        _ scalarType: DistributedStageIOScalarType,
+        _ shape: [Int]
+    ) -> DistributedStageIOTensor {
+        DistributedStageIOTensor(name: name, shape: shape, scalarType: scalarType)
+    }
+
     private func stage(
         _ id: String,
         _ role: DistributedStageRole,
         range: DistributedLayerRange? = nil,
         assetName: String,
-        workerID: String? = nil
+        workerID: String? = nil,
+        rope: DistributedStageRoPEInputSpec? = nil
     ) -> DistributedStageDescriptor {
         DistributedStageDescriptor(
-            id: id, role: role, layerRange: range, assetName: assetName, workerID: workerID)
+            id: id,
+            role: role,
+            layerRange: range,
+            assetName: assetName,
+            workerID: workerID,
+            rope: rope)
     }
 
     private func makeContext(

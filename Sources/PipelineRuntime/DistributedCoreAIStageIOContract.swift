@@ -241,6 +241,8 @@ private struct DistributedCoreAIStageExecutionIO {
     let hiddenStatesInput: DistributedCoreAIStageNDArrayBinding?
     let hiddenStatesOutput: DistributedCoreAIStageNDArrayBinding?
     let logitsOutput: DistributedCoreAIStageNDArrayBinding?
+    let ropeCosInput: DistributedCoreAIStageNDArrayBinding?
+    let ropeSinInput: DistributedCoreAIStageNDArrayBinding?
 
     static func bound(
         for stage: DistributedStageDescriptor,
@@ -255,14 +257,22 @@ private struct DistributedCoreAIStageExecutionIO {
                 positionIDs: positionIDs,
                 hiddenStatesInput: nil,
                 hiddenStatesOutput: try output(.hiddenStates, descriptor: descriptor),
-                logitsOutput: nil)
+                logitsOutput: nil,
+                ropeCosInput: nil,
+                ropeSinInput: nil)
         case .transformerLayers:
             return DistributedCoreAIStageExecutionIO(
                 inputIDs: nil,
                 positionIDs: positionIDs,
                 hiddenStatesInput: try input(.hiddenStates, descriptor: descriptor),
                 hiddenStatesOutput: try output(.hiddenStates, descriptor: descriptor),
-                logitsOutput: nil)
+                logitsOutput: nil,
+                ropeCosInput: try stage.rope.map {
+                    try input(named: $0.cosInputName, descriptor: descriptor)
+                },
+                ropeSinInput: try stage.rope.map {
+                    try input(named: $0.sinInputName, descriptor: descriptor)
+                })
         case .finalNormHead:
             guard vocabSize != nil else {
                 throw CoreAIPipeline.RuntimeError.modelContract(
@@ -273,7 +283,9 @@ private struct DistributedCoreAIStageExecutionIO {
                 positionIDs: positionIDs,
                 hiddenStatesInput: try input(.hiddenStates, descriptor: descriptor),
                 hiddenStatesOutput: nil,
-                logitsOutput: try output(.logits, descriptor: descriptor))
+                logitsOutput: try output(.logits, descriptor: descriptor),
+                ropeCosInput: nil,
+                ropeSinInput: nil)
         }
     }
 
@@ -282,6 +294,19 @@ private struct DistributedCoreAIStageExecutionIO {
         descriptor: InferenceFunctionDescriptor
     ) throws -> DistributedCoreAIStageNDArrayBinding {
         let name = tensorName.rawValue
+        guard case .ndArray(let ndArrayDescriptor) = descriptor.inputDescriptor(of: name) else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "distributed stage input '\(name)' is not an NDArray")
+        }
+        return DistributedCoreAIStageNDArrayBinding(
+            name: name,
+            descriptor: ndArrayDescriptor)
+    }
+
+    private static func input(
+        named name: String,
+        descriptor: InferenceFunctionDescriptor
+    ) throws -> DistributedCoreAIStageNDArrayBinding {
         guard case .ndArray(let ndArrayDescriptor) = descriptor.inputDescriptor(of: name) else {
             throw CoreAIPipeline.RuntimeError.modelContract(
                 "distributed stage input '\(name)' is not an NDArray")
@@ -541,12 +566,30 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
                 boundaryTensor: boundaryTensor)
             var outputViews = InferenceFunction.MutableViews()
             outputViews.insert(&hiddenOutput, for: hiddenOutputBinding.name)
+            var inputs = [
+                hiddenInputBinding.name: hiddenInput,
+                executionIO.positionIDs.name: positionIDs,
+            ]
+            if let rope = descriptor.rope,
+                let ropeCosInput = executionIO.ropeCosInput,
+                let ropeSinInput = executionIO.ropeSinInput
+            {
+                inputs[ropeCosInput.name] = try DistributedCoreAIStageNDArrayIO.makeRoPEInput(
+                    positionIDs: input.positionIDs,
+                    positionCount: positionCount,
+                    descriptor: ropeCosInput.descriptor,
+                    rope: rope,
+                    component: .cos)
+                inputs[ropeSinInput.name] = try DistributedCoreAIStageNDArrayIO.makeRoPEInput(
+                    positionIDs: input.positionIDs,
+                    positionCount: positionCount,
+                    descriptor: ropeSinInput.descriptor,
+                    rope: rope,
+                    component: .sin)
+            }
             try await run(
                 activeFunction,
-                inputs: [
-                    hiddenInputBinding.name: hiddenInput,
-                    executionIO.positionIDs.name: positionIDs,
-                ],
+                inputs: inputs,
                 outputViews: consume outputViews,
                 requestState: &requestState)
             try traceHiddenArrayIfRequested(
@@ -1070,6 +1113,11 @@ fileprivate struct DistributedCoreAIStageTensorSummary {
 }
 
 enum DistributedCoreAIStageNDArrayIO {
+    enum RoPEComponent {
+        case cos
+        case sin
+    }
+
     static func makeInputIDs(
         tokenIDs: [Int32],
         descriptor: NDArrayDescriptor
@@ -1097,6 +1145,41 @@ enum DistributedCoreAIStageNDArrayIO {
                     columns: positionIDs.count,
                     tensorName: "position_ids")))
         fillInt32(&array, positionIDs)
+        return array
+    }
+
+    static func makeRoPEInput(
+        positionIDs: [Int32],
+        positionCount: Int,
+        descriptor: NDArrayDescriptor,
+        rope: DistributedStageRoPEInputSpec,
+        component: RoPEComponent
+    ) throws -> NDArray {
+        try requireFloatingScalarType(descriptor, tensorName: "rope")
+        guard positionCount > 0 else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "rope position count must be positive")
+        }
+        guard positionIDs.count >= positionCount else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "position_ids count must cover rope position count")
+        }
+        let shape = try DistributedCoreAIStageNDArrayShape.resolvedRoPEInput(
+            descriptor.shape,
+            positionCount: positionCount,
+            headDim: rope.headDim,
+            tensorName: "rope")
+        let activePositions = Array(positionIDs.suffix(positionCount))
+        var array = NDArray(descriptor: descriptor.resolvingDynamicDimensions(shape))
+        switch descriptor.scalarType {
+        case .float16:
+            fillRoPE(&array, activePositions, rope: rope, component: component, as: Float16.self)
+        case .float32:
+            fillRoPE(&array, activePositions, rope: rope, component: component, as: Float.self)
+        default:
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "rope scalar type \(descriptor.scalarType) is not supported for distributed stage IO")
+        }
         return array
     }
 
@@ -1243,6 +1326,31 @@ enum DistributedCoreAIStageNDArrayIO {
     private static func fillInt32(_ array: inout NDArray, _ elements: [Int32]) {
         var view = array.mutableView(as: Int32.self)
         view.copyElements(fromContentsOf: elements)
+    }
+
+    private static func fillRoPE<T: BinaryFloatingPoint & BitwiseCopyable>(
+        _ array: inout NDArray,
+        _ positionIDs: [Int32],
+        rope: DistributedStageRoPEInputSpec,
+        component: RoPEComponent,
+        as _: T.Type
+    ) {
+        let halfDim = rope.headDim / 2
+        var values: [T] = []
+        values.reserveCapacity(positionIDs.count * rope.headDim)
+        for positionID in positionIDs {
+            let position = Double(positionID)
+            for column in 0..<rope.headDim {
+                let frequencyIndex = column % halfDim
+                let exponent = Double(2 * frequencyIndex) / Double(rope.headDim)
+                let invFrequency = 1.0 / pow(rope.theta, exponent)
+                let angle = position * invFrequency
+                let value = component == .cos ? cos(angle) : sin(angle)
+                values.append(T(value))
+            }
+        }
+        var view = array.mutableView(as: T.self)
+        view.copyElements(fromContentsOf: values)
     }
 
     private static func readRank3<T: BitwiseCopyable>(
@@ -1490,6 +1598,26 @@ enum DistributedCoreAIStageNDArrayShape {
             descriptorShape,
             actualShape: [boundaryTensor.shape[0], positionCount, boundaryTensor.shape[2]],
             tensorName: "hidden_states")
+    }
+
+    static func resolvedRoPEInput(
+        _ descriptorShape: [Int],
+        positionCount: Int,
+        headDim: Int,
+        tensorName: String
+    ) throws -> [Int] {
+        guard positionCount > 0 else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "\(tensorName) position count must be positive")
+        }
+        guard headDim > 0 else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "\(tensorName) head_dim must be positive")
+        }
+        return try resolvedExact(
+            descriptorShape,
+            actualShape: [1, positionCount, headDim],
+            tensorName: tensorName)
     }
 
     static func resolvedLogitsOutput(

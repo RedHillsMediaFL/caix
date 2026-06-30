@@ -141,6 +141,56 @@ public struct DistributedStageFunctionMap: Codable, Hashable, Sendable {
     }
 }
 
+/// Optional RoPE inputs that are computed outside a staged transformer Core AI graph.
+public struct DistributedStageRoPEInputSpec: Codable, Hashable, Sendable {
+    public let cosInputName: String
+    public let sinInputName: String
+    public let headDim: Int
+    public let theta: Double
+
+    enum CodingKeys: String, CodingKey {
+        case cosInputName = "cos_input"
+        case sinInputName = "sin_input"
+        case headDim = "head_dim"
+        case theta
+    }
+
+    public init(
+        cosInputName: String,
+        sinInputName: String,
+        headDim: Int,
+        theta: Double
+    ) {
+        self.cosInputName = cosInputName
+        self.sinInputName = sinInputName
+        self.headDim = headDim
+        self.theta = theta
+    }
+
+    var validationErrorMessage: String? {
+        if Self.trimmed(cosInputName).isEmpty {
+            return "rope cos_input must be non-empty"
+        }
+        if Self.trimmed(sinInputName).isEmpty {
+            return "rope sin_input must be non-empty"
+        }
+        if cosInputName == sinInputName {
+            return "rope cos_input and sin_input must differ"
+        }
+        if headDim <= 0 || !headDim.isMultiple(of: 2) {
+            return "rope head_dim must be a positive even integer"
+        }
+        if !theta.isFinite || theta <= 0 {
+            return "rope theta must be positive"
+        }
+        return nil
+    }
+
+    private static func trimmed(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
 /// One stage bundle assignment. `assetName` is the manifest asset key or local bundle label.
 public struct DistributedStageDescriptor: Codable, Hashable, Sendable {
     public let id: String
@@ -151,6 +201,7 @@ public struct DistributedStageDescriptor: Codable, Hashable, Sendable {
     public let functionMap: DistributedStageFunctionMap?
     public let vocabSize: Int?
     public let workerID: String?
+    public let rope: DistributedStageRoPEInputSpec?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -161,6 +212,7 @@ public struct DistributedStageDescriptor: Codable, Hashable, Sendable {
         case functionMap = "function_map"
         case vocabSize = "vocab_size"
         case workerID = "worker_id"
+        case rope
     }
 
     public init(
@@ -171,7 +223,8 @@ public struct DistributedStageDescriptor: Codable, Hashable, Sendable {
         decodeAssetName: String? = nil,
         functionMap: DistributedStageFunctionMap? = nil,
         vocabSize: Int? = nil,
-        workerID: String? = nil
+        workerID: String? = nil,
+        rope: DistributedStageRoPEInputSpec? = nil
     ) {
         self.id = id
         self.role = role
@@ -181,6 +234,7 @@ public struct DistributedStageDescriptor: Codable, Hashable, Sendable {
         self.functionMap = functionMap
         self.vocabSize = vocabSize
         self.workerID = workerID
+        self.rope = rope
     }
 }
 
@@ -304,6 +358,7 @@ public struct DistributedStageManifestStage: Codable, Hashable, Sendable {
     public let functionMap: DistributedStageFunctionMap?
     public let vocabSize: Int?
     public let memoryGB: Double
+    public let rope: DistributedStageRoPEInputSpec?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -316,6 +371,7 @@ public struct DistributedStageManifestStage: Codable, Hashable, Sendable {
         case functionMap = "function_map"
         case vocabSize = "vocab_size"
         case memoryGB = "memory_gb"
+        case rope
     }
 
     public init(
@@ -328,7 +384,8 @@ public struct DistributedStageManifestStage: Codable, Hashable, Sendable {
         resolvedDecodeAssetPath: String? = nil,
         functionMap: DistributedStageFunctionMap? = nil,
         vocabSize: Int? = nil,
-        memoryGB: Double
+        memoryGB: Double,
+        rope: DistributedStageRoPEInputSpec? = nil
     ) {
         self.id = id
         self.role = role
@@ -340,6 +397,7 @@ public struct DistributedStageManifestStage: Codable, Hashable, Sendable {
         self.functionMap = functionMap
         self.vocabSize = vocabSize
         self.memoryGB = memoryGB
+        self.rope = rope
     }
 
     public var layerRange: DistributedLayerRange? {
@@ -363,7 +421,8 @@ public struct DistributedStageManifestStage: Codable, Hashable, Sendable {
             decodeAssetName: decodeAssetName,
             functionMap: functionMap,
             vocabSize: vocabSize,
-            workerID: workerID)
+            workerID: workerID,
+            rope: rope)
     }
 }
 
@@ -564,8 +623,16 @@ public struct DistributedStageIOContract: Codable, Hashable, Sendable {
                 boundaryTensor: boundaryTensor)
 
         case .transformerLayers:
-            try Self.requireOnlyTensors(
-                [.hiddenStates, .positionIDs],
+            var allowedInputs = Set([
+                DistributedStageIOTensorName.hiddenStates.rawValue,
+                DistributedStageIOTensorName.positionIDs.rawValue,
+            ])
+            if let rope = stage.rope {
+                allowedInputs.insert(rope.cosInputName)
+                allowedInputs.insert(rope.sinInputName)
+            }
+            try Self.requireOnlyTensorNames(
+                allowedInputs,
                 in: inputByName,
                 kind: "input",
                 stage: stage)
@@ -594,6 +661,20 @@ public struct DistributedStageIOContract: Codable, Hashable, Sendable {
                 kind: "output",
                 stageID: stage.id,
                 boundaryTensor: boundaryTensor)
+            if let rope = stage.rope {
+                let cosInput = try Self.requireTensor(
+                    rope.cosInputName,
+                    in: inputByName,
+                    kind: "input",
+                    stageID: stage.id)
+                let sinInput = try Self.requireTensor(
+                    rope.sinInputName,
+                    in: inputByName,
+                    kind: "input",
+                    stageID: stage.id)
+                try Self.validateRoPETensor(cosInput, rope: rope, stageID: stage.id)
+                try Self.validateRoPETensor(sinInput, rope: rope, stageID: stage.id)
+            }
 
         case .finalNormHead:
             try Self.requireOnlyTensors(
@@ -723,7 +804,19 @@ public struct DistributedStageIOContract: Codable, Hashable, Sendable {
         kind: String,
         stage: DistributedStageDescriptor
     ) throws {
-        let allowed = Set(allowedNames.map(\.rawValue))
+        try requireOnlyTensorNames(
+            Set(allowedNames.map(\.rawValue)),
+            in: tensors,
+            kind: kind,
+            stage: stage)
+    }
+
+    private static func requireOnlyTensorNames(
+        _ allowed: Set<String>,
+        in tensors: [String: DistributedStageIOTensor],
+        kind: String,
+        stage: DistributedStageDescriptor
+    ) throws {
         for name in tensors.keys.sorted() where !allowed.contains(name) {
             throw error(
                 stageID: stage.id,
@@ -757,6 +850,35 @@ public struct DistributedStageIOContract: Codable, Hashable, Sendable {
             }
         }
         return tensor
+    }
+
+    private static func requireTensor(
+        _ name: String,
+        in tensors: [String: DistributedStageIOTensor],
+        kind: String,
+        stageID: String
+    ) throws -> DistributedStageIOTensor {
+        guard let tensor = tensors[name] else {
+            throw error(stageID: stageID, "\(kind) \(name) is required")
+        }
+        return tensor
+    }
+
+    private static func validateRoPETensor(
+        _ tensor: DistributedStageIOTensor,
+        rope: DistributedStageRoPEInputSpec,
+        stageID: String
+    ) throws {
+        guard tensor.scalarType.isFloatingPoint else {
+            throw error(
+                stageID: stageID,
+                "input \(tensor.name) scalar_type \(tensor.scalarType.rawValue) is not floating-point")
+        }
+        guard shape(tensor.shape, matches: [1, -1, rope.headDim]) else {
+            throw error(
+                stageID: stageID,
+                "input \(tensor.name) shape \(tensor.shape) does not match [1, -1, \(rope.headDim)]")
+        }
     }
 
     private static func shape(_ actual: [Int], matches expected: [Int]) -> Bool {
@@ -982,6 +1104,18 @@ public struct DistributedStageManifest: Hashable, Sendable {
             throw DistributedStageManifestError.invalidStageField(
                 stageID: id, field: "function_map", reason: reason)
         }
+        if let rope = rawStage.rope {
+            if role != .transformerLayers {
+                throw DistributedStageManifestError.invalidStageField(
+                    stageID: id,
+                    field: "rope",
+                    reason: "rope inputs are only valid for transformer_layers stages")
+            }
+            if let reason = rope.validationErrorMessage {
+                throw DistributedStageManifestError.invalidStageField(
+                    stageID: id, field: "rope", reason: reason)
+            }
+        }
         let decodeAssetName = firstNonEmpty([
             rawStage.decodeAssetName, rawStage.decodeAsset, rawStage.decodeBundle,
         ])
@@ -1003,7 +1137,8 @@ public struct DistributedStageManifest: Hashable, Sendable {
             },
             functionMap: rawStage.functionMap,
             vocabSize: vocabSize,
-            memoryGB: memoryGB)
+            memoryGB: memoryGB,
+            rope: rawStage.rope)
     }
 
     private static func deriveTotalLayerCount(
@@ -1172,6 +1307,7 @@ private struct RawDistributedStageManifestStage: Decodable {
     let decodeBundle: String?
     let functionMap: DistributedStageFunctionMap?
     let vocabSize: FlexibleInt?
+    let rope: DistributedStageRoPEInputSpec?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -1195,6 +1331,7 @@ private struct RawDistributedStageManifestStage: Decodable {
         case decodeBundle = "decode_bundle"
         case functionMap = "function_map"
         case vocabSize = "vocab_size"
+        case rope
     }
 }
 
