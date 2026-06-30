@@ -90,6 +90,11 @@ check_repo_evidence_path() {
   fi
 }
 
+prompt_count() {
+  local path="$1"
+  awk 'NF { count += 1 } END { print count + 0 }' "$path"
+}
+
 check_token_match_evidence() {
   local file="$1"
   local label="$2"
@@ -100,12 +105,13 @@ check_token_match_evidence() {
     return
   fi
 
-  local result mode model manifest caix_commit prompts max_tokens temperature token_match raw_log
+  local result mode model manifest caix_commit prompt_set prompts max_tokens temperature token_match raw_log
   result="$(evidence_value result "$file")"
   mode="$(evidence_value mode "$file")"
   model="$(evidence_value model "$file")"
   manifest="$(evidence_value manifest "$file")"
   caix_commit="$(evidence_value caix_commit "$file")"
+  prompt_set="$(evidence_value prompt_set "$file")"
   prompts="$(evidence_value prompts "$file")"
   max_tokens="$(evidence_value max_tokens "$file")"
   temperature="$(evidence_value temperature "$file")"
@@ -136,6 +142,10 @@ check_token_match_evidence() {
     missing "$label evidence raw_log is missing: $file"
   elif ! check_repo_evidence_path "$label" manifest "$manifest" "$file"; then
     return
+  elif ! check_repo_evidence_path "$label" prompt_set "$prompt_set" "$file"; then
+    return
+  elif [[ "$(prompt_count "$REPO_DIR/$prompt_set")" != "$prompts" ]]; then
+    missing "$label evidence prompts=$prompts does not match prompt_set line count: $prompt_set"
   elif ! check_repo_evidence_path "$label" raw_log "$raw_log" "$file"; then
     return
   else

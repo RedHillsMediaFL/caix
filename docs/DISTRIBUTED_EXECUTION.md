@@ -379,8 +379,8 @@ Still held:
 
 ### 9.3 Equivalence procedure
 
-1. Fixed prompt set (e.g. 8 prompts spanning short / multi-turn / code), `temperature = 0`,
-   `maxTokens = 128`, fixed `kvCapacity`.
+1. Fixed prompt set from `docs/distributed-evidence/qwen3-0.6b-prompts.txt`,
+   `temperature = 0`, `maxTokens = 128`, fixed `kvCapacity`.
 2. Oracle: run the **monolithic** Qwen3-0.6B bundle through `LLMEngine` (not `PipelinedLLM` —
    the explicit engine is the reference) and record the generated token-id sequence per prompt.
 3. Candidate: run the same prompts through `StagedEngine` over the 3-stage split.

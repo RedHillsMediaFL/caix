@@ -59,6 +59,7 @@ run "$SCRIPT_DIR/check-converter-cluster-metadata.sh"
 run "$SCRIPT_DIR/check-conversion-ledger.sh"
 run "$SCRIPT_DIR/check-conversion-gap-audit.sh"
 run "$SCRIPT_DIR/check-cluster-plan.sh"
+run "$SCRIPT_DIR/check-distributed-evidence-contract.sh"
 run "$SCRIPT_DIR/check-benchmark-raw.sh" --require-tracked
 if [[ "$STRICT_BENCHMARK_GAPS" == "1" ]]; then
   run "$SCRIPT_DIR/check-benchmark-gaps.sh" --strict

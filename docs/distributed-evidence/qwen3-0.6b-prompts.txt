@@ -1,0 +1,8 @@
+Name one primary color.
+Write one factual sentence about local inference on Apple silicon.
+Return a JSON object with keys "language" and "runtime" for Swift and Core AI.
+Explain in two sentences why logits should stay on the final stage.
+Write a Swift function signature for adding two Int values.
+List three constraints for a safe distributed model test.
+Answer with one word: what device family runs macOS?
+Summarize pipeline parallelism in one short paragraph.
