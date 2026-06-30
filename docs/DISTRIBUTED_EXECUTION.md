@@ -332,11 +332,10 @@ re-prefill. This is honest given KV locality; mid-pipeline KV migration is out o
 Built today (`Sources/PipelineCLI/Cluster.swift`, documented in `docs/CLUSTER.md`):
 - `caix cluster plan --manifest … | --model …` — dry-run placement. Read-only; no model load,
   no workers, no tensors.
-
-Target (not built):
-- `caix cluster join --coordinator <host:port> --stage <dir>` — run a worker for one stage.
-- `caix serve --cluster <manifest>` — run the coordinator; same HTTP API as `serve` today, but
-  the model handle is a staged engine instead of a single `PersistentModel`.
+- `caix cluster join --coordinator <host:port> --manifest <path> --stage <dir>` — run one staged
+  worker.
+- `caix serve --cluster <manifest>` — run the minimal coordinator POC with a staged engine.
+- `caix deploy verify` — check multi-host visibility and link-speed warnings before hardware tests.
 
 Auth between coordinator and workers is out of scope for milestones 1–4 (loopback, then a
 trusted point-to-point Thunderbolt Bridge / LAN link). Any later pre-shared cluster secret on

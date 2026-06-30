@@ -82,6 +82,7 @@ class Caix < Formula
     assert_match("--cluster", shell_output("#{bin}/caix --help"))
     assert_match("--prompt-tokens", shell_output("#{bin}/caix serve --help"))
     assert_match("--join-timeout", shell_output("#{bin}/caix serve --help"))
+    system pkgshare/"scripts/check-tiny-cluster-smoke.sh", "--help"
 
     output = shell_output("#{bin}/caix cluster plan " \
                           "--manifest #{pkgshare}/examples/cluster-stage-manifest.json " \

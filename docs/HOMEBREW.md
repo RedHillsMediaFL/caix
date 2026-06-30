@@ -104,3 +104,11 @@ If that warns, fix wiring before running the cluster smoke. Run the distributed 
 installed `caix`, not a checkout binary. Use `caix serve --cluster ... --join-timeout 120` on the
 coordinator and `caix cluster join ... --connect-timeout 120` on workers so failures exit cleanly.
 Do not publish distributed release notes until this gate passes.
+
+To print exact commands for the tiny staged smoke:
+
+```bash
+"$caix_prefix/share/caix/scripts/check-tiny-cluster-smoke.sh" --caix "$(command -v caix)" \
+  --manifest /path/to/qwen3-tiny-random-coreai-staged-rope-input-f16-2x1/stage-manifest.json \
+  --coordinator <main-mac-host>:1237 --print-commands
+```

@@ -1,11 +1,14 @@
 # Cluster Planning
 
-Planned feature. This page documents the first user-visible dry-run surface only.
+This page documents dry-run planning and the minimal staged-worker POC.
 
 `caix cluster plan` reads local staged-bundle metadata and prints a placement plan. It does not
 load Core AI models, start workers, transfer tensors, benchmark, download, or upload anything.
 JSON output includes a `runtime_plan` object using the same `DistributedStagePlan` contract that
 the runtime validates, including `boundary_tensor`.
+
+`caix serve --cluster` and `caix cluster join` load Core AI stage bundles and run the staged POC.
+Use tiny random staged assets for fast transport checks. Real Qwen remains gated on stage parity.
 
 ## Commands
 
@@ -14,10 +17,12 @@ caix cluster plan --manifest qwen3-stages.json --workers main=64,mbp=32,mini=16
 caix cluster plan --model models/exports/qwen3-staged --worker main=64 --worker mini=16
 caix cluster plan --manifest qwen3-stages.json --json
 caix deploy verify --endpoint main.local:1237 --endpoint mbp.local:1237
+caix serve --cluster stage-manifest.json --prompt-tokens 1,2,3 --max-tokens 1 --join-timeout 120 --once
+caix cluster join --coordinator main.local:1237 --manifest stage-manifest.json --stage stages/01-layers.aimodel --connect-timeout 120
 ```
 
-`caix deploy verify` checks caix HTTP visibility across distinct endpoint hosts. It does not load
-models, run staged inference, or prove tensor transport.
+`caix deploy verify` checks caix HTTP visibility and link speed across distinct endpoint hosts. It
+does not load models, run staged inference, or prove tensor transport.
 
 `--model` reads `metadata.json` from the bundle and expects a `cluster.stages` block. Current
 single-bundle exports do not include that block, so the command reports a TODO telling the exporter
@@ -28,15 +33,15 @@ with enough remaining memory. Worker memory is a dry-run budget in GB.
 
 ## Thunderbolt Test Gate
 
-Do not ask for MacBook Thunderbolt testing yet. The gate is:
+Before asking for MacBook Thunderbolt testing, the gate is:
 
-1. Same-machine staged Qwen3-0.6B matches the monolithic bundle token-for-token.
-2. The same stage split works across two local processes over loopback.
-3. `caix cluster join` and `caix serve --cluster` can run the same manifest used by the loopback test.
+1. Same-machine staged POC works over loopback.
+2. `caix deploy verify` sees both machines and reports acceptable link speed.
+3. Tiny staged smoke runs through Brew-installed `caix` with explicit timeouts.
+4. Real Qwen3-0.6B stays unpublished until parity/load gates pass.
 
-After those pass, test one MacBook stage over Thunderbolt Bridge. Until then, keep testing local.
-Before the Thunderbolt test, install caix through Brew on the test machine and run
-`scripts/check-publication-gates.sh --distributed --brew-caix "$(command -v caix)"`.
+Install caix through Brew on the test machine and run the installed check scripts, not checkout
+binaries.
 
 Use the readiness gate before asking for hardware:
 
@@ -44,8 +49,7 @@ Use the readiness gate before asking for hardware:
 scripts/check-publication-gates.sh --distributed --brew-caix "$(command -v caix)"
 ```
 
-It must print `distributed is ready for Thunderbolt testing`. If it prints `not ready`, keep work
-local.
+It must print `distributed is ready for Thunderbolt testing`. If it prints `not ready`, keep work local.
 
 ## Stage Manifest Format
 
@@ -135,11 +139,11 @@ python3 python/converter/convert.py --bundle <bundle> --attach-cluster-manifest 
 This validates stage asset paths, `main.mlirb`, layer coverage, function maps, boundary metadata,
 and final-stage `vocab_size`. It does not create staged assets.
 
-## Current TODOs
+## Current Status
 
-- `caix cluster join --help` exists; worker runtime is not implemented.
-- `caix serve --cluster` is advertised; coordinator runtime is not implemented.
-- The converter can attach validated cluster metadata for existing staged assets, but it does not
-  create staged assets.
-- Core AI stage execution exists for `.none`, `.stateful`, and `.explicitOutputs` stage graphs.
-- Runtime tensor transport and worker protocols are intentionally outside this dry-run command.
+- `caix cluster plan` validates manifests without loading models.
+- `caix serve --cluster` and `caix cluster join` run the minimal socket-backed staged POC.
+- `scripts/check-tiny-cluster-smoke.sh` prints or runs tiny staged smoke commands with timeouts.
+- The converter can attach validated cluster metadata for existing staged assets, but staged asset
+  creation remains a separate export path.
+- Real Qwen3-0.6B staged bundles are not publishable until parity/load gates pass.
