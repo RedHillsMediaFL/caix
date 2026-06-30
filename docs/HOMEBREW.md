@@ -93,10 +93,16 @@ caix_prefix="$(brew --prefix caix)"
   --brew-caix "$(command -v caix)"
 ```
 
-Then connect the second Mac and verify the link from the installed `caix`:
+Then connect the second Mac. On each Mac, start the installed server for endpoint checks:
 
 ```bash
 caix_prefix="$(brew --prefix caix)"
+caix serve --host 0.0.0.0 --port 1237
+```
+
+From the coordinator, verify both machines and link speed:
+
+```bash
 "$caix_prefix/share/caix/scripts/check-brew-distributed.sh" --caix "$(command -v caix)" --ready \
   --manifest /path/to/qwen3-tiny-random-coreai-staged-rope-input-f16-2x1/stage-manifest.json \
   --endpoint <main-mac-host>:1237 --endpoint <macbook-host>:1237 \
@@ -131,6 +137,7 @@ To print exact commands for the tiny staged smoke:
 "$caix_prefix/share/caix/scripts/check-tiny-cluster-smoke.sh" --caix "$(command -v caix)" \
   --manifest /path/to/qwen3-tiny-random-coreai-staged-rope-input-f16-2x1/stage-manifest.json \
   --coordinator <main-mac-host>:1237 \
+  --bind-host 0.0.0.0 \
   --worker-root /path/on/macbook/qwen3-tiny-random-coreai-staged-rope-input-f16-2x1 \
   --print-commands
 ```

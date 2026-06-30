@@ -17,7 +17,7 @@ caix cluster plan --manifest qwen3-stages.json --workers main=64,mbp=32,mini=16
 caix cluster plan --model models/exports/qwen3-staged --worker main=64 --worker mini=16
 caix cluster plan --manifest qwen3-stages.json --json
 caix deploy verify --endpoint main.local:1237 --endpoint mbp.local:1237
-caix serve --cluster stage-manifest.json --prompt-tokens 1,2,3 --max-tokens 1 --join-timeout 120 --once
+caix serve --cluster stage-manifest.json --host 0.0.0.0 --prompt-tokens 1,2,3 --max-tokens 1 --join-timeout 120 --once
 caix cluster join --coordinator main.local:1237 --manifest stage-manifest.json --stage stages/01-layers.aimodel --connect-timeout 120
 ```
 
