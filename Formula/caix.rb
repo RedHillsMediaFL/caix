@@ -83,6 +83,7 @@ class Caix < Formula
     assert_match("--cluster", shell_output("#{bin}/caix --help"))
     assert_match("--prompt-tokens", shell_output("#{bin}/caix serve --help"))
     assert_match("--join-timeout", shell_output("#{bin}/caix serve --help"))
+    system pkgshare/"scripts/check-distributed-readiness.sh", "--help"
     system pkgshare/"scripts/check-tiny-cluster-smoke.sh", "--help"
     system pkgshare/"scripts/check-stage-bundle-copy.sh", "--help"
 

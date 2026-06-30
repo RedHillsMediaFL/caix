@@ -87,7 +87,8 @@ binary first:
 brew tap RedHillsMediaFL/caix
 brew reinstall caix
 brew test caix
-scripts/check-distributed-readiness.sh --tiny-poc \
+caix_prefix="$(brew --prefix caix)"
+"$caix_prefix/share/caix/scripts/check-distributed-readiness.sh" --tiny-poc \
   --tiny-manifest /path/to/qwen3-tiny-random-coreai-staged-rope-input-f16-2x1/stage-manifest.json \
   --brew-caix "$(command -v caix)"
 ```

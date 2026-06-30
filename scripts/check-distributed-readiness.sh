@@ -56,6 +56,16 @@ missing() {
   not_ready=1
 }
 
+example_manifest_path() {
+  if [[ -f "$REPO_DIR/docs/examples/cluster-stage-manifest.json" ]]; then
+    printf '%s\n' "$REPO_DIR/docs/examples/cluster-stage-manifest.json"
+  elif [[ -f "$REPO_DIR/examples/cluster-stage-manifest.json" ]]; then
+    printf '%s\n' "$REPO_DIR/examples/cluster-stage-manifest.json"
+  else
+    return 1
+  fi
+}
+
 evidence_value() {
   local key="$1"
   local file="$2"
@@ -470,10 +480,11 @@ else
   ready "caix binary: $caix_binary"
   "$caix_binary" --version || missing "caix --version failed"
 
-  if json="$("$caix_binary" cluster plan \
-      --manifest "$REPO_DIR/docs/examples/cluster-stage-manifest.json" \
-      --workers main=4,mini=2 \
-      --json 2>"$plan_err")"; then
+  if example_manifest="$(example_manifest_path)"; then
+    if json="$("$caix_binary" cluster plan \
+        --manifest "$example_manifest" \
+        --workers main=4,mini=2 \
+        --json 2>"$plan_err")"; then
     if CLUSTER_PLAN_JSON="$json" python3 - <<'PY'
 import json
 import os
@@ -510,8 +521,11 @@ PY
     else
       missing "cluster plan JSON did not match the distributed runtime contract"
     fi
+    else
+      missing "cluster plan failed: $(tr '\n' ' ' <"$plan_err" | sed 's/[[:space:]]*$//')"
+    fi
   else
-    missing "cluster plan failed: $(tr '\n' ' ' <"$plan_err" | sed 's/[[:space:]]*$//')"
+    missing "example cluster-stage-manifest.json was not found"
   fi
 
   if "$caix_binary" cluster join --help >/dev/null 2>&1; then
@@ -539,7 +553,7 @@ else
 fi
 
 if [[ -n "$brew_caix_binary" ]]; then
-  brew_manifest="$REPO_DIR/docs/examples/cluster-stage-manifest.json"
+  brew_manifest="$(example_manifest_path || true)"
   if [[ "$tiny_poc" == "1" ]]; then
     brew_manifest="$tiny_manifest"
   fi
