@@ -109,6 +109,102 @@ extension DistributedStageHandleFactoryContext {
     }
 }
 
+enum DistributedCoreAIStageCacheContract {
+    case none
+    case stateful
+    case explicitOutputs
+}
+
+struct DistributedCoreAIStageCacheIO {
+    let contract: DistributedCoreAIStageCacheContract
+    let keyCacheName: String?
+    let valueCacheName: String?
+    let keyCacheDescriptor: NDArrayDescriptor?
+    let valueCacheDescriptor: NDArrayDescriptor?
+    let keyCacheOutputDescriptor: NDArrayDescriptor?
+    let valueCacheOutputDescriptor: NDArrayDescriptor?
+
+    static func extracted(from descriptor: InferenceFunctionDescriptor) throws
+        -> DistributedCoreAIStageCacheIO
+    {
+        let hasStateKV = descriptor.stateNames.count == 2
+        let hasExplicitKV =
+            descriptor.stateNames.isEmpty
+            && descriptor.inputNames.contains("keyCache")
+            && descriptor.inputNames.contains("valueCache")
+            && descriptor.outputNames.contains("keyCache")
+            && descriptor.outputNames.contains("valueCache")
+        if hasStateKV {
+            let keyName = pick("keyCache", descriptor.stateNames, index: 0)
+            let valueName = pick("valueCache", descriptor.stateNames, index: 1)
+            guard case .ndArray(let keyDesc) = descriptor.stateDescriptor(of: keyName),
+                case .ndArray(let valueDesc) = descriptor.stateDescriptor(of: valueName)
+            else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "distributed stage KV cache states are not NDArrays")
+            }
+            return DistributedCoreAIStageCacheIO(
+                contract: .stateful,
+                keyCacheName: keyName,
+                valueCacheName: valueName,
+                keyCacheDescriptor: keyDesc,
+                valueCacheDescriptor: valueDesc,
+                keyCacheOutputDescriptor: keyDesc,
+                valueCacheOutputDescriptor: valueDesc)
+        }
+        if hasExplicitKV {
+            let keyName = pick("keyCache", descriptor.inputNames, index: 2)
+            let valueName = pick("valueCache", descriptor.inputNames, index: 3)
+            guard case .ndArray(let inputKeyDesc) = descriptor.inputDescriptor(of: keyName),
+                case .ndArray(let inputValueDesc) = descriptor.inputDescriptor(of: valueName)
+            else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "distributed stage KV cache inputs are not NDArrays")
+            }
+            guard case .ndArray(let outputKeyDesc) = descriptor.outputDescriptor(of: keyName),
+                case .ndArray(let outputValueDesc) = descriptor.outputDescriptor(of: valueName)
+            else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "distributed stage KV cache outputs are not NDArrays")
+            }
+            return DistributedCoreAIStageCacheIO(
+                contract: .explicitOutputs,
+                keyCacheName: keyName,
+                valueCacheName: valueName,
+                keyCacheDescriptor: inputKeyDesc,
+                valueCacheDescriptor: inputValueDesc,
+                keyCacheOutputDescriptor: outputKeyDesc,
+                valueCacheOutputDescriptor: outputValueDesc)
+        }
+        if descriptor.stateNames.isEmpty
+            && !descriptor.inputNames.contains("keyCache")
+            && !descriptor.inputNames.contains("valueCache")
+            && !descriptor.outputNames.contains("keyCache")
+            && !descriptor.outputNames.contains("valueCache")
+        {
+            return DistributedCoreAIStageCacheIO(
+                contract: .none,
+                keyCacheName: nil,
+                valueCacheName: nil,
+                keyCacheDescriptor: nil,
+                valueCacheDescriptor: nil,
+                keyCacheOutputDescriptor: nil,
+                valueCacheOutputDescriptor: nil)
+        }
+        throw CoreAIPipeline.RuntimeError.modelContract(
+            "expected no KV cache, stateful KV states, or explicit-cache inputs/outputs; "
+                + ioSummary(descriptor))
+    }
+
+    private static func pick(_ wanted: String, _ names: [String], index: Int) -> String {
+        names.contains(wanted) ? wanted : names[index]
+    }
+
+    private static func ioSummary(_ descriptor: InferenceFunctionDescriptor) -> String {
+        "inputs=\(descriptor.inputNames), outputs=\(descriptor.outputNames), states=\(descriptor.stateNames)"
+    }
+}
+
 public final class DistributedCoreAIStageHandleFactory: DistributedStageHandleFactory {
     private let functionName: String?
     private let vocabSize: Int?
@@ -136,6 +232,7 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
 
     private let model: AIModel
     private let functionDescriptor: InferenceFunctionDescriptor
+    private let cacheIO: DistributedCoreAIStageCacheIO
 
     private init(
         descriptor: DistributedStageDescriptor,
@@ -143,7 +240,8 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
         functionName: String,
         ioContract: DistributedStageIOContract,
         model: AIModel,
-        functionDescriptor: InferenceFunctionDescriptor
+        functionDescriptor: InferenceFunctionDescriptor,
+        cacheIO: DistributedCoreAIStageCacheIO
     ) {
         self.descriptor = descriptor
         self.assetURL = assetURL
@@ -151,6 +249,7 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
         self.ioContract = ioContract
         self.model = model
         self.functionDescriptor = functionDescriptor
+        self.cacheIO = cacheIO
     }
 
     public static func load(
@@ -177,13 +276,15 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
             functionName: resolvedFunctionName,
             descriptor: functionDescriptor,
             vocabSize: resolvedVocabSize)
+        let cacheIO = try DistributedCoreAIStageCacheIO.extracted(from: functionDescriptor)
         return DistributedCoreAIStageHandle(
             descriptor: context.descriptor,
             assetURL: assetURL,
             functionName: resolvedFunctionName,
             ioContract: ioContract,
             model: model,
-            functionDescriptor: functionDescriptor)
+            functionDescriptor: functionDescriptor,
+            cacheIO: cacheIO)
     }
 
     public func allocate(_ allocation: DistributedStageAllocation) async throws {
@@ -210,7 +311,7 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
     }
 
     private func unimplemented(_ operation: String) -> CoreAIPipeline.RuntimeError {
-        _ = (model, functionDescriptor)
+        _ = (model, functionDescriptor, cacheIO)
         return .modelContract(
             "distributed Core AI stage \(operation) is not implemented yet")
     }
