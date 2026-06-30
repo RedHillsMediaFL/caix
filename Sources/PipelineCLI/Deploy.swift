@@ -1,5 +1,6 @@
 import Dispatch
 import Foundation
+import MachineStats
 
 private struct DeployVerifyConfig: Sendable {
     var endpoints: [String]
@@ -371,6 +372,9 @@ private func requestDeployVerifyEndpoint(
         if elapsedMS > config.maxLatencyMS {
             warnings.append("latency \(elapsedMS) ms exceeds \(config.maxLatencyMS) ms")
         }
+        if deployVerifySameMachine(machineName, MachineStats.machineName()) {
+            warnings.append("local machine endpoint; speed and latency do not prove the second-machine link")
+        }
         if let warning = speed?.warning {
             warnings.append(warning)
         }
@@ -553,6 +557,16 @@ private func deployVerifyMachineKey(_ result: DeployVerifyEndpointResult) -> Str
         return "machine:\(machineName.lowercased())"
     }
     return "host:\(result.host.lowercased())"
+}
+
+private func deployVerifySameMachine(_ remoteName: String?, _ localName: String) -> Bool {
+    guard let remote = remoteName?.trimmingCharacters(in: .whitespacesAndNewlines),
+        !remote.isEmpty,
+        !localName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    else {
+        return false
+    }
+    return remote.lowercased() == localName.lowercased()
 }
 
 private func deployVerifyBool(_ object: [String: Any], keys: [String]) -> Bool? {
