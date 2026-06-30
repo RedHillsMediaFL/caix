@@ -1428,6 +1428,10 @@ public struct DistributedHiddenStatePacketMetadata: Codable, Hashable, Sendable 
         }
         return total
     }
+
+    public var elementCount: Int? {
+        expectedByteCount.map { $0 / scalarType.byteWidth }
+    }
 }
 
 /// Activation packet with the raw hidden-state payload.
@@ -1442,6 +1446,121 @@ public struct DistributedHiddenStatePacket: Hashable, Sendable {
         guard payload.count == metadata.byteCount else {
             throw DistributedRuntimeValidationError.invalidPacket(
                 "payload byte count does not match metadata byte_count")
+        }
+    }
+
+    public init(metadata: DistributedHiddenStatePacketMetadata, float16Values: [Float16]) throws {
+        guard metadata.scalarType == .float16 else {
+            throw DistributedRuntimeValidationError.invalidPacket(
+                "float16 payload requires scalar_type float16")
+        }
+        try Self.validateElementCount(float16Values.count, metadata: metadata)
+        try self.init(metadata: metadata, payload: Self.encodeFloat16Payload(float16Values))
+    }
+
+    public init(metadata: DistributedHiddenStatePacketMetadata, float32Values: [Float]) throws {
+        guard metadata.scalarType == .float32 else {
+            throw DistributedRuntimeValidationError.invalidPacket(
+                "float32 payload requires scalar_type float32")
+        }
+        try Self.validateElementCount(float32Values.count, metadata: metadata)
+        try self.init(metadata: metadata, payload: Self.encodeFloat32Payload(float32Values))
+    }
+
+    public func float16Values() throws -> [Float16] {
+        guard metadata.scalarType == .float16 else {
+            throw DistributedRuntimeValidationError.invalidPacket(
+                "float16 decode requires scalar_type float16")
+        }
+        return try Self.decodeFloat16Payload(payload)
+    }
+
+    public func float32Values() throws -> [Float] {
+        guard metadata.scalarType == .float32 else {
+            throw DistributedRuntimeValidationError.invalidPacket(
+                "float32 decode requires scalar_type float32")
+        }
+        return try Self.decodeFloat32Payload(payload)
+    }
+
+    public func floatValuesAsFloat32() throws -> [Float] {
+        switch metadata.scalarType {
+        case .float16:
+            return try float16Values().map(Float.init)
+        case .float32:
+            return try float32Values()
+        }
+    }
+
+    public static func encodeFloat16Payload(_ values: [Float16]) -> [UInt8] {
+        var payload: [UInt8] = []
+        payload.reserveCapacity(values.count * MemoryLayout<UInt16>.size)
+        for value in values {
+            appendLittleEndian(value.bitPattern, to: &payload)
+        }
+        return payload
+    }
+
+    public static func encodeFloat32Payload(_ values: [Float]) -> [UInt8] {
+        var payload: [UInt8] = []
+        payload.reserveCapacity(values.count * MemoryLayout<UInt32>.size)
+        for value in values {
+            appendLittleEndian(value.bitPattern, to: &payload)
+        }
+        return payload
+    }
+
+    public static func decodeFloat16Payload(_ payload: [UInt8]) throws -> [Float16] {
+        guard payload.count.isMultiple(of: MemoryLayout<UInt16>.size) else {
+            throw DistributedRuntimeValidationError.invalidPacket(
+                "float16 payload byte count is not aligned")
+        }
+        return stride(from: 0, to: payload.count, by: MemoryLayout<UInt16>.size).map { index in
+            Float16(bitPattern: UInt16(littleEndianBytes: payload[index..<(index + 2)]))
+        }
+    }
+
+    public static func decodeFloat32Payload(_ payload: [UInt8]) throws -> [Float] {
+        guard payload.count.isMultiple(of: MemoryLayout<UInt32>.size) else {
+            throw DistributedRuntimeValidationError.invalidPacket(
+                "float32 payload byte count is not aligned")
+        }
+        return stride(from: 0, to: payload.count, by: MemoryLayout<UInt32>.size).map { index in
+            Float(bitPattern: UInt32(littleEndianBytes: payload[index..<(index + 4)]))
+        }
+    }
+
+    private static func validateElementCount(
+        _ count: Int,
+        metadata: DistributedHiddenStatePacketMetadata
+    ) throws {
+        guard metadata.elementCount == count else {
+            throw DistributedRuntimeValidationError.invalidPacket(
+                "payload element count does not match metadata shape")
+        }
+    }
+
+    private static func appendLittleEndian<T: FixedWidthInteger>(_ value: T, to payload: inout [UInt8]) {
+        var remaining = value.littleEndian
+        for _ in 0..<MemoryLayout<T>.size {
+            payload.append(UInt8(truncatingIfNeeded: remaining))
+            remaining >>= 8
+        }
+    }
+}
+
+private extension UInt16 {
+    init(littleEndianBytes bytes: ArraySlice<UInt8>) {
+        self = bytes.enumerated().reduce(0) { partial, byte in
+            partial | (UInt16(byte.element) << UInt16(byte.offset * 8))
+        }
+    }
+}
+
+private extension UInt32 {
+    init(littleEndianBytes bytes: ArraySlice<UInt8>) {
+        self = bytes.enumerated().reduce(0) { partial, byte in
+            partial | (UInt32(byte.element) << UInt32(byte.offset * 8))
         }
     }
 }

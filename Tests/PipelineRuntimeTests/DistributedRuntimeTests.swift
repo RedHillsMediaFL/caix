@@ -1961,6 +1961,84 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertNoThrow(try makePlan().validate(hiddenStatePacket: packet))
     }
 
+    func testHiddenStatePacketRoundTripsFloat16Payload() throws {
+        let metadata = DistributedHiddenStatePacketMetadata(
+            requestID: "req-1",
+            sourceStageID: "layers-0-16",
+            destinationStageID: "layers-16-32",
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 2),
+            shape: [1, 2, 2],
+            scalarType: .float16,
+            byteCount: 8,
+            stepIndex: 0)
+        let values: [Float16] = [0, 1.5, -2, 4]
+
+        let packet = try DistributedHiddenStatePacket(metadata: metadata, float16Values: values)
+
+        XCTAssertEqual(packet.payload, DistributedHiddenStatePacket.encodeFloat16Payload(values))
+        XCTAssertEqual(try packet.float16Values(), values)
+        XCTAssertEqual(try packet.floatValuesAsFloat32(), values.map(Float.init))
+    }
+
+    func testHiddenStatePacketRoundTripsFloat32Payload() throws {
+        let metadata = DistributedHiddenStatePacketMetadata(
+            requestID: "req-1",
+            sourceStageID: "layers-0-16",
+            destinationStageID: "layers-16-32",
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 2),
+            shape: [1, 2, 2],
+            scalarType: .float32,
+            byteCount: 16,
+            stepIndex: 0)
+        let values: [Float] = [0, 1.25, -2.5, 4]
+
+        let packet = try DistributedHiddenStatePacket(metadata: metadata, float32Values: values)
+
+        XCTAssertEqual(packet.payload, DistributedHiddenStatePacket.encodeFloat32Payload(values))
+        XCTAssertEqual(try packet.float32Values(), values)
+        XCTAssertEqual(try packet.floatValuesAsFloat32(), values)
+    }
+
+    func testHiddenStatePacketRejectsTypedPayloadScalarMismatch() {
+        let metadata = DistributedHiddenStatePacketMetadata(
+            requestID: "req-1",
+            sourceStageID: "layers-0-16",
+            destinationStageID: "layers-16-32",
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+            shape: [1, 1, 2],
+            scalarType: .float16,
+            byteCount: 4,
+            stepIndex: 0)
+
+        XCTAssertThrowsError(
+            try DistributedHiddenStatePacket(metadata: metadata, float32Values: [1, 2])
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedRuntimeValidationError,
+                .invalidPacket("float32 payload requires scalar_type float32"))
+        }
+    }
+
+    func testHiddenStatePacketRejectsTypedPayloadElementMismatch() {
+        let metadata = DistributedHiddenStatePacketMetadata(
+            requestID: "req-1",
+            sourceStageID: "layers-0-16",
+            destinationStageID: "layers-16-32",
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 1),
+            shape: [1, 1, 2],
+            scalarType: .float16,
+            byteCount: 4,
+            stepIndex: 0)
+
+        XCTAssertThrowsError(
+            try DistributedHiddenStatePacket(metadata: metadata, float16Values: [1])
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedRuntimeValidationError,
+                .invalidPacket("payload element count does not match metadata shape"))
+        }
+    }
+
     func testHiddenStatePacketRejectsMismatchedByteCount() {
         let packet = DistributedHiddenStatePacketMetadata(
             requestID: "req-1",
