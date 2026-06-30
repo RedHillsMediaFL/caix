@@ -29,6 +29,7 @@ Rules:
 - `prompt_set=` must point to the committed prompt file used by both runs. Its non-empty line
   count must equal `prompts=`.
 - Same `manifest=` value between same-machine and loopback runs.
+- Evidence manifests must plan with `position_mode=full_prefix`.
 - `manifest=`, `prompt_set=`, and `raw_log=` must be committed, repo-relative paths. No absolute
   paths, URLs, or untracked scratch files.
 - `caix_commit=` must resolve to a commit in the local repo used for the readiness gate.

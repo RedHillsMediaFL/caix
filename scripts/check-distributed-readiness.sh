@@ -119,7 +119,7 @@ if any(role != "transformer_layers" for role in roles[1:-1]):
     sys.exit(1)
 if not isinstance(runtime.get("total_layer_count"), int) or runtime["total_layer_count"] <= 0:
     sys.exit(1)
-if runtime.get("position_mode") not in ("full_prefix", "current"):
+if runtime.get("position_mode") != "full_prefix":
     sys.exit(1)
 boundary = runtime.get("boundary_tensor")
 if not isinstance(boundary, dict):
