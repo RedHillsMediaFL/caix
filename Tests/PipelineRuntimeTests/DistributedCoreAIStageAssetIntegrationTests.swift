@@ -39,4 +39,111 @@ final class DistributedCoreAIStageAssetIntegrationTests: XCTestCase {
         throw XCTSkip("requires COREAI_RUNTIME=1")
         #endif
     }
+
+    func testRealStageAssetsMatchMonolithicGreedyTokens() async throws {
+        guard let manifestPath = ProcessInfo.processInfo.environment["CAIX_STAGE_MANIFEST"],
+            !manifestPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw XCTSkip("set CAIX_STAGE_MANIFEST to a real staged manifest")
+        }
+        guard let baselinePath = ProcessInfo.processInfo.environment["CAIX_BASELINE_MODEL"],
+            !baselinePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw XCTSkip("set CAIX_BASELINE_MODEL to a monolithic caix bundle")
+        }
+
+        #if COREAI_RUNTIME
+        let promptFile = ProcessInfo.processInfo.environment["CAIX_TOKEN_MATCH_PROMPTS"]
+        let prompts = try loadPrompts(path: promptFile)
+        let maxTokens = max(
+            1,
+            Int(ProcessInfo.processInfo.environment["CAIX_TOKEN_MATCH_MAX_TOKENS"] ?? "") ?? 8)
+        let baselineBundle = try ResolvedBundle.load(at: baselinePath)
+        let baseline = try await LLMEngine.load(bundle: baselineBundle)
+        let manifest = try DistributedStageManifest.load(
+            from: URL(fileURLWithPath: manifestPath).standardizedFileURL)
+        let pipeline = try await DistributedSameMachinePipeline.make(
+            manifest: manifest,
+            handleFactory: DistributedCoreAIStageHandleFactory())
+
+        for (index, prompt) in prompts.enumerated() {
+            let promptTokens = try baseline.encodePrompt(
+                messages: [["role": "user", "content": prompt]],
+                applyChatTemplate: false)
+            let capacity = min(
+                baseline.maxContextLength,
+                max(promptTokens.count + maxTokens + 8, maxTokens + 1))
+            try baseline.allocateKVCache(capacity: capacity)
+            let requestID = "token-match-\(index)"
+            try await pipeline.allocate(requestID: requestID, kvCapacity: capacity)
+
+            let prompt32 = promptTokens.map(Int32.init)
+            var baselineNext = Int32(Sampler.argmax(try await baseline.step(tokens: prompt32)))
+            var stagedNext = try await nextStagedToken(
+                pipeline: pipeline,
+                requestID: requestID,
+                stepIndex: 0,
+                lowerBound: 0,
+                tokenIDs: prompt32)
+            guard stagedNext == baselineNext else {
+                XCTFail(
+                    "prompt \(index) prefill token mismatch: staged \(stagedNext), "
+                        + "baseline \(baselineNext)")
+                await pipeline.free(requestID: requestID)
+                return
+            }
+
+            for step in 1..<maxTokens {
+                baselineNext = Int32(Sampler.argmax(try await baseline.step(tokens: [baselineNext])))
+                stagedNext = try await nextStagedToken(
+                    pipeline: pipeline,
+                    requestID: requestID,
+                    stepIndex: step,
+                    lowerBound: promptTokens.count + step - 1,
+                    tokenIDs: [stagedNext])
+                guard stagedNext == baselineNext else {
+                    XCTFail(
+                        "prompt \(index) decode step \(step) mismatch: staged \(stagedNext), "
+                            + "baseline \(baselineNext)")
+                    await pipeline.free(requestID: requestID)
+                    return
+                }
+            }
+            await pipeline.free(requestID: requestID)
+        }
+        #else
+        throw XCTSkip("requires COREAI_RUNTIME=1")
+        #endif
+    }
+
+    private func loadPrompts(path: String?) throws -> [String] {
+        guard let path, !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return ["The future of local inference is"]
+        }
+        let text = try String(contentsOfFile: path, encoding: .utf8)
+        let prompts = text.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !prompts.isEmpty else {
+            throw XCTSkip("CAIX_TOKEN_MATCH_PROMPTS has no prompts")
+        }
+        return prompts
+    }
+
+    private func nextStagedToken(
+        pipeline: DistributedSameMachinePipeline,
+        requestID: String,
+        stepIndex: Int,
+        lowerBound: Int,
+        tokenIDs: [Int32]
+    ) async throws -> Int32 {
+        let output = try await pipeline.forward(
+            requestID: requestID,
+            stepIndex: stepIndex,
+            positionRange: DistributedSequenceRange(
+                lowerBound: lowerBound,
+                upperBound: lowerBound + tokenIDs.count),
+            tokenIDs: tokenIDs)
+        return try XCTUnwrap(output.tokenID)
+    }
 }
