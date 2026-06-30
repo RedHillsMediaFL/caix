@@ -15,6 +15,7 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 caix_binary="${caix_bin:-}"
 brew_caix_binary=""
 evidence_dir="$REPO_DIR/docs/distributed-evidence"
+expected_prompt_set="docs/distributed-evidence/qwen3-0.6b-prompts.txt"
 not_ready=0
 plan_err="$(mktemp "${TMPDIR:-/tmp}/caix-distributed-plan.XXXXXX")"
 trap 'rm -f "$plan_err"' EXIT
@@ -192,6 +193,8 @@ check_token_match_evidence() {
     missing "$label evidence caix_commit is not present in this repository: $caix_commit"
   elif [[ ! "$prompts" =~ ^[1-9][0-9]*$ ]]; then
     missing "$label evidence prompts must be a positive integer: $file"
+  elif [[ "$prompt_set" != "$expected_prompt_set" ]]; then
+    missing "$label evidence prompt_set must be $expected_prompt_set: $file"
   elif [[ "$max_tokens" != "128" ]]; then
     missing "$label evidence max_tokens must be 128: $file"
   elif [[ "$temperature" != "0" ]]; then
