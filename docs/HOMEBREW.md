@@ -111,5 +111,7 @@ To print exact commands for the tiny staged smoke:
 ```bash
 "$caix_prefix/share/caix/scripts/check-tiny-cluster-smoke.sh" --caix "$(command -v caix)" \
   --manifest /path/to/qwen3-tiny-random-coreai-staged-rope-input-f16-2x1/stage-manifest.json \
-  --coordinator <main-mac-host>:1237 --print-commands
+  --coordinator <main-mac-host>:1237 \
+  --worker-root /path/on/macbook/qwen3-tiny-random-coreai-staged-rope-input-f16-2x1 \
+  --print-commands
 ```

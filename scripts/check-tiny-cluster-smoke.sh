@@ -18,6 +18,8 @@ Options:
   --max-tokens <N>           generated token count (default: 1)
   --join-timeout <s>         coordinator join timeout (default: 120)
   --connect-timeout <s>      worker connect timeout (default: 120)
+  --worker-root <dir>        copied staged bundle root for printed worker commands
+  --worker-manifest <path>   manifest path on worker machines (default: <worker-root>/<manifest-name>)
   --startup-timeout <s>      local coordinator startup timeout (default: 30)
   --min-free-mb <N>          local free-space floor before model load (default: 2048)
   --work-dir <dir>           local-loopback log directory (default: temp dir)
@@ -41,6 +43,8 @@ prompt_tokens="1,2,3"
 max_tokens=1
 join_timeout=120
 connect_timeout=120
+worker_root=""
+worker_manifest=""
 startup_timeout=30
 min_free_mb=2048
 work_dir=""
@@ -61,6 +65,8 @@ while [[ $# -gt 0 ]]; do
     --max-tokens) max_tokens="${2:?}"; shift 2 ;;
     --join-timeout) join_timeout="${2:?}"; shift 2 ;;
     --connect-timeout) connect_timeout="${2:?}"; shift 2 ;;
+    --worker-root) worker_root="${2:?}"; shift 2 ;;
+    --worker-manifest) worker_manifest="${2:?}"; shift 2 ;;
     --startup-timeout) startup_timeout="${2:?}"; shift 2 ;;
     --min-free-mb) min_free_mb="${2:?}"; shift 2 ;;
     --work-dir) work_dir="${2:?}"; shift 2 ;;
@@ -85,6 +91,12 @@ done
   usage >&2
   exit 2
 }
+if [[ -n "$worker_root" && "$print_commands" != "1" ]]; then
+  die "--worker-root is only valid with --print-commands"
+fi
+if [[ -n "$worker_manifest" && "$print_commands" != "1" ]]; then
+  die "--worker-manifest is only valid with --print-commands"
+fi
 
 case "$coordinator" in
   *:*) ;;
@@ -205,6 +217,34 @@ print_cmd() {
   printf '\n'
 }
 
+worker_path() {
+  local source_path="$1"
+  if [[ -z "$worker_root" ]]; then
+    printf '%s\n' "$source_path"
+    return
+  fi
+  python3 - "$manifest" "$worker_root" "$source_path" <<'PY'
+from pathlib import Path, PurePosixPath
+import sys
+
+manifest = Path(sys.argv[1]).resolve(strict=False)
+root = sys.argv[2].rstrip("/")
+source = Path(sys.argv[3]).resolve(strict=False)
+try:
+    relative = source.relative_to(manifest.parent)
+except ValueError:
+    relative = Path(source.name)
+print(str(PurePosixPath(root) / PurePosixPath(*relative.parts)))
+PY
+}
+
+worker_manifest_path="$manifest"
+if [[ -n "$worker_manifest" ]]; then
+  worker_manifest_path="$worker_manifest"
+elif [[ -n "$worker_root" ]]; then
+  worker_manifest_path="$(worker_path "$manifest")"
+fi
+
 serve_command=(
   "$caix_binary" serve
   --cluster "$manifest"
@@ -224,17 +264,22 @@ if [[ "$print_commands" == "1" ]]; then
   echo "# coordinator"
   print_cmd "${serve_command[@]}"
   echo "# workers; run one per selected transformer stage, split across machines as needed"
+  if [[ -n "$worker_root" ]]; then
+    echo "# worker commands assume the staged bundle was copied to: $worker_root"
+  fi
   for i in "${!stage_ids[@]}"; do
+    worker_stage_path="$(worker_path "${stage_paths[$i]}")"
     join_command=(
       "$caix_binary" cluster join
       --coordinator "$coordinator"
-      --manifest "$manifest"
-      --stage "${stage_paths[$i]}"
+      --manifest "$worker_manifest_path"
+      --stage "$worker_stage_path"
       --stage-id "${stage_ids[$i]}"
       --connect-timeout "$connect_timeout"
     )
     if [[ -n "${decode_stage_paths[$i]}" ]]; then
-      join_command+=(--decode-stage "${decode_stage_paths[$i]}")
+      worker_decode_stage_path="$(worker_path "${decode_stage_paths[$i]}")"
+      join_command+=(--decode-stage "$worker_decode_stage_path")
     fi
     print_cmd "${join_command[@]}"
   done
