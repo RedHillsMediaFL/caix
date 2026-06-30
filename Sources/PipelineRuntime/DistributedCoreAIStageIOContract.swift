@@ -233,6 +233,7 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
     private let model: AIModel
     private let functionDescriptor: InferenceFunctionDescriptor
     private let cacheIO: DistributedCoreAIStageCacheIO
+    private var requestStates: [String: DistributedCoreAIStageRequestState] = [:]
 
     private init(
         descriptor: DistributedStageDescriptor,
@@ -288,14 +289,21 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
     }
 
     public func allocate(_ allocation: DistributedStageAllocation) async throws {
-        _ = allocation
-        throw unimplemented("allocate")
+        try allocation.validate()
+        guard requestStates[allocation.requestID] == nil else {
+            throw DistributedStageExecutionError.invalidControlFrame(
+                "request_id \(allocation.requestID) is already allocated")
+        }
+        requestStates[allocation.requestID] = try makeRequestState(for: allocation)
     }
 
     public func forward(
         _ input: DistributedStageForwardInput
     ) async throws -> DistributedStageForwardOutput {
-        _ = input
+        guard requestStates[input.requestID] != nil else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "request_id \(input.requestID) is not allocated")
+        }
         throw unimplemented("forward")
     }
 
@@ -305,15 +313,113 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
     }
 
     public func free(requestID: String) async {
-        _ = requestID
-        // The protocol makes free nonthrowing. This handle never allocates state until tensor
-        // execution lands, so there is nothing to release here.
+        requestStates.removeValue(forKey: requestID)
     }
 
     private func unimplemented(_ operation: String) -> CoreAIPipeline.RuntimeError {
-        _ = (model, functionDescriptor, cacheIO)
+        _ = (model, functionDescriptor)
         return .modelContract(
             "distributed Core AI stage \(operation) is not implemented yet")
     }
+
+    private func makeRequestState(
+        for allocation: DistributedStageAllocation
+    ) throws -> DistributedCoreAIStageRequestState {
+        switch cacheIO.contract {
+        case .none:
+            return DistributedCoreAIStageRequestState(
+                requestID: allocation.requestID,
+                kvCapacity: allocation.kvCapacity)
+        case .stateful, .explicitOutputs:
+            guard let keyCacheDescriptor = cacheIO.keyCacheDescriptor,
+                let valueCacheDescriptor = cacheIO.valueCacheDescriptor
+            else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "distributed stage KV cache descriptors are missing")
+            }
+            return DistributedCoreAIStageRequestState(
+                requestID: allocation.requestID,
+                kvCapacity: allocation.kvCapacity,
+                keyCache: try Self.makeKVCache(
+                    descriptor: keyCacheDescriptor,
+                    capacity: allocation.kvCapacity),
+                valueCache: try Self.makeKVCache(
+                    descriptor: valueCacheDescriptor,
+                    capacity: allocation.kvCapacity))
+        }
+    }
+
+    private static func makeKVCache(
+        descriptor: NDArrayDescriptor,
+        capacity: Int
+    ) throws -> NDArray {
+        let shape = try DistributedCoreAIStageKVCacheShape.resolved(
+            descriptor.shape,
+            capacity: capacity)
+        var array = NDArray(descriptor: descriptor.resolvingDynamicDimensions(shape))
+        zeroState(&array, scalarType: descriptor.scalarType)
+        return array
+    }
+
+    private static func zeroState(_ array: inout NDArray, scalarType: NDArray.ScalarType) {
+        let count = array.shape.reduce(1, *)
+        switch scalarType {
+        case .float16:
+            var view = array.mutableView(as: Float16.self)
+            view.withUnsafeMutablePointer { ptr, _, _ in
+                for index in 0..<count { ptr[index] = 0 }
+            }
+        case .float32:
+            var view = array.mutableView(as: Float.self)
+            view.withUnsafeMutablePointer { ptr, _, _ in
+                for index in 0..<count { ptr[index] = 0 }
+            }
+        default:
+            break
+        }
+    }
+}
+
+private struct DistributedCoreAIStageRequestState {
+    let requestID: String
+    let kvCapacity: Int
+    var processedTokenCount: Int
+    var keyCache: NDArray?
+    var valueCache: NDArray?
+
+    init(
+        requestID: String,
+        kvCapacity: Int,
+        processedTokenCount: Int = 0,
+        keyCache: NDArray? = nil,
+        valueCache: NDArray? = nil
+    ) {
+        self.requestID = requestID
+        self.kvCapacity = kvCapacity
+        self.processedTokenCount = processedTokenCount
+        self.keyCache = keyCache
+        self.valueCache = valueCache
+    }
 }
 #endif
+
+enum DistributedCoreAIStageKVCacheShape {
+    static func resolved(_ descriptorShape: [Int], capacity: Int) throws -> [Int] {
+        guard capacity > 0 else {
+            throw DistributedStageExecutionError.invalidControlFrame(
+                "kv_capacity must be positive")
+        }
+        guard !descriptorShape.isEmpty else {
+            throw DistributedStageExecutionError.invalidControlFrame(
+                "KV cache descriptor shape is empty")
+        }
+        let resolved = descriptorShape.map { dimension in
+            dimension < 0 ? capacity : dimension
+        }
+        guard resolved.allSatisfy({ $0 > 0 }) else {
+            throw DistributedStageExecutionError.invalidControlFrame(
+                "KV cache descriptor shape \(descriptorShape) resolves to invalid shape \(resolved)")
+        }
+        return resolved
+    }
+}

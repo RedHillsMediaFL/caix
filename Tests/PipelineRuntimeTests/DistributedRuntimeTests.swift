@@ -2039,6 +2039,35 @@ final class DistributedRuntimeTests: XCTestCase {
         }
     }
 
+    func testCoreAIKVCacheShapeResolvesDynamicCapacity() throws {
+        let shape = try DistributedCoreAIStageKVCacheShape.resolved(
+            [1, 32, -1, 128],
+            capacity: 256)
+
+        XCTAssertEqual(shape, [1, 32, 256, 128])
+    }
+
+    func testCoreAIKVCacheShapeRejectsInvalidCapacity() {
+        XCTAssertThrowsError(
+            try DistributedCoreAIStageKVCacheShape.resolved([1, 32, -1, 128], capacity: 0)
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidControlFrame("kv_capacity must be positive"))
+        }
+    }
+
+    func testCoreAIKVCacheShapeRejectsUnresolvedInvalidDimension() {
+        XCTAssertThrowsError(
+            try DistributedCoreAIStageKVCacheShape.resolved([1, 32, 0, 128], capacity: 256)
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidControlFrame(
+                    "KV cache descriptor shape [1, 32, 0, 128] resolves to invalid shape [1, 32, 0, 128]"))
+        }
+    }
+
     func testHiddenStatePacketRejectsMismatchedByteCount() {
         let packet = DistributedHiddenStatePacketMetadata(
             requestID: "req-1",
