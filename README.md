@@ -385,3 +385,5 @@ See [LICENSE](LICENSE). caix bundles `marked` and `DOMPurify` (their licenses in
 ---
 
 *caix is beta and unaffiliated with Apple. "Core AI" is Apple's runtime.*
+
+<sub>More open-source work: [redhillsmediafl.com/open-source](https://redhillsmediafl.com/open-source).</sub>

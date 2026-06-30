@@ -42,3 +42,5 @@ Rules:
 - Do not publish real-Qwen distributed claims until both evidence files pass
   `scripts/check-distributed-readiness.sh`.
 - The distributed readiness gate also needs a Brew-installed `caix` via `--brew-caix`.
+
+<sub>More open-source work: [redhillsmediafl.com/open-source](https://redhillsmediafl.com/open-source).</sub>
