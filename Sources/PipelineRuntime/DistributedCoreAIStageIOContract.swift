@@ -205,6 +205,82 @@ struct DistributedCoreAIStageCacheIO {
     }
 }
 
+private struct DistributedCoreAIStageNDArrayBinding {
+    let name: String
+    let descriptor: NDArrayDescriptor
+}
+
+private struct DistributedCoreAIStageExecutionIO {
+    let inputIDs: DistributedCoreAIStageNDArrayBinding?
+    let positionIDs: DistributedCoreAIStageNDArrayBinding
+    let hiddenStatesInput: DistributedCoreAIStageNDArrayBinding?
+    let hiddenStatesOutput: DistributedCoreAIStageNDArrayBinding?
+    let logitsOutput: DistributedCoreAIStageNDArrayBinding?
+
+    static func bound(
+        for stage: DistributedStageDescriptor,
+        descriptor: InferenceFunctionDescriptor,
+        vocabSize: Int?
+    ) throws -> DistributedCoreAIStageExecutionIO {
+        let positionIDs = try input(.positionIDs, descriptor: descriptor)
+        switch stage.role {
+        case .embeddings:
+            return DistributedCoreAIStageExecutionIO(
+                inputIDs: try input(.inputIDs, descriptor: descriptor),
+                positionIDs: positionIDs,
+                hiddenStatesInput: nil,
+                hiddenStatesOutput: try output(.hiddenStates, descriptor: descriptor),
+                logitsOutput: nil)
+        case .transformerLayers:
+            return DistributedCoreAIStageExecutionIO(
+                inputIDs: nil,
+                positionIDs: positionIDs,
+                hiddenStatesInput: try input(.hiddenStates, descriptor: descriptor),
+                hiddenStatesOutput: try output(.hiddenStates, descriptor: descriptor),
+                logitsOutput: nil)
+        case .finalNormHead:
+            guard vocabSize != nil else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "distributed final_norm_head stage '\(stage.id)' requires vocab_size")
+            }
+            return DistributedCoreAIStageExecutionIO(
+                inputIDs: nil,
+                positionIDs: positionIDs,
+                hiddenStatesInput: try input(.hiddenStates, descriptor: descriptor),
+                hiddenStatesOutput: nil,
+                logitsOutput: try output(.logits, descriptor: descriptor))
+        }
+    }
+
+    private static func input(
+        _ tensorName: DistributedStageIOTensorName,
+        descriptor: InferenceFunctionDescriptor
+    ) throws -> DistributedCoreAIStageNDArrayBinding {
+        let name = tensorName.rawValue
+        guard case .ndArray(let ndArrayDescriptor) = descriptor.inputDescriptor(of: name) else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "distributed stage input '\(name)' is not an NDArray")
+        }
+        return DistributedCoreAIStageNDArrayBinding(
+            name: name,
+            descriptor: ndArrayDescriptor)
+    }
+
+    private static func output(
+        _ tensorName: DistributedStageIOTensorName,
+        descriptor: InferenceFunctionDescriptor
+    ) throws -> DistributedCoreAIStageNDArrayBinding {
+        let name = tensorName.rawValue
+        guard case .ndArray(let ndArrayDescriptor) = descriptor.outputDescriptor(of: name) else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "distributed stage output '\(name)' is not an NDArray")
+        }
+        return DistributedCoreAIStageNDArrayBinding(
+            name: name,
+            descriptor: ndArrayDescriptor)
+    }
+}
+
 public final class DistributedCoreAIStageHandleFactory: DistributedStageHandleFactory {
     private let functionName: String?
     private let vocabSize: Int?
@@ -231,8 +307,15 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
     public let ioContract: DistributedStageIOContract
 
     private let model: AIModel
+    private let prefillFunction: InferenceFunction
+    private let decodeFunction: InferenceFunction
+    private let decodeFunctionName: String?
     private let functionDescriptor: InferenceFunctionDescriptor
+    private let executionIO: DistributedCoreAIStageExecutionIO
     private let cacheIO: DistributedCoreAIStageCacheIO
+    private let boundaryTensor: DistributedBoundaryTensorSpec?
+    private let nextStageID: String?
+    private let vocabSize: Int?
     private var requestStates: [String: DistributedCoreAIStageRequestState] = [:]
 
     private init(
@@ -241,16 +324,30 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
         functionName: String,
         ioContract: DistributedStageIOContract,
         model: AIModel,
+        prefillFunction: InferenceFunction,
+        decodeFunction: InferenceFunction,
+        decodeFunctionName: String?,
         functionDescriptor: InferenceFunctionDescriptor,
-        cacheIO: DistributedCoreAIStageCacheIO
+        executionIO: DistributedCoreAIStageExecutionIO,
+        cacheIO: DistributedCoreAIStageCacheIO,
+        boundaryTensor: DistributedBoundaryTensorSpec?,
+        nextStageID: String?,
+        vocabSize: Int?
     ) {
         self.descriptor = descriptor
         self.assetURL = assetURL
         self.functionName = functionName
         self.ioContract = ioContract
         self.model = model
+        self.prefillFunction = prefillFunction
+        self.decodeFunction = decodeFunction
+        self.decodeFunctionName = decodeFunctionName
         self.functionDescriptor = functionDescriptor
+        self.executionIO = executionIO
         self.cacheIO = cacheIO
+        self.boundaryTensor = boundaryTensor
+        self.nextStageID = nextStageID
+        self.vocabSize = vocabSize
     }
 
     public static func load(
@@ -278,14 +375,38 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
             descriptor: functionDescriptor,
             vocabSize: resolvedVocabSize)
         let cacheIO = try DistributedCoreAIStageCacheIO.extracted(from: functionDescriptor)
+        let executionIO = try DistributedCoreAIStageExecutionIO.bound(
+            for: context.descriptor,
+            descriptor: functionDescriptor,
+            vocabSize: resolvedVocabSize)
+        let prefillFunction = try Self.loadFunction(
+            named: resolvedFunctionName,
+            from: model,
+            assetURL: assetURL)
+        let resolvedDecodeFunctionName = context.decodeFunctionName
+        let decodeFunction = try await Self.loadDecodeFunction(
+            named: resolvedDecodeFunctionName,
+            mainFunctionName: resolvedFunctionName,
+            mainFunction: prefillFunction,
+            mainModel: model,
+            mainAssetURL: assetURL,
+            decodeAssetURL: context.resolvedDecodeAssetURL,
+            specialization: specialization)
         return DistributedCoreAIStageHandle(
             descriptor: context.descriptor,
             assetURL: assetURL,
             functionName: resolvedFunctionName,
             ioContract: ioContract,
             model: model,
+            prefillFunction: prefillFunction,
+            decodeFunction: decodeFunction,
+            decodeFunctionName: resolvedDecodeFunctionName,
             functionDescriptor: functionDescriptor,
-            cacheIO: cacheIO)
+            executionIO: executionIO,
+            cacheIO: cacheIO,
+            boundaryTensor: context.boundaryTensor,
+            nextStageID: context.nextStage?.id,
+            vocabSize: resolvedVocabSize)
     }
 
     public func allocate(_ allocation: DistributedStageAllocation) async throws {
@@ -317,9 +438,53 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
     }
 
     private func unimplemented(_ operation: String) -> CoreAIPipeline.RuntimeError {
-        _ = (model, functionDescriptor)
+        _ = (
+            model, prefillFunction, decodeFunction, decodeFunctionName, functionDescriptor,
+            executionIO, boundaryTensor, nextStageID, vocabSize
+        )
         return .modelContract(
             "distributed Core AI stage \(operation) is not implemented yet")
+    }
+
+    private static func loadFunction(
+        named name: String,
+        from model: AIModel,
+        assetURL: URL
+    ) throws -> InferenceFunction {
+        guard let function = try model.loadFunction(named: name) else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "could not load distributed stage function '\(name)' from \(assetURL.lastPathComponent)")
+        }
+        return function
+    }
+
+    private static func loadDecodeFunction(
+        named decodeFunctionName: String?,
+        mainFunctionName: String,
+        mainFunction: InferenceFunction,
+        mainModel: AIModel,
+        mainAssetURL: URL,
+        decodeAssetURL: URL?,
+        specialization: SpecializationOptions
+    ) async throws -> InferenceFunction {
+        guard let decodeFunctionName, decodeFunctionName != mainFunctionName else {
+            return mainFunction
+        }
+        if let decodeAssetURL {
+            let decodeModel = try await AIModel.specialize(
+                contentsOf: decodeAssetURL,
+                options: specialization,
+                cache: .default,
+                cachePolicy: .persistent)
+            return try loadFunction(
+                named: decodeFunctionName,
+                from: decodeModel,
+                assetURL: decodeAssetURL)
+        }
+        return try loadFunction(
+            named: decodeFunctionName,
+            from: mainModel,
+            assetURL: mainAssetURL)
     }
 
     private func makeRequestState(
