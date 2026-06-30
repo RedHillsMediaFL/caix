@@ -467,9 +467,86 @@ enum DistributedCoreAIStageNDArrayIO {
                     vocabSize: vocabSize)))
     }
 
+    static func makeHiddenStatePacket(
+        from output: NDArray,
+        requestID: String,
+        sourceStageID: String,
+        destinationStageID: String,
+        positionRange: DistributedSequenceRange,
+        stepIndex: Int
+    ) throws -> DistributedHiddenStatePacket {
+        let shape = output.shape
+        switch output.scalarType {
+        case .float16:
+            let values = try readRank3(output, as: Float16.self, tensorName: "hidden_states")
+            let metadata = DistributedHiddenStatePacketMetadata(
+                requestID: requestID,
+                sourceStageID: sourceStageID,
+                destinationStageID: destinationStageID,
+                positionRange: positionRange,
+                shape: shape,
+                scalarType: .float16,
+                byteCount: values.count * DistributedTensorScalarType.float16.byteWidth,
+                stepIndex: stepIndex)
+            return try DistributedHiddenStatePacket(metadata: metadata, float16Values: values)
+        case .float32:
+            let values = try readRank3(output, as: Float.self, tensorName: "hidden_states")
+            let metadata = DistributedHiddenStatePacketMetadata(
+                requestID: requestID,
+                sourceStageID: sourceStageID,
+                destinationStageID: destinationStageID,
+                positionRange: positionRange,
+                shape: shape,
+                scalarType: .float32,
+                byteCount: values.count * DistributedTensorScalarType.float32.byteWidth,
+                stepIndex: stepIndex)
+            return try DistributedHiddenStatePacket(metadata: metadata, float32Values: values)
+        default:
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "hidden_states scalar type \(output.scalarType) is not supported for distributed stage output")
+        }
+    }
+
+    static func readLastLogitsRow(
+        _ logits: NDArray,
+        vocabSize: Int
+    ) throws -> [Float] {
+        let offsets = try DistributedCoreAIStageTensorReadbackLayout.lastLogitsRowOffsets(
+            shape: logits.shape,
+            strides: logits.strides,
+            vocabSize: vocabSize)
+        switch logits.scalarType {
+        case .float16:
+            return logits.view(as: Float16.self).withUnsafePointer { pointer, _, _ in
+                offsets.map { Float(pointer[$0]) }
+            }
+        case .float32:
+            return logits.view(as: Float.self).withUnsafePointer { pointer, _, _ in
+                offsets.map { pointer[$0] }
+            }
+        default:
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "logits scalar type \(logits.scalarType) is not supported for distributed stage output")
+        }
+    }
+
     private static func fillInt32(_ array: inout NDArray, _ elements: [Int32]) {
         var view = array.mutableView(as: Int32.self)
         view.copyElements(fromContentsOf: elements)
+    }
+
+    private static func readRank3<T: BitwiseCopyable>(
+        _ array: NDArray,
+        as _: T.Type,
+        tensorName: String
+    ) throws -> [T] {
+        let offsets = try DistributedCoreAIStageTensorReadbackLayout.rank3Offsets(
+            shape: array.shape,
+            strides: array.strides,
+            tensorName: tensorName)
+        return array.view(as: T.self).withUnsafePointer { pointer, _, _ in
+            offsets.map { pointer[$0] }
+        }
     }
 
     private static func requireScalarType(
@@ -556,6 +633,74 @@ enum DistributedCoreAIStageKVCacheShape {
                 "KV cache descriptor shape \(descriptorShape) resolves to invalid shape \(resolved)")
         }
         return resolved
+    }
+}
+
+enum DistributedCoreAIStageTensorReadbackLayout {
+    static func rank3Offsets(
+        shape: [Int],
+        strides: [Int],
+        tensorName: String
+    ) throws -> [Int] {
+        try validateRank3(shape: shape, strides: strides, tensorName: tensorName)
+        var offsets: [Int] = []
+        offsets.reserveCapacity(shape[0] * shape[1] * shape[2])
+        for batch in 0..<shape[0] {
+            for row in 0..<shape[1] {
+                for column in 0..<shape[2] {
+                    offsets.append(
+                        batch * strides[0]
+                            + row * strides[1]
+                            + column * strides[2])
+                }
+            }
+        }
+        return offsets
+    }
+
+    static func lastLogitsRowOffsets(
+        shape: [Int],
+        strides: [Int],
+        vocabSize: Int
+    ) throws -> [Int] {
+        try validateRank3(shape: shape, strides: strides, tensorName: "logits")
+        guard shape[0] == 1 else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "logits shape \(shape) batch dimension must be 1")
+        }
+        guard vocabSize > 0 else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "vocab_size must be positive")
+        }
+        guard shape[2] == vocabSize else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "logits shape \(shape) does not match vocab_size \(vocabSize)")
+        }
+        let base = (shape[1] - 1) * strides[1]
+        return (0..<vocabSize).map { base + $0 * strides[2] }
+    }
+
+    private static func validateRank3(
+        shape: [Int],
+        strides: [Int],
+        tensorName: String
+    ) throws {
+        guard shape.count == 3 else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "\(tensorName) shape \(shape) must be rank 3")
+        }
+        guard strides.count == 3 else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "\(tensorName) strides \(strides) must be rank 3")
+        }
+        guard shape.allSatisfy({ $0 > 0 }) else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "\(tensorName) shape \(shape) must be positive")
+        }
+        guard strides.allSatisfy({ $0 > 0 }) else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "\(tensorName) strides \(strides) must be positive")
+        }
     }
 }
 

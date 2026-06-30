@@ -2190,6 +2190,50 @@ final class DistributedRuntimeTests: XCTestCase {
         }
     }
 
+    func testCoreAITensorReadbackLayoutResolvesRank3OffsetsWithStrides() throws {
+        let offsets = try DistributedCoreAIStageTensorReadbackLayout.rank3Offsets(
+            shape: [1, 2, 3],
+            strides: [12, 4, 1],
+            tensorName: "hidden_states")
+
+        XCTAssertEqual(offsets, [0, 1, 2, 4, 5, 6])
+    }
+
+    func testCoreAITensorReadbackLayoutResolvesLastLogitsRowOffsets() throws {
+        let offsets = try DistributedCoreAIStageTensorReadbackLayout.lastLogitsRowOffsets(
+            shape: [1, 3, 4],
+            strides: [20, 5, 1],
+            vocabSize: 4)
+
+        XCTAssertEqual(offsets, [10, 11, 12, 13])
+    }
+
+    func testCoreAITensorReadbackLayoutRejectsInvalidStride() {
+        XCTAssertThrowsError(
+            try DistributedCoreAIStageTensorReadbackLayout.rank3Offsets(
+                shape: [1, 2, 3],
+                strides: [6, 0, 1],
+                tensorName: "hidden_states")
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidStageOutput("hidden_states strides [6, 0, 1] must be positive"))
+        }
+    }
+
+    func testCoreAITensorReadbackLayoutRejectsLogitsVocabMismatch() {
+        XCTAssertThrowsError(
+            try DistributedCoreAIStageTensorReadbackLayout.lastLogitsRowOffsets(
+                shape: [1, 2, 4],
+                strides: [8, 4, 1],
+                vocabSize: 5)
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidStageOutput("logits shape [1, 2, 4] does not match vocab_size 5"))
+        }
+    }
+
     func testHiddenStatePacketRejectsMismatchedByteCount() {
         let packet = DistributedHiddenStatePacketMetadata(
             requestID: "req-1",
