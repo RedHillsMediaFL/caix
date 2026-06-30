@@ -1,6 +1,10 @@
 import XCTest
 @testable import PipelineRuntime
 
+#if COREAI_RUNTIME
+import Tokenizers
+#endif
+
 final class DistributedCoreAIStageAssetIntegrationTests: XCTestCase {
     func testRealStageAssetsLoadAndValidateContracts() async throws {
         guard let manifestPath = ProcessInfo.processInfo.environment["CAIX_STAGE_MANIFEST"],
@@ -122,6 +126,60 @@ final class DistributedCoreAIStageAssetIntegrationTests: XCTestCase {
                 }
             }
             await pipeline.free(requestID: requestID)
+        }
+        #else
+        throw XCTSkip("requires COREAI_RUNTIME=1")
+        #endif
+    }
+
+    func testRealStageAssetsMatchExpectedGreedyTokens() async throws {
+        guard let manifestPath = ProcessInfo.processInfo.environment["CAIX_STAGE_MANIFEST"],
+            !manifestPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw XCTSkip("set CAIX_STAGE_MANIFEST to a real staged manifest")
+        }
+
+        #if COREAI_RUNTIME
+        let promptFile = ProcessInfo.processInfo.environment["CAIX_TOKEN_MATCH_PROMPTS"]
+        let prompts = try loadPrompts(path: promptFile)
+        let expectedTokens = try loadExpectedGreedyTokens()
+        XCTAssertEqual(
+            expectedTokens.count,
+            prompts.count,
+            "expected greedy token count must match prompt count")
+        guard expectedTokens.count == prompts.count else { return }
+
+        let manifestURL = URL(fileURLWithPath: manifestPath).standardizedFileURL
+        let manifest = try DistributedStageManifest.load(from: manifestURL)
+        let tokenizerURL = manifestURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("tokenizer", isDirectory: true)
+        let tokenizer = try await AutoTokenizer.from(modelFolder: tokenizerURL)
+        let maxContextLength = stagedMaxContextLength(manifestURL: manifestURL)
+        let pipeline = try await DistributedSameMachinePipeline.make(
+            manifest: manifest,
+            handleFactory: DistributedCoreAIStageHandleFactory())
+
+        for (index, prompt) in prompts.enumerated() {
+            let promptTokens = tokenizer.encode(text: prompt)
+            guard !promptTokens.isEmpty else {
+                XCTFail("prompt \(index) tokenized to 0 tokens")
+                return
+            }
+            let capacity = min(maxContextLength, max(promptTokens.count + 9, 2))
+            let requestID = "expected-token-\(index)"
+            try await pipeline.allocate(requestID: requestID, kvCapacity: capacity)
+            let stagedNext = try await nextStagedToken(
+                pipeline: pipeline,
+                requestID: requestID,
+                stepIndex: 0,
+                lowerBound: 0,
+                tokenIDs: promptTokens.map(Int32.init))
+            await pipeline.free(requestID: requestID)
+            XCTAssertEqual(
+                stagedNext,
+                expectedTokens[index],
+                "prompt \(index) prefill token should match reference")
         }
         #else
         throw XCTSkip("requires COREAI_RUNTIME=1")
@@ -279,6 +337,49 @@ final class DistributedCoreAIStageAssetIntegrationTests: XCTestCase {
             throw XCTSkip("CAIX_TOKEN_MATCH_PROMPTS has no prompts")
         }
         return prompts
+    }
+
+    private func loadExpectedGreedyTokens() throws -> [Int32] {
+        let environment = ProcessInfo.processInfo.environment
+        let raw: String?
+        if let path = environment["CAIX_EXPECTED_GREEDY_TOKENS_FILE"],
+            !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            raw = try String(contentsOfFile: path, encoding: .utf8)
+        } else {
+            raw = environment["CAIX_EXPECTED_GREEDY_TOKENS"]
+                ?? environment["CAIX_EXPECTED_GREEDY_TOKEN"]
+        }
+        guard let raw, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw XCTSkip("set CAIX_EXPECTED_GREEDY_TOKENS to reference token ids")
+        }
+        let fields = raw.split { character in
+            character == "," || character == ";" || character.isWhitespace
+        }
+        let tokens = fields.compactMap { Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        guard tokens.count == fields.count, !tokens.isEmpty else {
+            throw XCTSkip("CAIX_EXPECTED_GREEDY_TOKENS must contain Int32 token ids")
+        }
+        return tokens
+    }
+
+    private func stagedMaxContextLength(manifestURL: URL) -> Int {
+        let metadataURL = manifestURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("metadata.json")
+        guard let data = try? Data(contentsOf: metadataURL),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let language = object["language"] as? [String: Any]
+        else {
+            return 8192
+        }
+        if let value = language["max_context_length"] as? Int {
+            return value
+        }
+        if let value = language["max_context_length"] as? Double {
+            return Int(value)
+        }
+        return 8192
     }
 
     private func nextStagedToken(
