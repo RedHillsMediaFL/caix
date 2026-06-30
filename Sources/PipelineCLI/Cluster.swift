@@ -1,4 +1,5 @@
 import Foundation
+import Dispatch
 import PipelineRuntime
 
 struct ClusterPlanStage: Codable {
@@ -103,7 +104,7 @@ private func clusterUsage() {
         USAGE:
           caix cluster plan --manifest <stage-manifest.json> [options]
           caix cluster plan --model <bundle-dir> [options]
-          caix cluster join --coordinator <host:port> --stage <stage-dir> [options]
+          caix cluster join --coordinator <host:port> --manifest <stage-manifest.json> --stage <stage-dir> [options]
 
         plan OPTIONS:
           --worker <name=GB>     Worker memory budget; repeatable
@@ -114,29 +115,38 @@ private func clusterUsage() {
         join OPTIONS:
           --coordinator <host:port>
                                   Coordinator address for this worker
+          --manifest <path>       Stage manifest used by the coordinator
           --stage <dir>           Local staged .aimodel bundle directory
-          --listen <host:port>    Worker listen address (default: 127.0.0.1:0)
+          --decode-stage <dir>    Local decode .aimodel bundle directory
+          --stage-id <id>         Stage id when it cannot be inferred from --stage
+          --listen <host:port>    Worker label kept for compatibility (default: 127.0.0.1:0)
         """)
 }
 
 private func clusterJoinCommand(_ argv: [String]) {
     var coordinator: String?
+    var manifestPath: String?
     var stagePath: String?
+    var decodeStagePath: String?
+    var stageID: String?
     var listen = "127.0.0.1:0"
 
     func usage() {
         print(
             """
             USAGE:
-              caix cluster join --coordinator <host:port> --stage <stage-dir> [options]
+              caix cluster join --coordinator <host:port> --manifest <stage-manifest.json> --stage <stage-dir> [options]
 
             OPTIONS:
               --coordinator <host:port>
                                       Coordinator address for this worker
+              --manifest <path>       Stage manifest used by the coordinator
               --stage <dir>           Local staged .aimodel bundle directory
-              --listen <host:port>    Worker listen address (default: 127.0.0.1:0)
+              --decode-stage <dir>    Local decode .aimodel bundle directory
+              --stage-id <id>         Stage id when it cannot be inferred from --stage
+              --listen <host:port>    Worker label kept for compatibility (default: 127.0.0.1:0)
 
-            This command is reserved for distributed worker runtime. It does not run workers yet.
+            Runs one staged worker and connects it to caix serve --cluster.
             """)
     }
 
@@ -157,8 +167,14 @@ private func clusterJoinCommand(_ argv: [String]) {
         switch arg {
         case "--coordinator":
             coordinator = value(arg)
+        case "--manifest":
+            manifestPath = value(arg)
         case "--stage":
             stagePath = value(arg)
+        case "--decode-stage":
+            decodeStagePath = value(arg)
+        case "--stage-id":
+            stageID = value(arg)
         case "--listen":
             listen = value(arg)
         case "-h", "--help":
@@ -173,6 +189,9 @@ private func clusterJoinCommand(_ argv: [String]) {
     guard let coordinator, !coordinator.isEmpty else {
         fail("cluster join requires --coordinator <host:port>")
     }
+    guard let manifestPath, !manifestPath.isEmpty else {
+        fail("cluster join requires --manifest <stage-manifest.json>")
+    }
     guard let stagePath, !stagePath.isEmpty else {
         fail("cluster join requires --stage <stage-dir>")
     }
@@ -180,11 +199,27 @@ private func clusterJoinCommand(_ argv: [String]) {
         fail("--listen must be host:port")
     }
 
-    FileHandle.standardError.write(
-        Data(
-            "error: caix cluster join is not implemented yet; use caix cluster plan to validate staged manifests\n"
-                .utf8))
-    exit(1)
+    let semaphore = DispatchSemaphore(value: 0)
+    nonisolated(unsafe) var exitCode: Int32 = 0
+    Task {
+        defer { semaphore.signal() }
+        do {
+            try await runClusterJoinRuntime(
+                coordinator: coordinator,
+                manifestPath: manifestPath,
+                stagePath: stagePath,
+                decodeStagePath: decodeStagePath,
+                stageID: stageID,
+                listen: listen)
+        } catch {
+            FileHandle.standardError.write(Data("cluster join error: \(error)\n".utf8))
+            exitCode = 1
+        }
+    }
+    while semaphore.wait(timeout: .now()) == .timedOut {
+        RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02))
+    }
+    exit(exitCode)
 }
 
 private func clusterPlanCommand(_ argv: [String]) {
@@ -408,7 +443,7 @@ private func clusterWarnings(
 
 private func clusterNotes() -> [String] {
     [
-        "dry-run only; caix cluster join and caix serve --cluster do not run workers yet",
+        "caix cluster join and caix serve --cluster run the minimal staged worker POC",
         "runtime_plan is validated with the same DistributedStagePlan contract used by PipelineRuntime",
         "KV cache ownership stays with the worker assigned to each stage",
         "hidden-state activations flow between adjacent stages in manifest order",

@@ -986,6 +986,78 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertEqual(handles[2].inputs[0].hiddenState?.metadata.sourceStageID, "layers-0-16")
     }
 
+    func testRemoteStageHandleRoundTripsThroughSocketWorkerConnection() async throws {
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 2], scalarType: .float16),
+            positionMode: .fullPrefix)
+        let handles = makeFakeHandles(for: plan)
+        let workerHandle = handles[1]
+        let listener = try DistributedSocketWorkerListener.bind(host: "127.0.0.1", port: 0)
+        defer { listener.close() }
+
+        let worker = Task {
+            let connection = try DistributedSocketWorkerConnection.connect(
+                host: "127.0.0.1",
+                port: listener.boundPort)
+            defer { connection.close() }
+            let executor = try DistributedWorkerFrameExecutor(plan: plan, handle: workerHandle)
+            try connection.send(try executor.makeHello(cacheContract: "stateful"))
+            let ackFrame = try connection.receive()
+            guard case .helloAck(let ack) = ackFrame.message, ack.accepted else {
+                throw DistributedStageExecutionError.invalidControlFrame(
+                    "socket worker did not receive an accepted hello_ack")
+            }
+
+            while true {
+                do {
+                    let request = try connection.receive()
+                    if let response = try await executor.processForTransport(request) {
+                        try connection.send(response)
+                    }
+                } catch DistributedSocketTransportError.connectionClosed {
+                    return
+                }
+            }
+        }
+
+        let coordinatorConnection = try listener.accept()
+        defer { coordinatorConnection.close() }
+        var coordinator = try DistributedWorkerHandshakeCoordinator(plan: plan)
+        let helloFrame = try coordinatorConnection.receive()
+        let ackFrame = try coordinator.processHello(helloFrame)
+        try coordinatorConnection.send(ackFrame)
+
+        let remote = try DistributedRemoteStageHandle(
+            plan: plan,
+            descriptor: handles[1].descriptor
+        ) { request in
+            try coordinatorConnection.roundTrip(request)
+        }
+        let pipeline = try DistributedSameMachinePipeline(
+            plan: plan,
+            stages: [handles[0], remote, handles[2], handles[3]])
+
+        let result = try await DistributedStagedEngine(
+            pipeline: pipeline,
+            maxContextLength: 16)
+            .generate(
+                promptTokens: [10, 11],
+                options: DistributedStagedGenerationOptions(maxTokens: 2),
+                requestID: "req-socket-worker")
+
+        coordinatorConnection.close()
+        try await worker.value
+
+        XCTAssertEqual(result.generatedTokenIDs, [42, 42])
+        XCTAssertEqual(workerHandle.allocatedRequests, ["req-socket-worker"])
+        XCTAssertEqual(workerHandle.inputs.map(\.positionIDs), [[0, 1], [0, 1, 2]])
+        let packet = try XCTUnwrap(workerHandle.inputs.first?.hiddenState)
+        XCTAssertEqual(packet.metadata.sourceStageID, "embed")
+        XCTAssertEqual(packet.metadata.destinationStageID, "layers-0-16")
+        XCTAssertEqual(packet.payload.count, packet.metadata.byteCount)
+    }
+
     func testTwoRemoteWorkerStagesRunThroughSeparateLoopbackTransports() async throws {
         let plan = makePlan(
             boundaryTensor: DistributedBoundaryTensorSpec(
@@ -3550,7 +3622,7 @@ final class DistributedRuntimeTests: XCTestCase {
     }
 }
 
-private final class FakeDistributedStageHandle: DistributedStageHandle {
+private final class FakeDistributedStageHandle: DistributedStageHandle, @unchecked Sendable {
     let descriptor: DistributedStageDescriptor
     var allocatedRequests: [String] = []
     var allocatedKVCaps: [Int] = []

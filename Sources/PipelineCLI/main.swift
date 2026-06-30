@@ -74,7 +74,7 @@ func printUsage() {
           caix bench --model <bundle-dir> [options]
           caix catalog <owner/search|collection-slug> [options]
           caix cluster plan --manifest <stage-manifest.json> [options]
-          caix cluster join --coordinator <host:port> --stage <stage-dir> [options]
+          caix cluster join --coordinator <host:port> --manifest <stage-manifest.json> --stage <stage-dir> [options]
           caix deploy verify --endpoint <host[:port]|url> --endpoint <host[:port]|url> [options]
           caix serve [--port 1237] [--host 127.0.0.1]
           caix serve --cluster <stage-manifest.json> [options]
@@ -88,7 +88,13 @@ func printUsage() {
           --convert-script <p>   convert.py path (default: ./python/converter/convert.py)
           --python <exe>         Python executable for conversion (default: python3)
           --stats-file <path>     Persistent usage stats JSON (default: ~/.caix/usage.json)
-          --cluster <manifest>    Stage manifest for distributed coordinator mode (not implemented)
+          --cluster <manifest>    Stage manifest for distributed coordinator mode
+          --remote-stage <id>     Remote stage id; repeatable (default: all transformer stages)
+          --prompt-tokens <list>  Comma-separated token ids for a staged POC request
+          --max-tokens <N>        Generated token count for --cluster (default: 1)
+          --kv-capacity <N>       KV cache capacity for --cluster
+          --max-context <N>       Max context length for --cluster (default: 2048)
+          --once                  Run one cluster request or readiness check, then exit
           --no-eagle              Disable the built-in EAGLE/MTP serve model
           --eagle-name <name>     Served name for the EAGLE/MTP model
           --eagle-target <dir>    EAGLE target .aimodel bundle
@@ -669,6 +675,7 @@ func serveCommand(_ argv: [String]) {
     var verbose = false
     var statsFile: String? = nil   // usage-stats persistence (default ~/.caix/usage.json)
     var clusterManifest: String? = nil
+    var clusterOptions = ClusterRuntimeOptions()
     // EAGLE MTP model. Enabled by default with the known bundle paths; disable with --no-eagle,
     // or override paths individually.
     var eagleEnabled = true
@@ -710,6 +717,17 @@ func serveCommand(_ argv: [String]) {
         case "--python": python = value(arg)
         case "--stats-file": statsFile = value(arg)
         case "--cluster": clusterManifest = value(arg)
+        case "--remote-stage": clusterOptions.remoteStageIDs.append(value(arg))
+        case "--prompt-tokens":
+            do {
+                clusterOptions.promptTokens = try parseClusterTokenList(value(arg))
+            } catch {
+                fail("\(error)")
+            }
+        case "--max-tokens": clusterOptions.maxTokens = intValue(arg)
+        case "--kv-capacity": clusterOptions.kvCapacity = intValue(arg)
+        case "--max-context": clusterOptions.maxContextLength = intValue(arg)
+        case "--once": clusterOptions.once = true
         case "--no-eagle": eagleEnabled = false
         case "--eagle-name": eagleName = value(arg)
         case "--eagle-target": eagleTarget = value(arg)
@@ -720,7 +738,9 @@ func serveCommand(_ argv: [String]) {
         case "--eagle-backbone", "--eagle-hidden-size": eagleBackbone = intValue(arg)
         case "--eagle-sliding-window": eagleSlidingWindow = intValue(arg)
         case "--eagle-max-context": eagleMaxContext = intValue(arg)
-        case "--verbose", "-v": verbose = true
+        case "--verbose", "-v":
+            verbose = true
+            clusterOptions.verbose = true
         case "-h", "--help": printUsage(); exit(0)
         default: fail("unknown option: \(arg)")
         }
@@ -729,11 +749,25 @@ func serveCommand(_ argv: [String]) {
 
     if let clusterManifest {
         guard !clusterManifest.isEmpty else { fail("--cluster needs a manifest path") }
-        FileHandle.standardError.write(
-            Data(
-                "error: caix serve --cluster is not implemented yet; use caix cluster plan to validate staged manifests\n"
-                    .utf8))
-        exit(1)
+        let semaphore = DispatchSemaphore(value: 0)
+        nonisolated(unsafe) var exitCode: Int32 = 0
+        Task {
+            defer { semaphore.signal() }
+            do {
+                try await runClusterServeRuntime(
+                    manifestPath: clusterManifest,
+                    host: host,
+                    port: port,
+                    options: clusterOptions)
+            } catch {
+                FileHandle.standardError.write(Data("cluster serve error: \(error)\n".utf8))
+                exitCode = 1
+            }
+        }
+        while semaphore.wait(timeout: .now()) == .timedOut {
+            RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02))
+        }
+        exit(exitCode)
     }
 
     // Build the EAGLE config only if the target+draft bundles actually exist on disk.
