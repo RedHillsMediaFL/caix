@@ -475,32 +475,31 @@ enum DistributedCoreAIStageNDArrayIO {
         positionRange: DistributedSequenceRange,
         stepIndex: Int
     ) throws -> DistributedHiddenStatePacket {
-        let shape = output.shape
         switch output.scalarType {
         case .float16:
-            let values = try readRank3(output, as: Float16.self, tensorName: "hidden_states")
+            let readback = try readRank3(output, as: Float16.self, tensorName: "hidden_states")
             let metadata = DistributedHiddenStatePacketMetadata(
                 requestID: requestID,
                 sourceStageID: sourceStageID,
                 destinationStageID: destinationStageID,
                 positionRange: positionRange,
-                shape: shape,
+                shape: readback.shape,
                 scalarType: .float16,
-                byteCount: values.count * DistributedTensorScalarType.float16.byteWidth,
+                byteCount: readback.values.count * DistributedTensorScalarType.float16.byteWidth,
                 stepIndex: stepIndex)
-            return try DistributedHiddenStatePacket(metadata: metadata, float16Values: values)
+            return try DistributedHiddenStatePacket(metadata: metadata, float16Values: readback.values)
         case .float32:
-            let values = try readRank3(output, as: Float.self, tensorName: "hidden_states")
+            let readback = try readRank3(output, as: Float.self, tensorName: "hidden_states")
             let metadata = DistributedHiddenStatePacketMetadata(
                 requestID: requestID,
                 sourceStageID: sourceStageID,
                 destinationStageID: destinationStageID,
                 positionRange: positionRange,
-                shape: shape,
+                shape: readback.shape,
                 scalarType: .float32,
-                byteCount: values.count * DistributedTensorScalarType.float32.byteWidth,
+                byteCount: readback.values.count * DistributedTensorScalarType.float32.byteWidth,
                 stepIndex: stepIndex)
-            return try DistributedHiddenStatePacket(metadata: metadata, float32Values: values)
+            return try DistributedHiddenStatePacket(metadata: metadata, float32Values: readback.values)
         default:
             throw CoreAIPipeline.RuntimeError.modelContract(
                 "hidden_states scalar type \(output.scalarType) is not supported for distributed stage output")
@@ -511,18 +510,26 @@ enum DistributedCoreAIStageNDArrayIO {
         _ logits: NDArray,
         vocabSize: Int
     ) throws -> [Float] {
-        let offsets = try DistributedCoreAIStageTensorReadbackLayout.lastLogitsRowOffsets(
-            shape: logits.shape,
-            strides: logits.strides,
-            vocabSize: vocabSize)
         switch logits.scalarType {
         case .float16:
-            return logits.view(as: Float16.self).withUnsafePointer { pointer, _, _ in
-                offsets.map { Float(pointer[$0]) }
+            return try logits.view(as: Float16.self).withUnsafePointer { pointer, shape, strides in
+                let viewShape = copySpan(shape)
+                let viewStrides = copySpan(strides)
+                let offsets = try DistributedCoreAIStageTensorReadbackLayout.lastLogitsRowOffsets(
+                    shape: viewShape,
+                    strides: viewStrides,
+                    vocabSize: vocabSize)
+                return offsets.map { Float(pointer[$0]) }
             }
         case .float32:
-            return logits.view(as: Float.self).withUnsafePointer { pointer, _, _ in
-                offsets.map { pointer[$0] }
+            return try logits.view(as: Float.self).withUnsafePointer { pointer, shape, strides in
+                let viewShape = copySpan(shape)
+                let viewStrides = copySpan(strides)
+                let offsets = try DistributedCoreAIStageTensorReadbackLayout.lastLogitsRowOffsets(
+                    shape: viewShape,
+                    strides: viewStrides,
+                    vocabSize: vocabSize)
+                return offsets.map { pointer[$0] }
             }
         default:
             throw CoreAIPipeline.RuntimeError.modelContract(
@@ -539,14 +546,20 @@ enum DistributedCoreAIStageNDArrayIO {
         _ array: NDArray,
         as _: T.Type,
         tensorName: String
-    ) throws -> [T] {
-        let offsets = try DistributedCoreAIStageTensorReadbackLayout.rank3Offsets(
-            shape: array.shape,
-            strides: array.strides,
-            tensorName: tensorName)
-        return array.view(as: T.self).withUnsafePointer { pointer, _, _ in
-            offsets.map { pointer[$0] }
+    ) throws -> (shape: [Int], values: [T]) {
+        try array.view(as: T.self).withUnsafePointer { pointer, shape, strides in
+            let viewShape = copySpan(shape)
+            let viewStrides = copySpan(strides)
+            let offsets = try DistributedCoreAIStageTensorReadbackLayout.rank3Offsets(
+                shape: viewShape,
+                strides: viewStrides,
+                tensorName: tensorName)
+            return (viewShape, offsets.map { pointer[$0] })
         }
+    }
+
+    private static func copySpan(_ span: Span<Int>) -> [Int] {
+        (0..<span.count).map { span[$0] }
     }
 
     private static func requireScalarType(
