@@ -41,6 +41,7 @@ HF_HOME = os.environ.get("HF_HOME", "/Volumes/SSD/hf-cache")
 TMPDIR_EXPORT = caix_env("caix_tmpdir", "TMPDIR", "/Volumes/SSD/coreai-tmp")
 CHECK_SUPPORT = Path(__file__).resolve().parent / "check_support.py"
 GGUF_DEQUANT = Path(__file__).resolve().parent / "gguf_dequant.py"
+CLUSTER_SCHEMA = "caix.cluster.stage_manifest.v0"
 
 
 def dequant_gguf(repo: str, gguf_file: str | None, out_dir: str) -> dict:
@@ -233,6 +234,228 @@ def patch_min_kv_capacity(
     return min_kv
 
 
+def _cluster_error(message: str) -> SystemExit:
+    return SystemExit(f"error: staged cluster manifest: {message}")
+
+
+def _json_object(path: Path, label: str) -> dict:
+    try:
+        data = json.loads(path.read_text())
+    except FileNotFoundError:
+        raise _cluster_error(f"{label} not found: {path}") from None
+    except json.JSONDecodeError as e:
+        raise _cluster_error(f"{label} is not valid JSON: {e}") from None
+    if not isinstance(data, dict):
+        raise _cluster_error(f"{label} must be a JSON object")
+    return data
+
+
+def _first_non_empty(*values) -> str | None:
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _positive_int(value, field: str) -> int:
+    if isinstance(value, bool):
+        raise _cluster_error(f"{field} must be a positive integer")
+    if isinstance(value, int) and value > 0:
+        return value
+    raise _cluster_error(f"{field} must be a positive integer")
+
+
+def _positive_number(value, field: str) -> float:
+    if isinstance(value, bool):
+        raise _cluster_error(f"{field} must be positive")
+    if isinstance(value, (int, float)) and value > 0:
+        return float(value)
+    raise _cluster_error(f"{field} must be positive")
+
+
+def _stage_asset_name(stage: dict, stage_id: str) -> str:
+    name = _first_non_empty(
+        stage.get("bundle"),
+        stage.get("path"),
+        stage.get("bundle_path"),
+        stage.get("aimodel"),
+    )
+    if not name:
+        raise _cluster_error(f"stage {stage_id} is missing bundle")
+    return name
+
+
+def _bundle_asset_path(bundle: Path, asset_name: str, field: str) -> Path:
+    if "://" in asset_name:
+        raise _cluster_error(f"{field} must be a local bundle-relative .aimodel path")
+    path = Path(asset_name).expanduser()
+    if path.is_absolute():
+        raise _cluster_error(f"{field} must be relative to the bundle")
+    if any(part in ("..", "") for part in path.parts):
+        raise _cluster_error(f"{field} must stay inside the bundle")
+    if path.suffix != ".aimodel":
+        raise _cluster_error(f"{field} must point to a .aimodel directory")
+    resolved = bundle / path
+    if not resolved.is_dir():
+        raise _cluster_error(f"{field} path is missing: {asset_name}")
+    if not (resolved / "main.mlirb").is_file():
+        raise _cluster_error(f"{field} is missing main.mlirb: {asset_name}")
+    return resolved
+
+
+def _validate_function_map(stage: dict, stage_id: str) -> None:
+    function_map = stage.get("function_map")
+    if not isinstance(function_map, dict):
+        raise _cluster_error(f"stage {stage_id} is missing function_map")
+    main = function_map.get("main")
+    if not isinstance(main, list) or not any(isinstance(name, str) and name.strip() for name in main):
+        raise _cluster_error(f"stage {stage_id} function_map.main must be non-empty")
+    if "decode" in function_map:
+        decode = function_map["decode"]
+        if not isinstance(decode, list) or not any(
+            isinstance(name, str) and name.strip() for name in decode
+        ):
+            raise _cluster_error(f"stage {stage_id} function_map.decode must be non-empty")
+
+
+def _normalize_boundary(cluster: dict) -> None:
+    boundary = cluster.get("boundary")
+    if boundary is None and isinstance(cluster.get("boundary_tensor"), dict):
+        boundary = {"hidden_state": cluster["boundary_tensor"]}
+        cluster["boundary"] = boundary
+        cluster.pop("boundary_tensor", None)
+    if not isinstance(boundary, dict) or not isinstance(boundary.get("hidden_state"), dict):
+        raise _cluster_error("boundary.hidden_state is required")
+    hidden = boundary["hidden_state"]
+    if hidden.get("name") != "hidden_states":
+        raise _cluster_error("boundary.hidden_state.name must be hidden_states")
+    shape = hidden.get("shape")
+    if not (
+        isinstance(shape, list)
+        and len(shape) == 3
+        and shape[0] == 1
+        and (shape[1] == -1 or (isinstance(shape[1], int) and shape[1] > 0))
+        and isinstance(shape[2], int)
+        and shape[2] > 0
+    ):
+        raise _cluster_error("boundary.hidden_state.shape must be [1, -1, H]")
+    if hidden.get("scalar_type") not in ("float16", "float32"):
+        raise _cluster_error("boundary.hidden_state.scalar_type must be float16 or float32")
+
+
+def _cluster_block(raw_manifest: dict, bundle: Path, model_name: str) -> dict:
+    if isinstance(raw_manifest.get("cluster"), dict):
+        cluster = dict(raw_manifest["cluster"])
+        cluster.setdefault("schema", raw_manifest.get("schema") or CLUSTER_SCHEMA)
+        cluster.setdefault(
+            "model",
+            _first_non_empty(
+                raw_manifest.get("model"),
+                raw_manifest.get("model_name"),
+                raw_manifest.get("name"),
+                model_name,
+            ),
+        )
+    else:
+        cluster = {
+            "schema": raw_manifest.get("schema") or CLUSTER_SCHEMA,
+            "model": _first_non_empty(
+                raw_manifest.get("model"),
+                raw_manifest.get("model_name"),
+                raw_manifest.get("name"),
+                model_name,
+            ),
+            "total_layer_count": raw_manifest.get("total_layer_count")
+            or raw_manifest.get("total_layers"),
+            "position_mode": raw_manifest.get("position_mode"),
+            "boundary": raw_manifest.get("boundary"),
+            "stages": raw_manifest.get("stages"),
+        }
+        if cluster["boundary"] is None and isinstance(raw_manifest.get("boundary_tensor"), dict):
+            cluster["boundary"] = {"hidden_state": raw_manifest["boundary_tensor"]}
+
+    if cluster.get("schema") != CLUSTER_SCHEMA:
+        raise _cluster_error(f"schema must be {CLUSTER_SCHEMA}")
+    if not _first_non_empty(cluster.get("model")):
+        raise _cluster_error("model is required")
+    total_layers = _positive_int(
+        cluster.get("total_layer_count") or cluster.get("total_layers"),
+        "total_layer_count",
+    )
+    cluster["total_layer_count"] = total_layers
+    cluster.pop("total_layers", None)
+    if cluster.get("position_mode") not in ("full_prefix", "current"):
+        raise _cluster_error("position_mode must be full_prefix or current")
+    _normalize_boundary(cluster)
+
+    stages = cluster.get("stages")
+    if not isinstance(stages, list) or len(stages) < 3:
+        raise _cluster_error("stages must include embeddings, transformer_layers, and final_norm_head")
+    roles = [stage.get("role") if isinstance(stage, dict) else None for stage in stages]
+    if roles[0] != "embeddings" or roles[-1] != "final_norm_head":
+        raise _cluster_error("stages must start with embeddings and end with final_norm_head")
+    if any(role != "transformer_layers" for role in roles[1:-1]):
+        raise _cluster_error("only transformer_layers stages may sit between embeddings and final_norm_head")
+
+    expected_layer = 0
+    for index, stage in enumerate(stages):
+        if not isinstance(stage, dict):
+            raise _cluster_error(f"stage {index} must be an object")
+        stage_id = _first_non_empty(stage.get("id"), stage.get("name")) or f"stage-{index + 1}"
+        stage.setdefault("id", stage_id)
+        role = stage.get("role")
+        _positive_number(stage.get("memory_gb"), f"stage {stage_id} memory_gb")
+        _validate_function_map(stage, stage_id)
+        _bundle_asset_path(bundle, _stage_asset_name(stage, stage_id), f"stage {stage_id} bundle")
+        decode_asset = _first_non_empty(
+            stage.get("decode_asset"),
+            stage.get("decode_asset_name"),
+            stage.get("decode_bundle"),
+        )
+        if decode_asset:
+            _bundle_asset_path(bundle, decode_asset, f"stage {stage_id} decode_asset")
+
+        layers = stage.get("layers", stage.get("layer_range"))
+        if role == "transformer_layers":
+            if not (
+                isinstance(layers, list)
+                and len(layers) == 2
+                and all(isinstance(value, int) for value in layers)
+                and layers[0] == expected_layer
+                and layers[1] > layers[0]
+            ):
+                raise _cluster_error(
+                    f"stage {stage_id} layers must be contiguous [lower, upper]"
+                )
+            expected_layer = layers[1]
+        else:
+            if not isinstance(layers, str) or not layers.strip():
+                raise _cluster_error(f"stage {stage_id} layers must be a label")
+            if role == "final_norm_head":
+                _positive_int(stage.get("vocab_size"), f"stage {stage_id} vocab_size")
+
+    if expected_layer != total_layers:
+        raise _cluster_error(
+            f"transformer layer ranges end at {expected_layer}; expected {total_layers}"
+        )
+    return cluster
+
+
+def attach_cluster_manifest(bundle: Path, manifest_path: Path) -> int:
+    bundle = bundle.expanduser()
+    if not bundle.is_dir():
+        raise _cluster_error(f"bundle not found: {bundle}")
+    meta_path = bundle / "metadata.json"
+    metadata = _json_object(meta_path, "metadata.json")
+    if metadata.get("kind") != "llm":
+        raise _cluster_error("metadata.json kind must be llm")
+    manifest = _json_object(manifest_path.expanduser(), "stage manifest")
+    cluster = _cluster_block(manifest, bundle, str(metadata.get("name") or bundle.name))
+    metadata["cluster"] = cluster
+    meta_path.write_text(json.dumps(metadata, indent=2) + "\n")
+    return len(cluster["stages"])
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Convert a model to Core AI .aimodel")
     ap.add_argument("model", nargs="?", help="registry key (see models/registry.json)")
@@ -252,7 +475,19 @@ def main() -> int:
                     help="convert even if the support check has not passed")
     ap.add_argument("--gguf", help="GGUF repo id or local .gguf path — dequantize to HF, then convert")
     ap.add_argument("--gguf-file", help="specific .gguf filename in the repo (else best quant chosen)")
+    ap.add_argument("--bundle", help="existing exported bundle for --attach-cluster-manifest")
+    ap.add_argument("--attach-cluster-manifest",
+                    help="validate existing staged .aimodel assets and write metadata.json cluster block; does not create stages")
     args = ap.parse_args()
+
+    if args.bundle:
+        if not args.attach_cluster_manifest:
+            sys.exit("error: --bundle requires --attach-cluster-manifest")
+        count = attach_cluster_manifest(Path(args.bundle), Path(args.attach_cluster_manifest))
+        print(f"  attached cluster metadata for {count} stages")
+        return 0
+    if args.attach_cluster_manifest and args.dry_run:
+        sys.exit("error: --attach-cluster-manifest cannot be combined with --dry-run")
 
     # GGUF path: dequantize to a temp HF dir, then convert that as a local model.
     if args.gguf:
@@ -336,6 +571,9 @@ def main() -> int:
                 print(f"  baked language.min_kv_capacity={min_kv}")
         except Exception as e:
             print(f"  note: could not patch min_kv_capacity metadata: {e}")
+        if args.attach_cluster_manifest:
+            count = attach_cluster_manifest(bundle, Path(args.attach_cluster_manifest))
+            print(f"  attached cluster metadata for {count} stages")
     if not args.dry_run:
         print(f"  result: {'OK ' + str(bundle) if ok else 'FAILED (no .aimodel/main.mlirb)'}  exit={rc}")
         if not ok:

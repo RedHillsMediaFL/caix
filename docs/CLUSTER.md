@@ -121,10 +121,21 @@ relative to the model bundle when using `--model`.
 For real staged exports, include `boundary.hidden_state`. `shape` is `[batch, sequence, hidden]`;
 use `-1` for dynamic sequence length. `scalar_type` must be `float16` or `float32`.
 
+If staged `.aimodel` assets already exist under a bundle, attach their manifest to
+`metadata.json` with:
+
+```bash
+python3 python/converter/convert.py --bundle <bundle> --attach-cluster-manifest <manifest.json>
+```
+
+This validates stage asset paths, `main.mlirb`, layer coverage, function maps, boundary metadata,
+and final-stage `vocab_size`. It does not create staged assets.
+
 ## Current TODOs
 
 - `caix cluster join --help` exists; worker runtime is not implemented.
 - `caix serve --cluster` is advertised; coordinator runtime is not implemented.
-- Stage export metadata is not emitted by the converter yet.
+- The converter can attach validated cluster metadata for existing staged assets, but it does not
+  create staged assets.
 - Core AI stage execution exists for `.none`, `.stateful`, and `.explicitOutputs` stage graphs.
 - Runtime tensor transport and worker protocols are intentionally outside this dry-run command.
