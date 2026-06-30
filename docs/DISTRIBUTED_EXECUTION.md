@@ -1,9 +1,9 @@
 # Distributed Execution (v0 architecture)
 
 Status: design plus partial runtime. A typed plan/validation layer, dry-run planner command,
-same-machine coordinator, worker frame path, and stateful/no-cache Core AI stage handle have
-landed in the tree (see §0). Explicit-cache stage execution, staged export assets, real
-same-machine token-match evidence, and cross-process transport are still missing.
+same-machine coordinator, worker frame path, and Core AI stage handle have landed in the tree
+(see §0). Staged export assets, real same-machine token-match evidence, and cross-process
+transport are still missing.
 
 Goal (from `docs/ROADMAP.md`): run a model that does not fit on one Mac by splitting Core AI
 execution into stage shards across Macs. Pipeline parallelism only. No tensor parallelism, no
@@ -75,15 +75,13 @@ This is blunt on purpose. Where the current code cannot do something, it says so
   `runtime_plan` from the shared manifest loader, including the boundary tensor contract. It does
   not load Core AI models, start workers, or move tensors.
 - `DistributedCoreAIStageHandle` loads stage assets, validates Core AI descriptors, allocates
-  request KV state, runs `.none`/`.stateful` stage functions, compacts hidden-state outputs, and
-  reads final logits for greedy token selection. `.explicitOutputs` stage execution remains
-  fail-closed.
+  request KV state, runs `.none`/`.stateful`/`.explicitOutputs` stage functions, compacts
+  hidden-state outputs, and reads final logits for greedy token selection.
 
 **Gap:** there is no staged exporter output or token-match evidence yet. The Core AI
-`DistributedStageHandle` can run `.none` and `.stateful` cache contracts and keeps
-`.explicitOutputs` fail-closed, but nothing in-tree produces per-stage `.aimodel` assets or the
-tracked evidence required by the readiness gate. There is still no cross-process forward. The
-monolithic path stays as the oracle.
+`DistributedStageHandle` can run `.none`, `.stateful`, and `.explicitOutputs` cache contracts,
+but nothing in-tree produces per-stage `.aimodel` assets or the tracked evidence required by the
+readiness gate. There is still no cross-process forward. The monolithic path stays as the oracle.
 
 ---
 
@@ -173,6 +171,9 @@ Rules carried over unchanged from the monolithic contract:
   every stage on every step.
 - All stages agree on `position_mode` (`full_prefix` vs `current`). The coordinator honors
   the mode recorded in the staged manifest; mixing modes silently corrupts RoPE.
+- For partial-rotary exports, avoid Apple's composite partial-RoPE path until
+  coreai-models#66 is fixed; use precomputed RoPE sine/cosine tables and require equivalence
+  evidence.
 - KV capacity is allocated once per request per stage, floored to that stage's KV floor —
   identical math to `LLMEngine.resolvedCapacity` / `allocateKVCache` (`LLMEngine.swift:546-566`).
 - `H` (`hidden_size`) is fixed across all boundaries. The boundary tensor rank is always 3
@@ -366,13 +367,13 @@ is blocked on that exporter and says so.
 
 `DistributedSameMachinePipeline` validates ordered stage handles and stage-to-stage packet
 handoff. `DistributedStagedEngine` owns the token loop. `DistributedCoreAIStageHandle` now loads
-stage functions, allocates per-request KV state, runs `.none` and `.stateful` Core AI stages,
-relays hidden packets between non-final stages, and samples the final stage with greedy
+stage functions, allocates per-request KV state, runs `.none`, `.stateful`, and
+`.explicitOutputs` Core AI stages, relays hidden packets between non-final stages, and samples
+the final stage with greedy
 `Sampler.argmax`.
 
 Still held:
 
-- `.explicitOutputs` Core AI stage execution remains fail-closed.
 - The staged exporter has not emitted real per-stage `.aimodel` assets and manifest metadata.
 - Same-machine Qwen3-0.6B token-match evidence is not present.
 
@@ -418,10 +419,11 @@ add transport, per §4/§5/§7.
   Staged metadata can record the boundary tensor contract now; for internally bfloat16 graphs, the
   exporter still needs to materialize a host-readable boundary.
 - **Staged exporter handoff.** The runtime and CLI can load staged manifests and the Core AI stage
-  handle can execute `.none`/`.stateful` stage graphs, but current exports still do not record
-  staged metadata. The exporter must write `cluster.stages`, `total_layer_count`, `position_mode`,
-  stage asset names, `function_map`, optional decode assets, `vocab_size`, and boundary tensor
-  metadata before same-machine staged equivalence can run.
+  handle can execute `.none`/`.stateful`/`.explicitOutputs` stage graphs, but current exports
+  still do not record staged metadata. The exporter must write `cluster.stages`,
+  `total_layer_count`, `position_mode`, stage asset names, `function_map`, optional decode
+  assets, `vocab_size`, and boundary tensor metadata before same-machine staged equivalence can
+  run.
 - **`AIModel.specialize` cache keying.** Does the `.default` compile cache key cleanly per
   stage graph, or do same-named functions (`main`/`decode`) across stage bundles collide?
   Settle during 9.2.
@@ -429,6 +431,8 @@ add transport, per §4/§5/§7.
   `coreai.llm.export` path (decides the default cache contract / boundary dtype), and the
   exported position mode (`full` vs `current`), which must be recorded in the manifest and fed
   identically to all stages.
+- **Partial-rotary RoPE.** Apple tracks coreai-models#66 as a known partial-RoPE issue. Exporters
+  for `partial_rotary_factor < 1` models must precompute sine/cosine tables and prove parity.
 - **Tied-embedding memory.** Per-stage memory after the embedding/unembedding duplication on
   the `embeddings` and `final_norm_head` stages — feeds `caix cluster plan` and the eventual
   placement on the 32 GB / 16 GB workers.

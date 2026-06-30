@@ -37,7 +37,7 @@ Current in-tree pieces:
   guards for allocate-before-forward, step order, processed-token position, KV capacity, reset,
   and free.
 - Core AI distributed stage handle pieces for descriptor validation, allocation, NDArray IO,
-  output readback, and `.none`/`.stateful` forward/reset execution.
+  output readback, and `.none`/`.stateful`/`.explicitOutputs` forward/reset execution.
 
 Still missing before real staged inference:
 

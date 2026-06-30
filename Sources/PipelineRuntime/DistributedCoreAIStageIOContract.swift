@@ -8,12 +8,19 @@ extension DistributedStageIOContract {
         descriptor: InferenceFunctionDescriptor
     ) throws {
         try Self.validateStateDescriptors(descriptor)
+        let cacheIO = try DistributedCoreAIStageCacheIO.extracted(from: descriptor)
+        let inputExclusions = cacheIO.stageIOInputExclusions
+        let outputExclusions = cacheIO.stageIOOutputExclusions
         self.init(
             functionName: functionName,
-            inputs: try descriptor.inputNames.map { name in
+            inputs: try descriptor.inputNames.filter { name in
+                !inputExclusions.contains(name)
+            }.map { name in
                 try Self.inputTensor(name: name, descriptor: descriptor)
             },
-            outputs: try descriptor.outputNames.map { name in
+            outputs: try descriptor.outputNames.filter { name in
+                !outputExclusions.contains(name)
+            }.map { name in
                 try Self.outputTensor(name: name, descriptor: descriptor)
             },
             stateNames: descriptor.stateNames)
@@ -123,6 +130,24 @@ struct DistributedCoreAIStageCacheIO {
     let valueCacheDescriptor: NDArrayDescriptor?
     let keyCacheOutputDescriptor: NDArrayDescriptor?
     let valueCacheOutputDescriptor: NDArrayDescriptor?
+
+    var stageIOInputExclusions: Set<String> {
+        switch contract {
+        case .explicitOutputs:
+            return Set([keyCacheName, valueCacheName].compactMap { $0 })
+        case .none, .stateful:
+            return []
+        }
+    }
+
+    var stageIOOutputExclusions: Set<String> {
+        switch contract {
+        case .explicitOutputs:
+            return Set([keyCacheName, valueCacheName].compactMap { $0 })
+        case .none, .stateful:
+            return []
+        }
+    }
 
     static func extracted(from descriptor: InferenceFunctionDescriptor) throws
         -> DistributedCoreAIStageCacheIO
@@ -687,8 +712,34 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
             requestState.keyCache = keyCache
             requestState.valueCache = valueCache
         case .explicitOutputs:
-            throw CoreAIPipeline.RuntimeError.modelContract(
-                "distributed Core AI explicit-cache stage execution is not implemented yet")
+            guard let keyCache = requestState.keyCache,
+                let valueCache = requestState.valueCache,
+                let keyCacheName = cacheIO.keyCacheName,
+                let valueCacheName = cacheIO.valueCacheName,
+                let keyCacheOutputDescriptor = cacheIO.keyCacheOutputDescriptor,
+                let valueCacheOutputDescriptor = cacheIO.valueCacheOutputDescriptor
+            else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "distributed stage explicit KV cache is missing")
+            }
+            var nextKeyCache = try Self.makeExplicitKVCacheOutput(
+                descriptor: keyCacheOutputDescriptor,
+                currentCache: keyCache,
+                tensorName: keyCacheName)
+            var nextValueCache = try Self.makeExplicitKVCacheOutput(
+                descriptor: valueCacheOutputDescriptor,
+                currentCache: valueCache,
+                tensorName: valueCacheName)
+            outputViews.insert(&nextKeyCache, for: keyCacheName)
+            outputViews.insert(&nextValueCache, for: valueCacheName)
+            var explicitInputs = inputs
+            explicitInputs[keyCacheName] = keyCache
+            explicitInputs[valueCacheName] = valueCache
+            _ = try await function.run(
+                inputs: explicitInputs,
+                outputViews: consume outputViews)
+            requestState.keyCache = nextKeyCache
+            requestState.valueCache = nextValueCache
         }
     }
 
@@ -770,6 +821,25 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
         var array = NDArray(descriptor: descriptor.resolvingDynamicDimensions(shape))
         zeroState(&array, scalarType: descriptor.scalarType)
         return array
+    }
+
+    private static func makeExplicitKVCacheOutput(
+        descriptor: NDArrayDescriptor,
+        currentCache: NDArray,
+        tensorName: String
+    ) throws -> NDArray {
+        guard descriptor.shape.count == currentCache.shape.count else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "distributed stage KV cache output '\(tensorName)' rank \(descriptor.shape.count) does not match current cache rank \(currentCache.shape.count)")
+        }
+        let shape = descriptor.shape.enumerated().map { index, dimension in
+            dimension < 0 ? currentCache.shape[index] : dimension
+        }
+        guard shape.allSatisfy({ $0 > 0 }) else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "distributed stage KV cache output '\(tensorName)' resolves to invalid shape \(shape)")
+        }
+        return NDArray(descriptor: descriptor.resolvingDynamicDimensions(shape))
     }
 
     private static func zeroState(_ array: inout NDArray, scalarType: NDArray.ScalarType) {
