@@ -986,6 +986,89 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertEqual(handles[2].inputs[0].hiddenState?.metadata.sourceStageID, "layers-0-16")
     }
 
+    func testTwoRemoteWorkerStagesRunThroughSeparateLoopbackTransports() async throws {
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 2], scalarType: .float16),
+            positionMode: .fullPrefix)
+        let handles = makeFakeHandles(for: plan)
+        var coordinator = try DistributedWorkerHandshakeCoordinator(plan: plan)
+        var remoteHandles: [String: DistributedStageHandle] = [:]
+
+        for handle in handles {
+            let executor = try DistributedWorkerFrameExecutor(plan: plan, handle: handle)
+            let loopback = DistributedLoopbackWorkerTransport(
+                executor: executor,
+                requestChunkSize: 5,
+                responseChunkSize: 3)
+            let response = try loopback.handshake(
+                with: &coordinator,
+                cacheContract: "stateful",
+                freeMemoryBytes: 4096,
+                computeUnit: "all",
+                labels: [
+                    "stage": handle.descriptor.id,
+                    "worker": handle.descriptor.workerID ?? "coordinator",
+                ])
+
+            guard case .helloAck(let ack) = response.message else {
+                return XCTFail("expected hello_ack")
+            }
+            XCTAssertTrue(ack.accepted)
+            XCTAssertEqual(ack.stageID, handle.descriptor.id)
+
+            if handle.descriptor.workerID != "coordinator" {
+                remoteHandles[handle.descriptor.id] = try DistributedRemoteStageHandle(
+                    plan: plan,
+                    descriptor: handle.descriptor
+                ) { request in
+                    try await loopback.roundTrip(request)
+                }
+            }
+        }
+        XCTAssertTrue(coordinator.isReady)
+        XCTAssertNoThrow(try coordinator.requireReady())
+
+        let pipeline = try DistributedSameMachinePipeline(
+            plan: plan,
+            stages: [
+                handles[0],
+                try XCTUnwrap(remoteHandles["layers-0-16"]),
+                try XCTUnwrap(remoteHandles["layers-16-32"]),
+                handles[3],
+            ])
+        let engine = try DistributedStagedEngine(pipeline: pipeline, maxContextLength: 16)
+
+        let result = try await engine.generate(
+            promptTokens: [10, 11],
+            options: DistributedStagedGenerationOptions(maxTokens: 2),
+            requestID: "req-two-workers")
+
+        XCTAssertEqual(result.generatedTokenIDs, [42, 42])
+        XCTAssertEqual(handles.map(\.allocatedRequests), [
+            ["req-two-workers"], ["req-two-workers"], ["req-two-workers"], ["req-two-workers"],
+        ])
+        XCTAssertEqual(handles.map(\.freeRequests), [
+            ["req-two-workers"], ["req-two-workers"], ["req-two-workers"], ["req-two-workers"],
+        ])
+        XCTAssertEqual(handles[1].descriptor.workerID, "worker-a")
+        XCTAssertEqual(handles[2].descriptor.workerID, "worker-b")
+        XCTAssertEqual(handles[1].inputs.map(\.positionIDs), [[0, 1], [0, 1, 2]])
+        XCTAssertEqual(handles[2].inputs.map(\.positionIDs), [[0, 1], [0, 1, 2]])
+
+        let workerAPacket = try XCTUnwrap(handles[1].inputs.first?.hiddenState)
+        XCTAssertEqual(workerAPacket.metadata.sourceStageID, "embed")
+        XCTAssertEqual(workerAPacket.metadata.destinationStageID, "layers-0-16")
+        XCTAssertEqual(workerAPacket.metadata.shape, [1, 2, 2])
+        XCTAssertEqual(workerAPacket.payload.count, workerAPacket.metadata.byteCount)
+
+        let workerBPacket = try XCTUnwrap(handles[2].inputs.first?.hiddenState)
+        XCTAssertEqual(workerBPacket.metadata.sourceStageID, "layers-0-16")
+        XCTAssertEqual(workerBPacket.metadata.destinationStageID, "layers-16-32")
+        XCTAssertEqual(workerBPacket.metadata.shape, [1, 2, 2])
+        XCTAssertEqual(workerBPacket.payload.count, workerBPacket.metadata.byteCount)
+    }
+
     func testLoopbackWorkerTransportReturnsNilForControlFrames() async throws {
         let plan = makePlan()
         let handle = makeFakeHandles(for: plan)[1]
