@@ -31,9 +31,7 @@ runtime bundle consumes them yet. Multimodal requests return a clear 400 until t
 
 caix is free and open. No paywall.
 
-Use [docs/TESTER_REQUESTS.md](docs/TESTER_REQUESTS.md) for current test requests. Keep the model
-repo revision, prompt, token budget, temperature, warmup count, measured run count, and chat-template
-mode unchanged. Send the raw benchmark directory.
+Benchmark procedure is in [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and [docs/TESTING.md](docs/TESTING.md).
 
 Support conversions, benchmark time, hosting, and tester access:
 [redhillsmediafl.com/open-source](https://redhillsmediafl.com/open-source).
@@ -165,54 +163,27 @@ caix catalog redhillsmediafl/qwen
 hf download redhillsmediafl/rhm-qwen3-4b-caix --revision <catalog-revision> --local-dir models/exports/qwen3-4b-coreai
 ```
 
-### Available models — org [redhillsmediafl](https://huggingface.co/redhillsmediafl)
+### Model catalog
 
-These are pre-converted Core AI `.aimodel` repos, named `rhm-...-caix`.
+Converted bundles are in the [redhillsmediafl Hugging Face org](https://huggingface.co/redhillsmediafl?search=caix)
+and in family collections:
 
-**Standalone models**
+- [Qwen caix](https://huggingface.co/collections/redhillsmediafl/qwen-caix-6a3fd5f6d272c154dbfcda67)
+- [Gemma caix](https://huggingface.co/collections/redhillsmediafl/gemma-caix-6a3fd5f57b67589b85e6eac6)
+- [GLM caix](https://huggingface.co/collections/redhillsmediafl/glm-caix-6a40604dfb87315cc99a558e)
+- [Mistral caix](https://huggingface.co/collections/redhillsmediafl/mistral-caix-6a404e43a972c2f2621a000e)
+- [Ornith caix](https://huggingface.co/collections/redhillsmediafl/ornith-caix-6a3ff0de0d269f65f53ef064)
+- [Qwythos caix](https://huggingface.co/collections/redhillsmediafl/qwythos-caix-6a409e86fb87315cc9a2d69f)
+- [gpt-oss caix](https://huggingface.co/collections/redhillsmediafl/gpt-oss-caix-6a404e428791003d8e6e79fc)
 
-| model | base | size |
-|---|---|---|
-| [`rhm-qwen2.5-0.5b-instruct-caix`](https://huggingface.co/redhillsmediafl/rhm-qwen2.5-0.5b-instruct-caix) | Qwen2.5-0.5B-Instruct — verified | ~290 MB |
-| [`rhm-qwen2.5-3b-instruct-caix`](https://huggingface.co/redhillsmediafl/rhm-qwen2.5-3b-instruct-caix) | Qwen2.5-3B-Instruct — verified; Qwen Research License | ~1.7 GB |
-| [`rhm-qwen3-0.6b-caix`](https://huggingface.co/redhillsmediafl/rhm-qwen3-0.6b-caix) | Qwen3-0.6B — edge/draft model | ~335 MB |
-| [`rhm-qwen3-4b-caix`](https://huggingface.co/redhillsmediafl/rhm-qwen3-4b-caix) | Qwen3-4B — general chat; tool calling | ~2.1 GB |
-| [`rhm-qwen3-8b-caix`](https://huggingface.co/redhillsmediafl/rhm-qwen3-8b-caix) | Qwen3-8B — verified | ~4.3 GB |
-| [`rhm-qwen3-14b-caix`](https://huggingface.co/redhillsmediafl/rhm-qwen3-14b-caix) | Qwen3-14B — verified | ~7.8 GB |
-| [`rhm-ornith-1.0-9b-caix`](https://huggingface.co/redhillsmediafl/rhm-ornith-1.0-9b-caix) | Ornith-1.0-9B (DeepReinforce) | ~17 GB (f16) |
-| [`rhm-qwythos-9b-caix`](https://huggingface.co/redhillsmediafl/rhm-qwythos-9b-caix) | Qwythos-9B-Claude-Mythos-5-1M — qwen3_5 hybrid with visible-content template patch | ~4.7 GB |
-| [`rhm-glm-4-9b-0414-caix`](https://huggingface.co/redhillsmediafl/rhm-glm-4-9b-0414-caix) | GLM-4-9B-0414 — dense bilingual model | ~5.0 GB |
-| [`rhm-glm-z1-9b-0414-caix`](https://huggingface.co/redhillsmediafl/rhm-glm-z1-9b-0414-caix) | GLM-Z1-9B-0414 — reasoning GLM model | ~5.0 GB |
-| [`rhm-glm-4-32b-0414-caix`](https://huggingface.co/redhillsmediafl/rhm-glm-4-32b-0414-caix) | GLM-4-32B-0414 — dense chat model | ~17 GB |
-| [`rhm-gpt-oss-20b-caix`](https://huggingface.co/redhillsmediafl/rhm-gpt-oss-20b-caix) | OpenAI gpt-oss-20b — verified 4-bit Core AI bundle | ~10 GB |
-| [`rhm-mistral-7b-instruct-v0.3-caix`](https://huggingface.co/redhillsmediafl/rhm-mistral-7b-instruct-v0.3-caix) | Mistral-7B-Instruct-v0.3 — verified | ~3.8 GB |
-| [`rhm-mistral-nemo-instruct-2407-caix`](https://huggingface.co/redhillsmediafl/rhm-mistral-nemo-instruct-2407-caix) | Mistral-Nemo-Instruct-2407 — verified | ~6.4 GB |
-| [`rhm-mistral-small-instruct-2409-caix`](https://huggingface.co/redhillsmediafl/rhm-mistral-small-instruct-2409-caix) | Mistral-Small-Instruct-2409 — verified; Mistral Research License | ~12 GB |
-| [`rhm-mixtral-8x7b-instruct-caix`](https://huggingface.co/redhillsmediafl/rhm-mixtral-8x7b-instruct-caix) | Mixtral-8x7B-Instruct-v0.1 — sparse MoE instruction model | ~24 GB |
-| [`rhm-qwen3.6-27b-caix`](https://huggingface.co/redhillsmediafl/rhm-qwen3.6-27b-caix) | Qwen3.6-27B — general chat | ~14 GB |
-| [`rhm-gemma-4-26b-a4b-caix`](https://huggingface.co/redhillsmediafl/rhm-gemma-4-26b-a4b-caix) | gemma-4-26B-A4B-it — MoE (~4B active) | ~13 GB |
-| [`rhm-gemma-4-31b-it-caix`](https://huggingface.co/redhillsmediafl/rhm-gemma-4-31b-it-caix) | gemma-4-31B-it — dense chat | ~16 GB |
+Use the catalog for current install commands:
 
-**MTP / speculative bundles** (draft + target in one repo)
+```bash
+caix catalog redhillsmediafl
+caix catalog redhillsmediafl/qwen
+```
 
-| model | what | size |
-|---|---|---|
-| [`rhm-gemma-4-26b-a4b-mtp-caix`](https://huggingface.co/redhillsmediafl/rhm-gemma-4-26b-a4b-mtp-caix) | gemma-4-26B-A4B **MTP** target + draft | ~17 GB |
-| [`rhm-gemma-4-31b-it-mtp-caix`](https://huggingface.co/redhillsmediafl/rhm-gemma-4-31b-it-mtp-caix) | gemma-4-31B-it **MTP** | 31B target + draft |
-| [`rhm-qwen3-4b-mtp-caix`](https://huggingface.co/redhillsmediafl/rhm-qwen3-4b-mtp-caix) | Qwen3-4B **MTP** | 4B target + 0.6B draft |
-
-**Draft models** (EAGLE/MTP components; advanced — pair with the matching target)
-
-| model | for |
-|---|---|
-| [`rhm-gemma-4-26b-a4b-draft-caix`](https://huggingface.co/redhillsmediafl/rhm-gemma-4-26b-a4b-draft-caix) | draft half of the 26B-A4B MTP pair |
-| [`rhm-gemma-4-31b-it-draft-caix`](https://huggingface.co/redhillsmediafl/rhm-gemma-4-31b-it-draft-caix) | draft half of the 31B-it MTP pair |
-
-An MTP repo is a two-model system: target plus draft. See its model card for exact speculative or
-EAGLE flags.
-
-External verification and benchmark submissions: [docs/TESTING.md](docs/TESTING.md).
-Current tester request sheet: [docs/TESTER_REQUESTS.md](docs/TESTER_REQUESTS.md).
+Model cards list exact revisions, licenses, storage, RAM notes, and any speculative or EAGLE flags.
 
 **B. Convert a bundle.** See [Converting models](#converting-models-advanced).
 
