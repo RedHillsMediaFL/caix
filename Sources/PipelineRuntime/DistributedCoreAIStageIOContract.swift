@@ -457,6 +457,7 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
             positionIDs: input.positionIDs,
             descriptor: executionIO.positionIDs.descriptor)
         let activeFunction = activeFunction(positionCount: positionCount)
+        tracePositionsIfRequested(input)
 
         let output: DistributedStageForwardOutput
         switch descriptor.role {
@@ -488,16 +489,25 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
                 ],
                 outputViews: consume outputViews,
                 requestState: &requestState)
+            try traceHiddenArrayIfRequested(
+                hiddenStates,
+                point: "hidden_output_ndarray",
+                input: input)
+            let hiddenPacket = try DistributedCoreAIStageNDArrayIO.makeHiddenStatePacket(
+                from: hiddenStates,
+                requestID: input.requestID,
+                sourceStageID: descriptor.id,
+                destinationStageID: nextStageID,
+                positionRange: input.positionRange,
+                stepIndex: input.stepIndex)
+            try traceHiddenPacketIfRequested(
+                hiddenPacket,
+                point: "hidden_output_packet",
+                input: input)
             output = DistributedStageForwardOutput(
                 stageID: descriptor.id,
                 stepIndex: input.stepIndex,
-                hiddenState: try DistributedCoreAIStageNDArrayIO.makeHiddenStatePacket(
-                    from: hiddenStates,
-                    requestID: input.requestID,
-                    sourceStageID: descriptor.id,
-                    destinationStageID: nextStageID,
-                    positionRange: input.positionRange,
-                    stepIndex: input.stepIndex))
+                hiddenState: hiddenPacket)
 
         case .transformerLayers:
             guard let hiddenInputBinding = executionIO.hiddenStatesInput,
@@ -514,9 +524,17 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
                 throw DistributedStageExecutionError.invalidStageOutput(
                     "transformer_layers stage has no next stage")
             }
+            try traceHiddenPacketIfRequested(
+                hiddenStatePacket,
+                point: "hidden_input_packet",
+                input: input)
             let hiddenInput = try DistributedCoreAIStageNDArrayIO.makeHiddenStates(
                 packet: hiddenStatePacket,
                 descriptor: hiddenInputBinding.descriptor)
+            try traceHiddenArrayIfRequested(
+                hiddenInput,
+                point: "hidden_input_ndarray",
+                input: input)
             var hiddenOutput = try DistributedCoreAIStageNDArrayIO.makeHiddenStatesOutput(
                 positionCount: positionCount,
                 descriptor: hiddenOutputBinding.descriptor,
@@ -531,16 +549,25 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
                 ],
                 outputViews: consume outputViews,
                 requestState: &requestState)
+            try traceHiddenArrayIfRequested(
+                hiddenOutput,
+                point: "hidden_output_ndarray",
+                input: input)
+            let hiddenPacket = try DistributedCoreAIStageNDArrayIO.makeHiddenStatePacket(
+                from: hiddenOutput,
+                requestID: input.requestID,
+                sourceStageID: descriptor.id,
+                destinationStageID: nextStageID,
+                positionRange: input.positionRange,
+                stepIndex: input.stepIndex)
+            try traceHiddenPacketIfRequested(
+                hiddenPacket,
+                point: "hidden_output_packet",
+                input: input)
             output = DistributedStageForwardOutput(
                 stageID: descriptor.id,
                 stepIndex: input.stepIndex,
-                hiddenState: try DistributedCoreAIStageNDArrayIO.makeHiddenStatePacket(
-                    from: hiddenOutput,
-                    requestID: input.requestID,
-                    sourceStageID: descriptor.id,
-                    destinationStageID: nextStageID,
-                    positionRange: input.positionRange,
-                    stepIndex: input.stepIndex))
+                hiddenState: hiddenPacket)
 
         case .finalNormHead:
             guard let hiddenInputBinding = executionIO.hiddenStatesInput,
@@ -557,9 +584,17 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
                 throw DistributedStageExecutionError.invalidStageOutput(
                     "final_norm_head stage requires vocab_size")
             }
+            try traceHiddenPacketIfRequested(
+                hiddenStatePacket,
+                point: "hidden_input_packet",
+                input: input)
             let hiddenInput = try DistributedCoreAIStageNDArrayIO.makeHiddenStates(
                 packet: hiddenStatePacket,
                 descriptor: hiddenInputBinding.descriptor)
+            try traceHiddenArrayIfRequested(
+                hiddenInput,
+                point: "hidden_input_ndarray",
+                input: input)
             var logits = try DistributedCoreAIStageNDArrayIO.makeLogitsOutput(
                 positionCount: positionCount,
                 vocabSize: vocabSize,
@@ -577,6 +612,10 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
             let logitsRow = try DistributedCoreAIStageNDArrayIO.readLastLogitsRow(
                 logits,
                 vocabSize: vocabSize)
+            traceLogitSummaryIfRequested(
+                logitsRow,
+                point: "logits_last_row",
+                input: input)
             Self.traceLogitsIfRequested(
                 logitsRow,
                 label: "staged stage=\(descriptor.id) step=\(input.stepIndex)")
@@ -620,6 +659,77 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
 
     private func activeFunction(positionCount: Int) -> InferenceFunction {
         positionCount == 1 ? decodeFunction : prefillFunction
+    }
+
+    private static var stageSummaryTraceEnabled: Bool {
+        guard let value = ProcessInfo.processInfo.environment["CAIX_DISTRIBUTED_STAGE_TRACE"] else {
+            return false
+        }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return !trimmed.isEmpty && !["0", "false", "no", "off"].contains(trimmed)
+    }
+
+    private func tracePositionsIfRequested(_ input: DistributedStageForwardInput) {
+        guard Self.stageSummaryTraceEnabled else { return }
+        let first = input.positionIDs.first.map(String.init) ?? "nil"
+        let last = input.positionIDs.last.map(String.init) ?? "nil"
+        traceStageLine(
+            point: "positions",
+            input: input,
+            fields: "position_count=\(input.positionIDs.count) first=\(first) last=\(last)")
+    }
+
+    private func traceHiddenArrayIfRequested(
+        _ array: NDArray,
+        point: String,
+        input: DistributedStageForwardInput
+    ) throws {
+        guard Self.stageSummaryTraceEnabled else { return }
+        let summary = try DistributedCoreAIStageNDArrayIO.hiddenStateSummary(array)
+        traceStageLine(point: point, input: input, fields: summary.fields)
+    }
+
+    private func traceHiddenPacketIfRequested(
+        _ packet: DistributedHiddenStatePacket,
+        point: String,
+        input: DistributedStageForwardInput
+    ) throws {
+        guard Self.stageSummaryTraceEnabled else { return }
+        let summary = try DistributedCoreAIStageTensorSummary(
+            scalarType: packet.metadata.scalarType.rawValue,
+            shape: packet.metadata.shape,
+            strides: nil,
+            values: packet.floatValuesAsFloat32().map(Double.init))
+        traceStageLine(
+            point: point,
+            input: input,
+            fields: summary.fields + " payload_bytes=\(packet.payload.count)")
+    }
+
+    private func traceLogitSummaryIfRequested(
+        _ logits: [Float],
+        point: String,
+        input: DistributedStageForwardInput
+    ) {
+        guard Self.stageSummaryTraceEnabled else { return }
+        let summary = DistributedCoreAIStageTensorSummary(
+            scalarType: "float32",
+            shape: [logits.count],
+            strides: nil,
+            values: logits.map(Double.init))
+        traceStageLine(point: point, input: input, fields: summary.fields)
+    }
+
+    private func traceStageLine(
+        point: String,
+        input: DistributedStageForwardInput,
+        fields: String
+    ) {
+        let range = "\(input.positionRange.lowerBound)..<\(input.positionRange.upperBound)"
+        let line = "[caix-stage-summary] stage=\(descriptor.id) "
+            + "role=\(descriptor.role.rawValue) point=\(point) step=\(input.stepIndex) "
+            + "positions=\(range) \(fields)\n"
+        FileHandle.standardError.write(Data(line.utf8))
     }
 
     private static func traceLogitsIfRequested(_ logits: [Float], label: String) {
@@ -880,6 +990,85 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
     }
 }
 
+fileprivate struct DistributedCoreAIStageTensorSummary {
+    let scalarType: String
+    let shape: [Int]
+    let strides: [Int]?
+    let count: Int
+    let finiteCount: Int
+    let nanCount: Int
+    let infCount: Int
+    let minValue: Double
+    let maxValue: Double
+    let meanValue: Double
+    let sumValue: Double
+    let sumAbsValue: Double
+    let l2Value: Double
+
+    init(
+        scalarType: String,
+        shape: [Int],
+        strides: [Int]?,
+        values: [Double]
+    ) {
+        self.scalarType = scalarType
+        self.shape = shape
+        self.strides = strides
+        self.count = values.count
+
+        var finiteCount = 0
+        var nanCount = 0
+        var infCount = 0
+        var minValue = Double.infinity
+        var maxValue = -Double.infinity
+        var sumValue = 0.0
+        var sumAbsValue = 0.0
+        var sumSquares = 0.0
+
+        for value in values {
+            if value.isNaN {
+                nanCount += 1
+            } else if value.isInfinite {
+                infCount += 1
+            } else {
+                finiteCount += 1
+                minValue = Swift.min(minValue, value)
+                maxValue = Swift.max(maxValue, value)
+                sumValue += value
+                sumAbsValue += Swift.abs(value)
+                sumSquares += value * value
+            }
+        }
+
+        self.finiteCount = finiteCount
+        self.nanCount = nanCount
+        self.infCount = infCount
+        self.minValue = finiteCount > 0 ? minValue : .nan
+        self.maxValue = finiteCount > 0 ? maxValue : .nan
+        self.meanValue = finiteCount > 0 ? sumValue / Double(finiteCount) : .nan
+        self.sumValue = sumValue
+        self.sumAbsValue = sumAbsValue
+        self.l2Value = sumSquares.squareRoot()
+    }
+
+    var fields: String {
+        let strideField = strides.map { " strides=\(Self.formatInts($0))" } ?? ""
+        return "scalar=\(scalarType) shape=\(Self.formatInts(shape))\(strideField) "
+            + "count=\(count) finite=\(finiteCount) nan=\(nanCount) inf=\(infCount) "
+            + "min=\(Self.format(minValue)) max=\(Self.format(maxValue)) "
+            + "mean=\(Self.format(meanValue)) sum=\(Self.format(sumValue)) "
+            + "sum_abs=\(Self.format(sumAbsValue)) l2=\(Self.format(l2Value))"
+    }
+
+    private static func formatInts(_ values: [Int]) -> String {
+        "[" + values.map(String.init).joined(separator: ",") + "]"
+    }
+
+    private static func format(_ value: Double) -> String {
+        String(format: "%.8g", value)
+    }
+}
+
 enum DistributedCoreAIStageNDArrayIO {
     static func makeInputIDs(
         tokenIDs: [Int32],
@@ -1037,6 +1226,20 @@ enum DistributedCoreAIStageNDArrayIO {
         }
     }
 
+    fileprivate static func hiddenStateSummary(
+        _ array: NDArray
+    ) throws -> DistributedCoreAIStageTensorSummary {
+        switch array.scalarType {
+        case .float16:
+            return try rank3Summary(array, as: Float16.self, tensorName: "hidden_states")
+        case .float32:
+            return try rank3Summary(array, as: Float.self, tensorName: "hidden_states")
+        default:
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "hidden_states scalar type \(array.scalarType) is not supported for summary tracing")
+        }
+    }
+
     private static func fillInt32(_ array: inout NDArray, _ elements: [Int32]) {
         var view = array.mutableView(as: Int32.self)
         view.copyElements(fromContentsOf: elements)
@@ -1055,6 +1258,26 @@ enum DistributedCoreAIStageNDArrayIO {
                 strides: viewStrides,
                 tensorName: tensorName)
             return (viewShape, offsets.map { pointer[$0] })
+        }
+    }
+
+    private static func rank3Summary<T: BinaryFloatingPoint & BitwiseCopyable>(
+        _ array: NDArray,
+        as _: T.Type,
+        tensorName: String
+    ) throws -> DistributedCoreAIStageTensorSummary {
+        try array.view(as: T.self).withUnsafePointer { pointer, shape, strides in
+            let viewShape = copySpan(shape)
+            let viewStrides = copySpan(strides)
+            let offsets = try DistributedCoreAIStageTensorReadbackLayout.rank3Offsets(
+                shape: viewShape,
+                strides: viewStrides,
+                tensorName: tensorName)
+            return DistributedCoreAIStageTensorSummary(
+                scalarType: String(describing: array.scalarType),
+                shape: viewShape,
+                strides: viewStrides,
+                values: offsets.map { Double(pointer[$0]) })
         }
     }
 
