@@ -39,6 +39,6 @@ Rules:
 - `caix_commit=` must resolve to a commit in the local repo used for the readiness gate.
 - Greedy only: `temperature=0`.
 - Keep raw stdout/stderr or an archive. Do not record only a summary.
-- Do not ask for Thunderbolt testing until both evidence files pass
+- Do not publish real-Qwen distributed claims until both evidence files pass
   `scripts/check-distributed-readiness.sh`.
 - The distributed readiness gate also needs a Brew-installed `caix` via `--brew-caix`.

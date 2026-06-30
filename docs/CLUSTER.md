@@ -43,13 +43,17 @@ Before asking for MacBook Thunderbolt testing, the gate is:
 Install caix through Brew on the test machine and run the installed check scripts, not checkout
 binaries.
 
-Use the readiness gate before asking for hardware:
+Use the tiny POC readiness gate before asking for hardware:
 
 ```bash
-scripts/check-publication-gates.sh --distributed --brew-caix "$(command -v caix)"
+scripts/check-distributed-readiness.sh --tiny-poc \
+  --tiny-manifest /path/to/qwen3-tiny-random-coreai-staged-rope-input-f16-2x1/stage-manifest.json \
+  --brew-caix "$(command -v caix)"
 ```
 
-It must print `distributed is ready for Thunderbolt testing`. If it prints `not ready`, keep work local.
+It must print `tiny distributed POC is ready for Thunderbolt testing`. If it prints `not ready`,
+keep work local. The real-Qwen publication gate remains `scripts/check-publication-gates.sh
+--distributed --brew-caix "$(command -v caix)"`.
 
 ## Stage Manifest Format
 

@@ -87,7 +87,9 @@ binary first:
 brew tap RedHillsMediaFL/caix
 brew reinstall caix
 brew test caix
-scripts/check-publication-gates.sh --distributed --brew-caix "$(command -v caix)"
+scripts/check-distributed-readiness.sh --tiny-poc \
+  --tiny-manifest /path/to/qwen3-tiny-random-coreai-staged-rope-input-f16-2x1/stage-manifest.json \
+  --brew-caix "$(command -v caix)"
 ```
 
 Then connect the second Mac and verify the link from the installed `caix`:

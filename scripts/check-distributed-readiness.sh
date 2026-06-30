@@ -4,9 +4,11 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 Usage: scripts/check-distributed-readiness.sh [--caix <path>] [--brew-caix <path>] [--evidence-dir <dir>]
+       scripts/check-distributed-readiness.sh --tiny-poc --tiny-manifest <stage-manifest.json> --brew-caix <path> [--caix <path>]
 
 Checks whether distributed inference is ready for Thunderbolt testing.
 This is non-heavy: it does not build, load models, start workers, benchmark, download, or upload.
+Default mode is the real-Qwen release gate. --tiny-poc is only the tiny staged hardware-POC gate.
 USAGE
 }
 
@@ -16,6 +18,8 @@ caix_binary="${caix_bin:-}"
 brew_caix_binary=""
 evidence_dir="$REPO_DIR/docs/distributed-evidence"
 expected_prompt_set="docs/distributed-evidence/qwen3-0.6b-prompts.txt"
+tiny_poc=0
+tiny_manifest=""
 not_ready=0
 plan_err="$(mktemp "${TMPDIR:-/tmp}/caix-distributed-plan.XXXXXX")"
 trap 'rm -f "$plan_err"' EXIT
@@ -25,6 +29,8 @@ while [[ $# -gt 0 ]]; do
     --caix) caix_binary="${2:?}"; shift 2 ;;
     --brew-caix) brew_caix_binary="${2:?}"; shift 2 ;;
     --evidence-dir) evidence_dir="${2:?}"; shift 2 ;;
+    --tiny-poc) tiny_poc=1; shift ;;
+    --tiny-manifest) tiny_manifest="${2:?}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     --*) echo "error: unknown option: $1" >&2; usage >&2; exit 2 ;;
     *) echo "error: unexpected argument: $1" >&2; usage >&2; exit 2 ;;
@@ -381,6 +387,83 @@ check_manifest_consistency() {
   fi
 }
 
+check_tiny_poc_manifest() {
+  local manifest="$1"
+
+  if [[ -z "$manifest" ]]; then
+    missing "tiny POC manifest is required; pass --tiny-manifest"
+    return
+  fi
+  if [[ ! -f "$manifest" ]]; then
+    missing "tiny POC manifest is missing: $manifest"
+    return
+  fi
+  if [[ -z "$caix_binary" || ! -x "$caix_binary" ]]; then
+    missing "tiny POC manifest cannot be validated without caix binary"
+    return
+  fi
+
+  if json="$("$caix_binary" cluster plan \
+      --manifest "$manifest" \
+      --workers main=4,macbook=2 \
+      --json 2>"$plan_err")"; then
+    if TINY_PLAN_JSON="$json" python3 - <<'PY'
+import json
+import os
+import sys
+
+doc = json.loads(os.environ["TINY_PLAN_JSON"])
+runtime = doc.get("runtime_plan")
+if doc.get("dry_run") is not True or not isinstance(runtime, dict):
+    sys.exit(1)
+if doc.get("model_name") != "qwen3-tiny-random-coreai-staged-rope-input-f16-2x1":
+    sys.exit(1)
+roles = [stage.get("role") for stage in runtime.get("stages", [])]
+if roles != ["embeddings", "transformer_layers", "transformer_layers", "final_norm_head"]:
+    sys.exit(1)
+if runtime.get("total_layer_count") != 2:
+    sys.exit(1)
+if runtime.get("position_mode") != "full_prefix":
+    sys.exit(1)
+boundary = runtime.get("boundary_tensor")
+if not isinstance(boundary, dict):
+    sys.exit(1)
+if boundary.get("name") != "hidden_states":
+    sys.exit(1)
+if boundary.get("shape") != [1, -1, 64]:
+    sys.exit(1)
+if boundary.get("scalar_type") != "float16":
+    sys.exit(1)
+PY
+    then
+      ready "tiny POC manifest validates with cluster plan"
+    else
+      missing "tiny POC manifest did not match the expected staged runtime contract"
+    fi
+  else
+    missing "tiny POC manifest failed cluster plan: $(tr '\n' ' ' <"$plan_err" | sed 's/[[:space:]]*$//')"
+  fi
+
+  local digest_file
+  digest_file="$(mktemp "${TMPDIR:-/tmp}/caix-tiny-poc-digests.XXXXXX")"
+  if "$SCRIPT_DIR/check-stage-bundle-copy.sh" --manifest "$manifest" --write "$digest_file" >/dev/null; then
+    ready "tiny POC staged assets are digestible for copy verification"
+  else
+    missing "tiny POC staged assets failed copy-digest verification"
+  fi
+  rm -f "$digest_file"
+
+  if "$SCRIPT_DIR/check-tiny-cluster-smoke.sh" \
+      --caix "$caix_binary" \
+      --manifest "$manifest" \
+      --coordinator 127.0.0.1:1237 \
+      --print-commands >/dev/null; then
+    ready "tiny POC cluster smoke commands can be generated"
+  else
+    missing "tiny POC cluster smoke command generation failed"
+  fi
+}
+
 if [[ -z "$caix_binary" || ! -x "$caix_binary" ]]; then
   missing "caix binary not found; pass --caix"
 else
@@ -444,30 +527,50 @@ PY
   fi
 fi
 
-same_machine_evidence="$evidence_dir/same-machine-qwen3-0.6b-token-match.txt"
-loopback_evidence="$evidence_dir/loopback-qwen3-0.6b-token-match.txt"
+if [[ "$tiny_poc" == "1" ]]; then
+  check_tiny_poc_manifest "$tiny_manifest"
+else
+  same_machine_evidence="$evidence_dir/same-machine-qwen3-0.6b-token-match.txt"
+  loopback_evidence="$evidence_dir/loopback-qwen3-0.6b-token-match.txt"
 
-check_token_match_evidence "$same_machine_evidence" "same-machine" "same-machine"
-check_token_match_evidence "$loopback_evidence" "loopback" "loopback"
-check_manifest_consistency "$same_machine_evidence" "$loopback_evidence"
+  check_token_match_evidence "$same_machine_evidence" "same-machine" "same-machine"
+  check_token_match_evidence "$loopback_evidence" "loopback" "loopback"
+  check_manifest_consistency "$same_machine_evidence" "$loopback_evidence"
+fi
 
 if [[ -n "$brew_caix_binary" ]]; then
+  brew_manifest="$REPO_DIR/docs/examples/cluster-stage-manifest.json"
+  if [[ "$tiny_poc" == "1" ]]; then
+    brew_manifest="$tiny_manifest"
+  fi
   if "$SCRIPT_DIR/check-brew-distributed.sh" \
       --caix "$brew_caix_binary" \
       --ready \
-      --manifest "$REPO_DIR/docs/examples/cluster-stage-manifest.json" >/dev/null; then
+      --manifest "$brew_manifest" >/dev/null; then
     ready "Brew-installed caix distributed surface passes"
   else
     missing "Brew-installed caix distributed surface failed"
   fi
 else
-  missing "Brew-installed caix was not checked; pass --brew-caix <path>"
+  if [[ "$tiny_poc" == "1" ]]; then
+    missing "tiny POC must use Brew-installed caix; pass --brew-caix <path>"
+  else
+    missing "Brew-installed caix was not checked; pass --brew-caix <path>"
+  fi
 fi
 
 if [[ "$not_ready" == "0" ]]; then
-  echo "distributed is ready for Thunderbolt testing"
+  if [[ "$tiny_poc" == "1" ]]; then
+    echo "tiny distributed POC is ready for Thunderbolt testing"
+  else
+    echo "distributed is ready for Thunderbolt testing"
+  fi
 else
-  echo "distributed is not ready for Thunderbolt testing"
+  if [[ "$tiny_poc" == "1" ]]; then
+    echo "tiny distributed POC is not ready for Thunderbolt testing"
+  else
+    echo "distributed is not ready for Thunderbolt testing"
+  fi
 fi
 
 exit "$not_ready"

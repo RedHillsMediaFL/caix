@@ -28,7 +28,7 @@ Current in-tree pieces:
 - `DistributedStageManifest`, a shared loader for staged manifest and `metadata.json` cluster
   blocks, including hidden-state boundary tensor metadata.
 - `caix cluster plan` dry-run placement for staged manifests.
-- Fail-closed `caix cluster join` and `caix serve --cluster` CLI stubs.
+- Minimal `caix cluster join` and `caix serve --cluster` staged-worker runtime.
 - `DistributedSameMachinePipeline`, an in-process stage-handle harness tested with fake stages,
   manifest-ordered handle maps, and a stage-handle factory context with resolved stage asset paths.
 - Typed worker message frames for hello/ack, allocation, forward, reset, free, and error.
@@ -39,11 +39,9 @@ Current in-tree pieces:
 - Core AI distributed stage handle pieces for descriptor validation, allocation, NDArray IO,
   output readback, and `.none`/`.stateful`/`.explicitOutputs` forward/reset execution.
 
-Still missing before real staged inference:
+Still missing before real Qwen release:
 
-- Stage exporter output for per-stage `.aimodel` bundles and `cluster.stages` metadata.
 - Token-for-token Qwen3-0.6B same-machine evidence against the monolithic bundle.
-- Cross-process loopback worker/coordinator transport.
 - Thunderbolt Bridge test evidence.
 
 Why this path:
@@ -56,20 +54,20 @@ Why this path:
 
 Do first:
 
-1. Build the stage exporter for stateful stage bundles and metadata.
+1. Prove the tiny random Qwen3 staged POC over two machines through Brew.
 2. Prove same-machine staged execution with Qwen3-0.6B.
 3. Verify staged output matches the monolithic Core AI bundle.
-4. Split the stages into two local processes over loopback.
-5. Move one stage to the 32 GB MacBook over Thunderbolt Bridge.
-6. Add the 16 GB Mac mini as a third shard.
+4. Move one real Qwen stage to the 32 GB MacBook over Thunderbolt Bridge.
+5. Add the 16 GB Mac mini as a third shard.
 
-MacBook test gate:
+Tiny MacBook POC gate:
 
-- Do not ask for Thunderbolt testing until steps 1-3 pass.
-- First external test is one MacBook stage over Thunderbolt Bridge.
-- Use the same staged Qwen3-0.6B manifest that passed loopback.
-- `scripts/check-distributed-readiness.sh --brew-caix "$(command -v caix)"` must pass first.
-- Test the release path through Brew before connecting the MacBook.
+- Use `qwen3-tiny-random-coreai-staged-rope-input-f16-2x1`.
+- Test the release path through Brew before running the smoke.
+- Verify both machines and link speed with `caix deploy verify`.
+- Verify staged bundle copy digests on the MacBook.
+- `scripts/check-distributed-readiness.sh --tiny-poc --tiny-manifest <manifest> --brew-caix "$(command -v caix)"` must pass first.
+- Real Qwen3-0.6B stays unpublished until token parity and load gates pass.
 
 Do not start with:
 
