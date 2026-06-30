@@ -56,11 +56,13 @@ for file in \
   rel="${file#$REPO_DIR/}"
   prompt_set="$(evidence_value prompt_set "$file")"
   prompts="$(evidence_value prompts "$file")"
+  asset_digests="$(evidence_value asset_digests "$file")"
   [[ "$prompts" =~ ^[1-9][0-9]*$ ]] || fail "$rel prompts must be positive"
   [[ "$prompt_set" == "$PROMPT_SET" ]] || fail "$rel prompt_set must be $PROMPT_SET"
   check_repo_path "$rel prompt_set" "$prompt_set"
   [[ "$(prompt_count "$REPO_DIR/$prompt_set")" == "$prompts" ]] \
     || fail "$rel prompts=$prompts does not match prompt_set line count"
+  check_repo_path "$rel asset_digests" "$asset_digests"
 done
 
 echo "distributed evidence contract ok"

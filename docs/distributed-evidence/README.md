@@ -18,6 +18,7 @@ prompts=<positive integer>
 max_tokens=128
 temperature=0
 token_match=true
+asset_digests=<repo-relative stage asset digest file>
 raw_log=<repo-relative raw log path or archive path>
 ```
 
@@ -30,8 +31,11 @@ Rules:
   count must equal `prompts=`.
 - Same `manifest=` value between same-machine and loopback runs.
 - Evidence manifests must plan with `position_mode=full_prefix`.
-- `manifest=`, `prompt_set=`, and `raw_log=` must be committed, repo-relative paths. No absolute
-  paths, URLs, or untracked scratch files.
+- `manifest=`, `prompt_set=`, `asset_digests=`, and `raw_log=` must be committed,
+  repo-relative paths. No absolute paths, URLs, or untracked scratch files.
+- `asset_digests=` must list every planned stage asset and optional decode asset as
+  `<sha256> <repo-relative-path>`. Hash each `.aimodel` directory deterministically before recording
+  token-match evidence.
 - `caix_commit=` must resolve to a commit in the local repo used for the readiness gate.
 - Greedy only: `temperature=0`.
 - Keep raw stdout/stderr or an archive. Do not record only a summary.

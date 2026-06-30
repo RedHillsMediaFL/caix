@@ -151,6 +151,141 @@ PY
   fi
 }
 
+check_evidence_asset_digests() {
+  local label="$1"
+  local manifest="$2"
+  local digest_file="$3"
+  local file="$4"
+
+  if [[ -z "$caix_binary" || ! -x "$caix_binary" ]]; then
+    missing "$label evidence asset_digests cannot be validated without caix binary: $file"
+    return 1
+  fi
+
+  local manifest_path="$REPO_DIR/$manifest"
+  local digest_path="$REPO_DIR/$digest_file"
+  if "$caix_binary" cluster plan --manifest "$manifest_path" --json >/dev/null 2>"$plan_err"; then
+    if REPO_DIR="$REPO_DIR" MANIFEST_PATH="$manifest_path" DIGEST_PATH="$digest_path" python3 - <<'PY'
+import hashlib
+import json
+import os
+import pathlib
+import sys
+
+repo = pathlib.Path(os.environ["REPO_DIR"]).resolve()
+manifest_path = pathlib.Path(os.environ["MANIFEST_PATH"]).resolve()
+digest_path = pathlib.Path(os.environ["DIGEST_PATH"]).resolve()
+
+
+def fail(message):
+    print(message, file=sys.stderr)
+    sys.exit(1)
+
+
+def repo_relative(path):
+    try:
+        return path.resolve().relative_to(repo).as_posix()
+    except ValueError:
+        fail(f"asset path is outside the repository: {path}")
+
+
+def asset_digest(path):
+    path = path.resolve()
+    if not path.exists():
+        fail(f"asset path is missing: {path}")
+    digest = hashlib.sha256()
+    if path.is_file():
+        digest.update(path.name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        return digest.hexdigest()
+    if not path.is_dir():
+        fail(f"asset path is not a file or directory: {path}")
+    files = sorted(item for item in path.rglob("*") if item.is_file())
+    if not files:
+        fail(f"asset path has no files to hash: {path}")
+    for item in files:
+        rel = item.relative_to(path).as_posix()
+        digest.update(rel.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(item.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def stage_path(stage, keys):
+    for key in keys:
+        value = stage.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+try:
+    manifest = json.loads(manifest_path.read_text())
+except Exception as exc:
+    fail(f"manifest is not valid JSON: {exc}")
+body = manifest.get("cluster") if isinstance(manifest.get("cluster"), dict) else manifest
+stages = body.get("stages") if isinstance(body, dict) else None
+if not isinstance(stages, list) or not stages:
+    fail("manifest has no stages")
+
+expected_assets = []
+base = manifest_path.parent
+for stage in stages:
+    if not isinstance(stage, dict):
+        fail("stage entry is not an object")
+    main = stage_path(stage, ("bundle", "path", "bundle_path", "aimodel"))
+    if main is None:
+        fail("stage is missing bundle path")
+    expected_assets.append((base / main).resolve())
+    decode = stage_path(stage, ("decode_asset", "decode_asset_name", "decode_bundle"))
+    if decode is not None:
+        expected_assets.append((base / decode).resolve())
+
+declared = {}
+for line_no, raw in enumerate(digest_path.read_text().splitlines(), 1):
+    line = raw.strip()
+    if not line or line.startswith("#"):
+        continue
+    parts = line.split()
+    if len(parts) != 2:
+        fail(f"{digest_path}: line {line_no} must be '<sha256> <repo-relative-path>'")
+    sha, rel = parts
+    if len(sha) != 64 or any(ch not in "0123456789abcdefABCDEF" for ch in sha):
+        fail(f"{digest_path}: line {line_no} has invalid sha256")
+    if rel.startswith("/") or "://" in rel or rel in (".", "..") or rel.startswith("../") or "/../" in rel or rel.endswith("/.."):
+        fail(f"{digest_path}: line {line_no} path must be repo-relative")
+    declared[rel] = sha.lower()
+
+missing = []
+mismatched = []
+for asset in expected_assets:
+    rel = repo_relative(asset)
+    actual = asset_digest(asset)
+    expected = declared.get(rel)
+    if expected is None:
+        missing.append(rel)
+    elif expected != actual:
+        mismatched.append(rel)
+
+if missing:
+    fail("asset_digests is missing planned assets: " + ", ".join(missing))
+if mismatched:
+    fail("asset_digests mismatched planned assets: " + ", ".join(mismatched))
+PY
+    then
+      ready "$label staged asset digests match manifest"
+    else
+      missing "$label evidence asset_digests do not match planned stage assets: $digest_file"
+      return 1
+    fi
+  else
+    missing "$label evidence asset_digests cannot be validated because cluster plan failed: $(tr '\n' ' ' <"$plan_err" | sed 's/[[:space:]]*$//')"
+    return 1
+  fi
+}
+
 prompt_count() {
   local path="$1"
   awk 'NF { count += 1 } END { print count + 0 }' "$path"
@@ -166,7 +301,7 @@ check_token_match_evidence() {
     return
   fi
 
-  local result mode model manifest caix_commit prompt_set prompts max_tokens temperature token_match raw_log
+  local result mode model manifest caix_commit prompt_set prompts max_tokens temperature token_match asset_digests raw_log
   result="$(evidence_value result "$file")"
   mode="$(evidence_value mode "$file")"
   model="$(evidence_value model "$file")"
@@ -177,6 +312,7 @@ check_token_match_evidence() {
   max_tokens="$(evidence_value max_tokens "$file")"
   temperature="$(evidence_value temperature "$file")"
   token_match="$(evidence_value token_match "$file")"
+  asset_digests="$(evidence_value asset_digests "$file")"
   raw_log="$(evidence_value raw_log "$file")"
 
   if [[ "$result" != "pass" ]]; then
@@ -201,6 +337,8 @@ check_token_match_evidence() {
     missing "$label evidence temperature must be 0: $file"
   elif [[ "$token_match" != "true" ]]; then
     missing "$label evidence token_match must be true: $file"
+  elif [[ -z "$asset_digests" ]]; then
+    missing "$label evidence asset_digests is missing: $file"
   elif [[ -z "$raw_log" ]]; then
     missing "$label evidence raw_log is missing: $file"
   elif ! check_repo_evidence_path "$label" manifest "$manifest" "$file"; then
@@ -211,6 +349,10 @@ check_token_match_evidence() {
     return
   elif [[ "$(prompt_count "$REPO_DIR/$prompt_set")" != "$prompts" ]]; then
     missing "$label evidence prompts=$prompts does not match prompt_set line count: $prompt_set"
+  elif ! check_repo_evidence_path "$label" asset_digests "$asset_digests" "$file"; then
+    return
+  elif ! check_evidence_asset_digests "$label" "$manifest" "$asset_digests" "$file"; then
+    return
   elif ! check_repo_evidence_path "$label" raw_log "$raw_log" "$file"; then
     return
   else
