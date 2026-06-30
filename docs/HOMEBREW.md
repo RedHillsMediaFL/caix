@@ -106,6 +106,22 @@ smoke from the installed `caix`, not a checkout binary. Use `caix serve --cluste
 --join-timeout 120` on the coordinator and `caix cluster join ... --connect-timeout 120` on workers
 so failures exit cleanly. Do not publish distributed release notes until this gate passes.
 
+Before copying the staged bundle to the MacBook, write copy digests on the source:
+
+```bash
+"$caix_prefix/share/caix/scripts/check-stage-bundle-copy.sh" \
+  --manifest /path/to/qwen3-tiny-random-coreai-staged-rope-input-f16-2x1/stage-manifest.json \
+  --write /tmp/caix-stage-copy.sha256
+```
+
+After copying the bundle and digest file, verify on the MacBook:
+
+```bash
+"$caix_prefix/share/caix/scripts/check-stage-bundle-copy.sh" \
+  --manifest /path/on/macbook/qwen3-tiny-random-coreai-staged-rope-input-f16-2x1/stage-manifest.json \
+  --check /path/on/macbook/caix-stage-copy.sha256
+```
+
 To print exact commands for the tiny staged smoke:
 
 ```bash
