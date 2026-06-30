@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>caix shell</title>
+<style>
+  :root{
+    --bg:#0b0d0f;--surface:#11151a;--raised:#171d23;--line:#28313a;--line-soft:#1d242b;
+    --text:#e8ecef;--muted:#9aa4ad;--faint:#68727d;--accent:#38c7b4;--accent-dim:rgba(56,199,180,.14);
+    --warn:#d99a3e;--bad:#ec635c;--ok:#46d386;--blue:#6aa6ff;
+    --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-font-smoothing:antialiased}
+  body{margin:0;height:100vh;background:var(--bg);color:var(--text);font:14px/1.5 var(--sans);overflow:hidden}
+  button,input,select,textarea{font:inherit}
+  button{cursor:pointer}
+  button:disabled{opacity:.5;cursor:default}
+  a{color:inherit;text-decoration:none}
+  .app{height:100dvh;display:grid;grid-template-rows:auto 1fr auto;min-width:0}
+  .top{
+    min-height:54px;display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);
+    background:var(--surface);min-width:0;
+  }
+  .brand{display:flex;align-items:center;gap:9px;min-width:0}
+  .mark{width:30px;height:30px;border:1px solid var(--line);border-radius:7px;display:grid;place-items:center;
+    background:var(--raised);color:var(--accent);font:700 12px var(--mono)}
+  .brand b{display:block;font-size:15px;line-height:1}
+  .brand span span{display:block;color:var(--muted);font:11px var(--mono);margin-top:2px}
+  .controls{display:flex;align-items:center;gap:8px;margin-left:auto;min-width:0;flex-wrap:wrap;justify-content:flex-end}
+  select,input,textarea{
+    color:var(--text);background:var(--raised);border:1px solid var(--line);border-radius:7px;padding:8px 10px;
+  }
+  select{min-width:230px;max-width:min(430px,48vw);font:12px var(--mono)}
+  .cwd{
+    min-width:180px;max-width:min(480px,42vw);font:12px var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    border:1px solid var(--line);border-radius:7px;background:#0e1115;color:var(--muted);padding:8px 10px;
+  }
+  .btn{
+    border:1px solid var(--line);background:var(--raised);color:var(--text);border-radius:7px;padding:8px 11px;
+    font:600 12px var(--mono);white-space:nowrap;
+  }
+  .btn:hover{border-color:rgba(56,199,180,.55)}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#031312}
+  .btn.warn{border-color:rgba(217,154,62,.55);color:#f2bd71}
+  .btn.bad{border-color:rgba(236,99,92,.55);color:#ff928d}
+  .status{
+    display:flex;align-items:center;gap:7px;color:var(--muted);font:11px var(--mono);
+    border-bottom:1px solid var(--line-soft);background:#0d1013;padding:7px 14px;min-height:32px;
+  }
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--bad)}
+  .status.live .dot{background:var(--ok);box-shadow:0 0 0 4px rgba(70,211,134,.12)}
+  .status.busy .dot{background:var(--warn);box-shadow:0 0 0 4px rgba(217,154,62,.12)}
+  .log{min-height:0;overflow-y:auto;padding:6px 0 14px}
+  .wrap{max-width:980px;margin:0 auto;padding:0 18px}
+  .turn{border-top:1px solid var(--line-soft);padding:16px 0}
+  .turn:first-child{border-top:0}
+  .role{color:var(--faint);font:700 11px var(--mono);letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px}
+  .turn.user .role{color:var(--accent)}
+  .turn.shell .role{color:var(--warn)}
+  .turn.error .role{color:var(--bad)}
+  .md{font-size:14px;line-height:1.6;overflow-wrap:anywhere}
+  .md p{margin:0 0 10px}
+  .md>:last-child{margin-bottom:0}
+  .md code{font-family:var(--mono);font-size:12px;background:var(--raised);border:1px solid var(--line-soft);border-radius:5px;padding:1px 5px}
+  .md pre,.term{
+    margin:8px 0 0;background:#07090b;border:1px solid var(--line);border-radius:8px;padding:11px 12px;
+    color:#dce3e8;font:12px/1.55 var(--mono);white-space:pre-wrap;overflow:auto;max-height:380px;
+  }
+  .term.err{border-color:rgba(236,99,92,.42);color:#ffd4d2}
+  .command{
+    border:1px solid var(--line);border-radius:8px;background:var(--surface);padding:10px 11px;margin-top:6px;
+  }
+  .cmdline{font:12px/1.55 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;color:#dce3e8}
+  .cmdmeta{margin-top:6px;color:var(--faint);font:11px var(--mono)}
+  .cmdactions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+  .pill{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;padding:4px 8px;color:var(--muted);font:11px var(--mono)}
+  .composer{border-top:1px solid var(--line);background:var(--surface);padding:12px 14px}
+  .compose-inner{max-width:980px;margin:0 auto;display:flex;align-items:flex-end;gap:10px}
+  textarea{min-height:46px;max-height:180px;resize:none;flex:1;border-radius:9px;padding:11px 12px;background:#0e1115;font-size:14px}
+  textarea:focus,select:focus,input:focus,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .spinner{display:inline-block;width:11px;height:11px;border:2px solid rgba(56,199,180,.28);border-top-color:var(--accent);
+    border-radius:50%;animation:spin .8s linear infinite;vertical-align:-1px;margin-right:7px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @media(max-width:760px){
+    .top{align-items:flex-start;flex-direction:column}
+    .controls{width:100%;margin-left:0;justify-content:stretch}
+    select,.cwd{max-width:none;min-width:0;flex:1}
+    .compose-inner{align-items:stretch;flex-direction:column}
+    .composer .btn{width:100%;min-height:42px}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <a class="brand" href="/">
+      <span class="mark">CX</span>
+      <span><b>caix shell</b><span>local agent terminal</span></span>
+    </a>
+    <div class="controls">
+      <select id="model" aria-label="Model"></select>
+      <div class="cwd" id="cwd" title="cwd"></div>
+      <a class="btn" href="/">Dashboard</a>
+      <a class="btn" href="/chat">Chat</a>
+      <button class="btn" id="reconnect" type="button">Reconnect</button>
+    </div>
+  </header>
+  <div class="status" id="status"><span class="dot"></span><span id="statusText">connecting</span></div>
+  <main class="log" id="log"><div class="wrap" id="wrap"></div></main>
+  <footer class="composer">
+    <div class="compose-inner">
+      <textarea id="prompt" rows="1" placeholder="Ask caix shell..."></textarea>
+      <button class="btn primary" id="send" type="button">Send</button>
+      <button class="btn bad" id="stop" type="button" hidden>Stop</button>
+    </div>
+  </footer>
+</div>
+
+<script src="/assets/purify.min.js"></script>
+<script src="/assets/marked.min.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+if(window.marked)marked.setOptions({breaks:true,gfm:true});
+function md(s){
+  if(window.marked&&window.DOMPurify){try{return DOMPurify.sanitize(marked.parse(s||''));}catch(e){}}
+  return esc(s||'').replace(/\n/g,'<br>');
+}
+
+const state={
+  base:null,server:null,models:[],busy:false,abort:false,
+  cwd:localStorage.getItem('caix.shell.cwd')||'/Volumes/SSD/caix',
+  thread:[]
+};
+
+const SYSTEM=[
+  'You are caix shell, a natural language shell terminal for the user local Mac.',
+  'Use the run_shell tool when a shell command is needed.',
+  'Prefer concise answers and one command at a time.',
+  'Use the cwd argument. If the user changes directories, run cd and rely on the returned cwd.',
+  'Avoid destructive commands unless the user explicitly asks for them.',
+  'Do not print or expose secrets, tokens, credentials, or auth headers.'
+].join('\\n');
+
+const shellTool={
+  type:'function',
+  function:{
+    name:'run_shell',
+    description:'Run a zsh command on the local Mac after the UI asks the user for approval.',
+    parameters:{
+      type:'object',
+      properties:{
+        command:{type:'string',description:'The exact zsh command to run.'},
+        cwd:{type:'string',description:'Working directory for the command.'},
+        timeout:{type:'integer',description:'Timeout in seconds, 1 to 60.'}
+      },
+      required:['command']
+    }
+  }
+};
+
+function setStatus(text,kind){
+  $('statusText').textContent=text;
+  $('status').className='status '+(kind||'');
+}
+function setBusy(on,text){
+  state.busy=on;
+  $('send').hidden=on;
+  $('stop').hidden=!on;
+  if(on)setStatus(text||'working','busy');
+  else if(state.base)setStatus('connected '+state.base,'live');
+}
+function setCwd(path){
+  state.cwd=path||state.cwd;
+  localStorage.setItem('caix.shell.cwd',state.cwd);
+  $('cwd').textContent=state.cwd;
+  $('cwd').title=state.cwd;
+}
+function scrollBottom(){ $('log').scrollTop=$('log').scrollHeight; }
+function turn(role,label,html){
+  const el=document.createElement('section');
+  el.className='turn '+role;
+  el.innerHTML='<div class="role">'+esc(label)+'</div>'+html;
+  $('wrap').appendChild(el);
+  scrollBottom();
+  return el;
+}
+function textTurn(role,label,text){return turn(role,label,'<div class="md">'+md(text)+'</div>');}
+function errorTurn(text){return turn('error','error','<div class="term err">'+esc(text)+'</div>');}
+
+function candidateBases(){
+  const out=[];
+  if(location.protocol==='http:'||location.protocol==='https:')out.push(location.origin);
+  ['http://127.0.0.1:1237','http://localhost:1237','http://127.0.0.1:8080','http://localhost:8080']
+    .forEach(x=>{if(!out.includes(x))out.push(x);});
+  return out;
+}
+async function discover(){
+  setStatus('connecting','busy');
+  state.base=null;
+  for(const base of candidateBases()){
+    try{
+      const r=await fetch(base+'/api/server',{cache:'no-store'});
+      if(!r.ok)continue;
+      state.server=await r.json();
+      state.base=base;
+      setStatus('connected '+base,'live');
+      await loadModels();
+      setCwd(state.cwd);
+      return true;
+    }catch(e){}
+  }
+  setStatus('server not found','');
+  $('model').innerHTML='<option value="">no server</option>';
+  return false;
+}
+async function api(path,options){
+  if(!state.base)throw new Error('server not connected');
+  const r=await fetch(state.base+path,options);
+  const t=await r.text();
+  let d={};
+  try{d=t?JSON.parse(t):{};}catch(e){d={text:t};}
+  if(!r.ok||d.error)throw new Error((d.error&&d.error.message)||d.text||('HTTP '+r.status));
+  return d;
+}
+async function loadModels(){
+  try{
+    const d=await api('/v1/models',{cache:'no-store'});
+    state.models=(d.data||[]).map(m=>m.id).sort();
+    const cur=$('model').value;
+    $('model').innerHTML=state.models.length
+      ? state.models.map(m=>'<option value="'+esc(m)+'">'+esc(m)+'</option>').join('')
+      : '<option value="">no local models</option>';
+    if(cur&&state.models.includes(cur))$('model').value=cur;
+  }catch(e){
+    $('model').innerHTML='<option value="">models unavailable</option>';
+  }
+}
+
+function buildMessages(){
+  const msgs=[{role:'system',content:SYSTEM+'\\nCurrent working directory: '+state.cwd}];
+  for(const m of state.thread)msgs.push(m);
+  return msgs;
+}
+async function modelTurn(){
+  const model=$('model').value;
+  if(!model)throw new Error('no model is available');
+  return await api('/v1/chat/completions',{
+    method:'POST',
+    headers:{'content-type':'application/json'},
+    body:JSON.stringify({
+      model,
+      messages:buildMessages(),
+      tools:[shellTool],
+      max_tokens:700,
+      temperature:0.15,
+      top_p:0.9,
+      stream:false
+    })
+  });
+}
+
+function parseArgs(raw){
+  try{return JSON.parse(raw||'{}')||{};}catch(e){return {command:'',cwd:state.cwd,timeout:20};}
+}
+function approveCommand(args){
+  return new Promise(resolve=>{
+    const command=(args.command||'').trim();
+    const cwd=(args.cwd||state.cwd||'').trim();
+    const timeout=Math.min(Math.max(Number(args.timeout||20),1),60);
+    const el=turn('shell','approval',
+      '<div class="command"><div class="cmdline">'+esc(command)+'</div>'+
+      '<div class="cmdmeta">cwd '+esc(cwd)+' / timeout '+timeout+'s</div>'+
+      '<div class="cmdactions"><button class="btn primary" data-run>Run</button><button class="btn" data-skip>Skip</button></div></div>');
+    const run=el.querySelector('[data-run]');
+    const skip=el.querySelector('[data-skip]');
+    run.onclick=()=>{run.disabled=true;skip.disabled=true;resolve(true);};
+    skip.onclick=()=>{run.disabled=true;skip.disabled=true;resolve(false);};
+  });
+}
+async function runShell(args,approvedByUser){
+  const command=(args.command||'').trim();
+  if(!command)throw new Error('empty command');
+  const cwd=(args.cwd||state.cwd||'').trim();
+  const timeout=Math.min(Math.max(Number(args.timeout||20),1),60);
+  if(!approvedByUser){
+    const ok=await approveCommand({command,cwd,timeout});
+    if(!ok)return {skipped:true,command,cwd,exitCode:null,stdout:'',stderr:'skipped by user'};
+  }
+  const pending=turn('shell','shell','<div class="command"><div class="cmdline">'+esc(command)+'</div><div class="cmdmeta"><span class="spinner"></span>running in '+esc(cwd)+'</div></div>');
+  const result=await api('/api/shell/run',{
+    method:'POST',
+    headers:{'content-type':'application/json'},
+    body:JSON.stringify({command,cwd,timeout})
+  });
+  if(result.cwd)setCwd(result.cwd);
+  const status=result.ok?'ok':'exit '+result.exitCode;
+  pending.innerHTML='<div class="role">shell</div>'+
+    '<div class="command"><div class="cmdline">'+esc(command)+'</div>'+
+    '<div class="cmdmeta"><span class="pill">'+esc(status)+'</span> <span class="pill">'+Number(result.durationMs||0)+' ms</span> <span class="pill">'+esc(result.cwd||cwd)+'</span></div>'+
+    (result.stdout?'<pre class="term">'+esc(result.stdout)+'</pre>':'')+
+    (result.stderr?'<pre class="term err">'+esc(result.stderr)+'</pre>':'')+
+    (!result.stdout&&!result.stderr?'<pre class="term">(no output)</pre>':'')+
+    '</div>';
+  scrollBottom();
+  return result;
+}
+function toolContent(args,result){
+  return [
+    'command: '+(args.command||''),
+    'cwd: '+(result.cwd||args.cwd||state.cwd),
+    'exit_code: '+(result.exitCode===null?'skipped':result.exitCode),
+    'stdout:\\n'+(result.stdout||''),
+    'stderr:\\n'+(result.stderr||'')
+  ].join('\\n');
+}
+async function directShell(command){
+  const args={command,cwd:state.cwd,timeout:20};
+  state.thread.push({role:'user',content:'$ '+command});
+  textTurn('user','you','$ '+command);
+  try{
+    const result=await runShell(args,true);
+    state.thread.push({role:'tool',content:toolContent(args,result)});
+  }catch(e){errorTurn(e.message||String(e));}
+}
+async function send(){
+  const raw=$('prompt').value;
+  const text=raw.trim();
+  if(!text||state.busy)return;
+  $('prompt').value='';
+  $('prompt').style.height='auto';
+  state.abort=false;
+  setBusy(true,'working');
+  try{
+    if(!state.base)await discover();
+    if(text.startsWith('$ ')){
+      await directShell(text.slice(2).trim());
+      return;
+    }
+    state.thread.push({role:'user',content:text});
+    textTurn('user','you',text);
+    for(let hop=0;hop<6&&!state.abort;hop++){
+      const wait=turn('assistant','caix','<div class="md"><span class="spinner"></span>thinking</div>');
+      const d=await modelTurn();
+      const choice=(d.choices&&d.choices[0])||{};
+      const msg=choice.message||{};
+      wait.remove();
+      if(msg.reasoning_content){
+        turn('assistant','thinking','<div class="md">'+md(msg.reasoning_content)+'</div>');
+      }
+      if(msg.content){
+        textTurn('assistant','caix',msg.content);
+      }else if(msg.tool_calls&&msg.tool_calls.length){
+        turn('assistant','caix','<div class="md">command proposed</div>');
+      }
+      state.thread.push({role:'assistant',content:msg.content||''});
+      const calls=msg.tool_calls||[];
+      if(!calls.length)break;
+      for(const call of calls){
+        if(state.abort)break;
+        const name=call.function&&call.function.name;
+        const args=parseArgs(call.function&&call.function.arguments);
+        if(name!=='run_shell'){
+          const content='unsupported tool: '+name;
+          errorTurn(content);
+          state.thread.push({role:'tool',content});
+          continue;
+        }
+        if(!args.cwd)args.cwd=state.cwd;
+        const result=await runShell(args,false);
+        state.thread.push({role:'tool',content:toolContent(args,result)});
+      }
+    }
+  }catch(e){
+    if(!state.abort)errorTurn(e.message||String(e));
+  }finally{
+    setBusy(false);
+  }
+}
+
+$('send').onclick=send;
+$('stop').onclick=()=>{state.abort=true;setBusy(false);};
+$('reconnect').onclick=discover;
+$('prompt').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
+$('prompt').addEventListener('input',e=>{const t=e.target;t.style.height='auto';t.style.height=Math.min(180,t.scrollHeight)+'px';});
+setCwd(state.cwd);
+discover();
+</script>
+</body>
+</html>

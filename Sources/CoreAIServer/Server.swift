@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import HTTPTypes
 import Hummingbird
 import MachineStats
@@ -58,6 +59,7 @@ public enum CoreAIServer {
                 caix · native Core AI runtime
                   listening   http://\(host):\(port)
                   dashboard   http://\(host):\(port)/
+                  shell       http://\(host):\(port)/shell
                   openai      POST /v1/chat/completions   GET /v1/models
                   anthropic   POST /v1/messages
                   dashboard   GET /api/stats  GET /api/models  GET /api/jobs
@@ -84,6 +86,7 @@ final class ServerRuntime: Sendable {
     let caixVersion: String
     let indexHTML: String
     let chatHTML: String
+    let shellHTML: String
     let verbose: Bool
 
     init(
@@ -111,6 +114,10 @@ final class ServerRuntime: Sendable {
         self.chatHTML =
             (try? String(contentsOf: chatURL, encoding: .utf8))
             ?? "<!doctype html><title>caix chat</title><p>web/chat.html not found at \(chatURL.path)</p>"
+        let shellURL = webDir.appendingPathComponent("shell.html")
+        self.shellHTML =
+            (try? String(contentsOf: shellURL, encoding: .utf8))
+            ?? "<!doctype html><title>caix shell</title><p>web/shell.html not found at \(shellURL.path)</p>"
     }
 
     // MARK: - Route registration
@@ -119,6 +126,7 @@ final class ServerRuntime: Sendable {
         // Dashboard (static) + dedicated chat view
         router.get("/") { _, _ in self.htmlResponse(self.indexHTML) }
         router.get("/chat") { _, _ in self.htmlResponse(self.chatHTML) }
+        router.get("/shell") { _, _ in self.htmlResponse(self.shellHTML) }
         router.get("/assets/:file") { _, ctx in self.assetHandler(ctx) }
 
         // Dashboard API
@@ -143,6 +151,7 @@ final class ServerRuntime: Sendable {
         // Tool proxies for the chat view (browser can't reach these directly: CORS).
         router.post("/api/proxy-fetch") { req, ctx in try await self.proxyFetchHandler(req, ctx) }
         router.post("/api/mcp") { req, ctx in try await self.mcpHandler(req, ctx) }
+        router.post("/api/shell/run") { req, ctx in try await self.shellRunHandler(req, ctx) }
 
         // OpenAI-compatible
         router.get("/v1/models") { _, _ in await self.openAIModelsHandler() }
@@ -714,6 +723,199 @@ final class ServerRuntime: Sendable {
         }
     }
 
+    /// `POST /api/shell/run` {command, cwd?, timeout?} — bounded zsh command runner for the
+    /// local shell-agent page. Disabled when caix is bound to a non-loopback host unless
+    /// CAIX_SHELL_AGENT=1 is set by the user.
+    private func shellRunHandler(_ request: Request, _ context: BasicRequestContext) async throws -> Response {
+        guard shellAgentAllowed else {
+            return JSONResponder.error(
+                "shell agent is disabled when caix is not bound to loopback; restart with CAIX_SHELL_AGENT=1 only on a trusted machine",
+                status: .forbidden)
+        }
+        guard let body = try? await Self.decode(ShellRunRequest.self, request) else {
+            return JSONResponder.error(
+                "invalid request body (expected {\"command\":\"...\",\"cwd\":\"...\",\"timeout\":20})",
+                status: .badRequest)
+        }
+        let command = body.command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !command.isEmpty else {
+            return JSONResponder.error("command is empty", status: .badRequest)
+        }
+        guard command.count <= 8_000 else {
+            return JSONResponder.error("command is too long", status: .badRequest)
+        }
+        guard let cwd = Self.normalizedShellCWD(body.cwd) else {
+            return JSONResponder.error("cwd is not a readable directory", status: .badRequest)
+        }
+        let timeout = min(max(body.timeout ?? 20, 1), 60)
+        let result = await Self.runShellCommand(command: command, cwd: cwd, timeoutSeconds: timeout)
+        return JSONResponder.encode(result)
+    }
+
+    private var shellAgentAllowed: Bool {
+        let enabled = ProcessInfo.processInfo.environment["CAIX_SHELL_AGENT"]?.lowercased()
+        if enabled == "1" || enabled == "true" || enabled == "yes" { return true }
+        let normalized = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized == "127.0.0.1" || normalized == "localhost"
+            || normalized == "::1" || normalized == "[::1]"
+    }
+
+    private static func normalizedShellCWD(_ raw: String?) -> String? {
+        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let path = trimmed.isEmpty ? NSHomeDirectory()
+            : (trimmed.hasPrefix("/")
+                ? trimmed
+                : URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true).appendingPathComponent(trimmed).path)
+        let standardized = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL.path
+        var isDir = ObjCBool(false)
+        guard FileManager.default.fileExists(atPath: standardized, isDirectory: &isDir), isDir.boolValue else {
+            return nil
+        }
+        return standardized
+    }
+
+    private static func runShellCommand(
+        command: String, cwd: String, timeoutSeconds: Int
+    ) async -> ShellRunResponse {
+        await Task.detached(priority: .utility) {
+            runShellCommandSync(command: command, cwd: cwd, timeoutSeconds: timeoutSeconds)
+        }.value
+    }
+
+    private static func runShellCommandSync(
+        command: String, cwd: String, timeoutSeconds: Int
+    ) -> ShellRunResponse {
+        let started = Date()
+        let fm = FileManager.default
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        let token = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let scriptURL = tmp.appendingPathComponent("caix-shell-\(token).zsh")
+        let cwdURL = tmp.appendingPathComponent("caix-shell-\(token).cwd")
+        let script = """
+        cd \(shellQuote(cwd)) || exit 97
+        \(command)
+        __caix_shell_status=$?
+        pwd > \(shellQuote(cwdURL.path))
+        exit $__caix_shell_status
+        """
+
+        guard fm.createFile(
+            atPath: scriptURL.path,
+            contents: Data(script.utf8),
+            attributes: [.posixPermissions: 0o600])
+        else {
+            return ShellRunResponse(
+                ok: false, command: scrubShellOutput(command), cwd: cwd, exitCode: -1,
+                stdout: "", stderr: "failed to create temporary shell script",
+                durationMs: 0, timedOut: false, stdoutTruncated: false, stderrTruncated: false)
+        }
+        defer {
+            try? fm.removeItem(at: scriptURL)
+            try? fm.removeItem(at: cwdURL)
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = [scriptURL.path]
+        process.currentDirectoryURL = URL(fileURLWithPath: cwd, isDirectory: true)
+        let output = ShellOutputCapture(limit: 64 * 1024)
+        let stdout = Pipe()
+        let stderr = Pipe()
+        stdout.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if !data.isEmpty { output.appendStdout(data) }
+        }
+        stderr.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if !data.isEmpty { output.appendStderr(data) }
+        }
+        process.standardOutput = stdout
+        process.standardError = stderr
+
+        do {
+            try process.run()
+        } catch {
+            stdout.fileHandleForReading.readabilityHandler = nil
+            stderr.fileHandleForReading.readabilityHandler = nil
+            return ShellRunResponse(
+                ok: false, command: scrubShellOutput(command), cwd: cwd, exitCode: -1,
+                stdout: "", stderr: "launch failed: \(error.localizedDescription)",
+                durationMs: Int(Date().timeIntervalSince(started) * 1000),
+                timedOut: false, stdoutTruncated: false, stderrTruncated: false)
+        }
+
+        let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
+        var timedOut = false
+        while process.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        if process.isRunning {
+            timedOut = true
+            process.terminate()
+            let killDeadline = Date().addingTimeInterval(2)
+            while process.isRunning && Date() < killDeadline {
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+            if process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+                process.waitUntilExit()
+            }
+        } else {
+            process.waitUntilExit()
+        }
+        if !process.isRunning {
+            process.waitUntilExit()
+        }
+
+        stdout.fileHandleForReading.readabilityHandler = nil
+        stderr.fileHandleForReading.readabilityHandler = nil
+        let trailingStdout = stdout.fileHandleForReading.availableData
+        if !trailingStdout.isEmpty { output.appendStdout(trailingStdout) }
+        let trailingStderr = stderr.fileHandleForReading.availableData
+        if !trailingStderr.isEmpty { output.appendStderr(trailingStderr) }
+
+        let snapshot = output.snapshot()
+        let finalCWD = ((try? String(contentsOf: cwdURL, encoding: .utf8)) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nonEmpty ?? cwd
+        let exitCode = timedOut ? -1 : Int(process.terminationStatus)
+        let elapsed = Int(Date().timeIntervalSince(started) * 1000)
+        let outText = scrubShellOutput(String(decoding: snapshot.stdout, as: UTF8.self))
+            + (snapshot.stdoutTruncated ? "\n[stdout truncated]\n" : "")
+        let errText = scrubShellOutput(String(decoding: snapshot.stderr, as: UTF8.self))
+            + (snapshot.stderrTruncated ? "\n[stderr truncated]\n" : "")
+        return ShellRunResponse(
+            ok: !timedOut && exitCode == 0,
+            command: scrubShellOutput(command),
+            cwd: finalCWD,
+            exitCode: exitCode,
+            stdout: outText,
+            stderr: timedOut ? (errText + "\n[command timed out]\n") : errText,
+            durationMs: elapsed,
+            timedOut: timedOut,
+            stdoutTruncated: snapshot.stdoutTruncated,
+            stderrTruncated: snapshot.stderrTruncated)
+    }
+
+    private static func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    private static func scrubShellOutput(_ text: String) -> String {
+        var scrubbed = text
+        let patterns = [
+            #"(?i)\b((?:[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|AUTHORIZATION|CREDENTIAL)[A-Z0-9_]*)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s]+)"#,
+            #"(?i)\b(Bearer\s+)[A-Za-z0-9._~+/\-]+=*"#,
+        ]
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            let range = NSRange(scrubbed.startIndex..<scrubbed.endIndex, in: scrubbed)
+            scrubbed = regex.stringByReplacingMatches(
+                in: scrubbed, options: [], range: range, withTemplate: "$1[redacted]")
+        }
+        return scrubbed
+    }
+
     /// `GET /api/genstats` — last speculative-decoding generation metrics (tok/s, acceptance, …).
     private func genStatsHandler() -> Response {
         guard let s = LiveStats.last else {
@@ -1006,6 +1208,83 @@ struct RHMModelEntry: Codable, Sendable {
     var loaded: Bool
     var installedName: String?
     var note: String?
+}
+
+/// `POST /api/shell/run` body.
+struct ShellRunRequest: Codable, Sendable {
+    var command: String
+    var cwd: String?
+    var timeout: Int?
+}
+
+struct ShellRunResponse: Codable, Sendable {
+    var ok: Bool
+    var command: String
+    var cwd: String
+    var exitCode: Int
+    var stdout: String
+    var stderr: String
+    var durationMs: Int
+    var timedOut: Bool
+    var stdoutTruncated: Bool
+    var stderrTruncated: Bool
+}
+
+private final class ShellOutputCapture: @unchecked Sendable {
+    struct Snapshot: Sendable {
+        var stdout: Data
+        var stderr: Data
+        var stdoutTruncated: Bool
+        var stderrTruncated: Bool
+    }
+
+    private let lock = NSLock()
+    private let limit: Int
+    private var stdout = Data()
+    private var stderr = Data()
+    private var stdoutTruncated = false
+    private var stderrTruncated = false
+
+    init(limit: Int) {
+        self.limit = limit
+    }
+
+    func appendStdout(_ data: Data) {
+        append(data, toStdout: true)
+    }
+
+    func appendStderr(_ data: Data) {
+        append(data, toStdout: false)
+    }
+
+    func snapshot() -> Snapshot {
+        lock.lock()
+        defer { lock.unlock() }
+        return Snapshot(
+            stdout: stdout,
+            stderr: stderr,
+            stdoutTruncated: stdoutTruncated,
+            stderrTruncated: stderrTruncated)
+    }
+
+    private func append(_ data: Data, toStdout: Bool) {
+        guard !data.isEmpty else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        if toStdout {
+            let remaining = max(0, limit - stdout.count)
+            if remaining > 0 {
+                stdout.append(contentsOf: data.prefix(remaining))
+            }
+            if data.count > remaining { stdoutTruncated = true }
+        } else {
+            let remaining = max(0, limit - stderr.count)
+            if remaining > 0 {
+                stderr.append(contentsOf: data.prefix(remaining))
+            }
+            if data.count > remaining { stderrTruncated = true }
+        }
+    }
 }
 
 struct ServerInfo: Codable, Sendable {
