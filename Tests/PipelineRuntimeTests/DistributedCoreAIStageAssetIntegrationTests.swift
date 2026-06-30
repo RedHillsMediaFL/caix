@@ -116,6 +116,71 @@ final class DistributedCoreAIStageAssetIntegrationTests: XCTestCase {
         #endif
     }
 
+    func testRealStageAssetsReplayPrefillMatchesMonolithicSecondToken() async throws {
+        guard let manifestPath = ProcessInfo.processInfo.environment["CAIX_STAGE_MANIFEST"],
+            !manifestPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw XCTSkip("set CAIX_STAGE_MANIFEST to a real staged manifest")
+        }
+        guard let baselinePath = ProcessInfo.processInfo.environment["CAIX_BASELINE_MODEL"],
+            !baselinePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw XCTSkip("set CAIX_BASELINE_MODEL to a monolithic caix bundle")
+        }
+
+        #if COREAI_RUNTIME
+        let prompt = try loadPrompts(path: ProcessInfo.processInfo.environment["CAIX_TOKEN_MATCH_PROMPTS"])[0]
+        let baselineBundle = try ResolvedBundle.load(at: baselinePath)
+        let baseline = try await LLMEngine.load(bundle: baselineBundle)
+        let manifest = try DistributedStageManifest.load(
+            from: URL(fileURLWithPath: manifestPath).standardizedFileURL)
+        let pipeline = try await DistributedSameMachinePipeline.make(
+            manifest: manifest,
+            handleFactory: DistributedCoreAIStageHandleFactory())
+
+        let promptTokens = try baseline.encodePrompt(
+            messages: [["role": "user", "content": prompt]],
+            applyChatTemplate: false)
+        let prompt32 = promptTokens.map(Int32.init)
+        let capacity = min(baseline.maxContextLength, promptTokens.count + 16)
+
+        try baseline.allocateKVCache(capacity: capacity)
+        let firstBaseline = Int32(Sampler.argmax(try await baseline.step(tokens: prompt32)))
+        let secondBaseline = Int32(Sampler.argmax(try await baseline.step(tokens: [firstBaseline])))
+
+        let incrementalRequestID = "replay-prefill-incremental"
+        try await pipeline.allocate(requestID: incrementalRequestID, kvCapacity: capacity)
+        let firstStaged = try await nextStagedToken(
+            pipeline: pipeline,
+            requestID: incrementalRequestID,
+            stepIndex: 0,
+            lowerBound: 0,
+            tokenIDs: prompt32)
+        await pipeline.free(requestID: incrementalRequestID)
+        guard firstStaged == firstBaseline else {
+            XCTFail(
+                "prefill token mismatch: staged \(firstStaged), baseline \(firstBaseline)")
+            return
+        }
+
+        let replayRequestID = "replay-prefill-fresh"
+        try await pipeline.allocate(requestID: replayRequestID, kvCapacity: capacity)
+        let secondStaged = try await nextStagedToken(
+            pipeline: pipeline,
+            requestID: replayRequestID,
+            stepIndex: 0,
+            lowerBound: 0,
+            tokenIDs: prompt32 + [firstBaseline])
+        await pipeline.free(requestID: replayRequestID)
+        XCTAssertEqual(
+            secondStaged,
+            secondBaseline,
+            "fresh staged prefill over prompt+first token should match monolithic second token")
+        #else
+        throw XCTSkip("requires COREAI_RUNTIME=1")
+        #endif
+    }
+
     private func loadPrompts(path: String?) throws -> [String] {
         guard let path, !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return ["The future of local inference is"]
