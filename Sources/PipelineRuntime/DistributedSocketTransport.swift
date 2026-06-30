@@ -5,6 +5,7 @@ public enum DistributedSocketTransportError: Error, Equatable, Sendable, CustomS
     case badAddress(String)
     case socketError(operation: String, errno: Int32)
     case connectionClosed
+    case timedOut(operation: String)
 
     public var description: String {
         switch self {
@@ -14,6 +15,8 @@ public enum DistributedSocketTransportError: Error, Equatable, Sendable, CustomS
             return "\(operation) failed: \(String(cString: strerror(code)))"
         case .connectionClosed:
             return "Socket connection closed"
+        case .timedOut(let operation):
+            return "\(operation) timed out"
         }
     }
 }
@@ -104,6 +107,35 @@ public final class DistributedSocketWorkerListener: @unchecked Sendable {
                 continue
             }
             throw DistributedSocketTransportError.socketError(operation: "accept", errno: errno)
+        }
+    }
+
+    public func accept(timeoutSeconds: Double?) throws -> DistributedSocketWorkerConnection? {
+        guard let timeoutSeconds else {
+            return try accept()
+        }
+        guard timeoutSeconds >= 0 else {
+            throw DistributedSocketTransportError.timedOut(operation: "accept")
+        }
+
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while true {
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else { return nil }
+
+            var pollFD = pollfd(fd: fileDescriptor, events: Int16(POLLIN), revents: 0)
+            let timeoutMS = Int32(min(remaining * 1000.0, Double(Int32.max)).rounded(.up))
+            let result = Darwin.poll(&pollFD, 1, timeoutMS)
+            if result > 0 {
+                return try accept()
+            }
+            if result == 0 {
+                return nil
+            }
+            if errno == EINTR {
+                continue
+            }
+            throw DistributedSocketTransportError.socketError(operation: "poll", errno: errno)
         }
     }
 

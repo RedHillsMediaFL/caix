@@ -100,6 +100,8 @@ if [[ "$require_ready" == "1" ]]; then
   "$caix_binary" cluster join --help >/dev/null
   "$caix_binary" --help | grep -q -- '--cluster'
   "$caix_binary" serve --help 2>/dev/null | grep -q -- '--prompt-tokens'
+  "$caix_binary" serve --help 2>/dev/null | grep -q -- '--join-timeout'
+  "$caix_binary" cluster join --help 2>/dev/null | grep -q -- '--connect-timeout'
   "$caix_binary" deploy verify --help 2>/dev/null | grep -q -- '--speed-bytes'
   "$caix_binary" deploy verify --help 2>/dev/null | grep -q -- '--min-mbps'
 fi

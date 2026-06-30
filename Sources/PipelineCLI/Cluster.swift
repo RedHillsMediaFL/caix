@@ -119,6 +119,7 @@ private func clusterUsage() {
           --stage <dir>           Local staged .aimodel bundle directory
           --decode-stage <dir>    Local decode .aimodel bundle directory
           --stage-id <id>         Stage id when it cannot be inferred from --stage
+          --connect-timeout <s>   Seconds to retry coordinator connect (default: 30)
           --listen <host:port>    Worker label kept for compatibility (default: 127.0.0.1:0)
         """)
 }
@@ -130,6 +131,7 @@ private func clusterJoinCommand(_ argv: [String]) {
     var decodeStagePath: String?
     var stageID: String?
     var listen = "127.0.0.1:0"
+    var connectTimeoutSeconds = 30.0
 
     func usage() {
         print(
@@ -144,6 +146,7 @@ private func clusterJoinCommand(_ argv: [String]) {
               --stage <dir>           Local staged .aimodel bundle directory
               --decode-stage <dir>    Local decode .aimodel bundle directory
               --stage-id <id>         Stage id when it cannot be inferred from --stage
+              --connect-timeout <s>   Seconds to retry coordinator connect (default: 30)
               --listen <host:port>    Worker label kept for compatibility (default: 127.0.0.1:0)
 
             Runs one staged worker and connects it to caix serve --cluster.
@@ -175,6 +178,12 @@ private func clusterJoinCommand(_ argv: [String]) {
             decodeStagePath = value(arg)
         case "--stage-id":
             stageID = value(arg)
+        case "--connect-timeout":
+            do {
+                connectTimeoutSeconds = try parseClusterPositiveDouble(value(arg), flag: arg)
+            } catch {
+                fail("\(error)")
+            }
         case "--listen":
             listen = value(arg)
         case "-h", "--help":
@@ -210,7 +219,8 @@ private func clusterJoinCommand(_ argv: [String]) {
                 stagePath: stagePath,
                 decodeStagePath: decodeStagePath,
                 stageID: stageID,
-                listen: listen)
+                listen: listen,
+                connectTimeoutSeconds: connectTimeoutSeconds)
         } catch {
             FileHandle.standardError.write(Data("cluster join error: \(error)\n".utf8))
             exitCode = 1

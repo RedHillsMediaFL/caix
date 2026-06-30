@@ -7,6 +7,7 @@ struct ClusterRuntimeOptions {
     var maxTokens = 1
     var kvCapacity: Int?
     var maxContextLength = 2048
+    var joinTimeoutSeconds: Double?
     var once = false
     var verbose = false
 }
@@ -25,7 +26,8 @@ func runClusterJoinRuntime(
     stagePath: String,
     decodeStagePath: String?,
     stageID requestedStageID: String?,
-    listen: String
+    listen: String,
+    connectTimeoutSeconds: Double
 ) async throws {
     let (host, port) = try parseClusterHostPort(coordinator)
     let manifest = try DistributedStageManifest.load(
@@ -46,7 +48,10 @@ func runClusterJoinRuntime(
         descriptor: descriptor)
     let handle = try await makeCoreAIStageHandle(for: context)
     let executor = try DistributedWorkerFrameExecutor(plan: manifest.runtimePlan, handle: handle)
-    let connection = try DistributedSocketWorkerConnection.connect(host: host, port: port)
+    let connection = try connectToClusterCoordinator(
+        host: host,
+        port: port,
+        timeoutSeconds: connectTimeoutSeconds)
     defer { connection.close() }
 
     let hello = try executor.makeHello(
@@ -119,8 +124,15 @@ func runClusterServeRuntime(
 
     var handshake = try DistributedWorkerHandshakeCoordinator(plan: manifest.runtimePlan)
     var remoteConnections: [String: DistributedSocketWorkerConnection] = [:]
+    let joinDeadline = options.joinTimeoutSeconds.map {
+        Date().addingTimeInterval($0)
+    }
     while Set(remoteConnections.keys) != remoteStageIDs {
-        let connection = try listener.accept()
+        guard let connection = try listener.accept(timeoutSeconds: remainingSeconds(until: joinDeadline)) else {
+            let missing = remoteStageIDs.subtracting(Set(remoteConnections.keys)).sorted()
+            throw ClusterRuntimeError(
+                "timed out waiting for remote stages: \(missing.joined(separator: ", "))")
+        }
         do {
             let helloFrame = try connection.receive()
             guard case .hello(let hello) = helloFrame.message else {
@@ -216,6 +228,40 @@ func parseClusterHostPort(_ value: String) throws -> (String, Int) {
         throw ClusterRuntimeError("expected host:port, got \(value)")
     }
     return (parts[0], port)
+}
+
+func parseClusterPositiveDouble(_ value: String, flag: String) throws -> Double {
+    guard let parsed = Double(value), parsed > 0 else {
+        throw ClusterRuntimeError("\(flag) needs a positive number")
+    }
+    return parsed
+}
+
+private func connectToClusterCoordinator(
+    host: String,
+    port: Int,
+    timeoutSeconds: Double
+) throws -> DistributedSocketWorkerConnection {
+    let deadline = Date().addingTimeInterval(timeoutSeconds)
+    var lastError: Error?
+    repeat {
+        do {
+            return try DistributedSocketWorkerConnection.connect(host: host, port: port)
+        } catch {
+            lastError = error
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else { break }
+            Thread.sleep(forTimeInterval: min(0.5, remaining))
+        }
+    } while Date() < deadline
+
+    throw ClusterRuntimeError(
+        "could not connect to coordinator \(host):\(port) within \(String(format: "%.1f", timeoutSeconds))s: \(lastError.map { "\($0)" } ?? "unknown error")")
+}
+
+private func remainingSeconds(until deadline: Date?) -> Double? {
+    guard let deadline else { return nil }
+    return max(0, deadline.timeIntervalSinceNow)
 }
 
 func parseClusterTokenList(_ value: String) throws -> [Int32] {

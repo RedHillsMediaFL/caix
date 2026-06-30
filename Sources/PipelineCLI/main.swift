@@ -94,6 +94,7 @@ func printUsage() {
           --max-tokens <N>        Generated token count for --cluster (default: 1)
           --kv-capacity <N>       KV cache capacity for --cluster
           --max-context <N>       Max context length for --cluster (default: 2048)
+          --join-timeout <s>      Seconds to wait for remote stages in --cluster
           --once                  Run one cluster request or readiness check, then exit
           --no-eagle              Disable the built-in EAGLE/MTP serve model
           --eagle-name <name>     Served name for the EAGLE/MTP model
@@ -727,6 +728,12 @@ func serveCommand(_ argv: [String]) {
         case "--max-tokens": clusterOptions.maxTokens = intValue(arg)
         case "--kv-capacity": clusterOptions.kvCapacity = intValue(arg)
         case "--max-context": clusterOptions.maxContextLength = intValue(arg)
+        case "--join-timeout":
+            do {
+                clusterOptions.joinTimeoutSeconds = try parseClusterPositiveDouble(value(arg), flag: arg)
+            } catch {
+                fail("\(error)")
+            }
         case "--once": clusterOptions.once = true
         case "--no-eagle": eagleEnabled = false
         case "--eagle-name": eagleName = value(arg)

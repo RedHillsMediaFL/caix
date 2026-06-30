@@ -101,5 +101,6 @@ caix_prefix="$(brew --prefix caix)"
 ```
 
 If that warns, fix wiring before running the cluster smoke. Run the distributed smoke from the
-installed `caix`, not a checkout binary.
+installed `caix`, not a checkout binary. Use `caix serve --cluster ... --join-timeout 120` on the
+coordinator and `caix cluster join ... --connect-timeout 120` on workers so failures exit cleanly.
 Do not publish distributed release notes until this gate passes.

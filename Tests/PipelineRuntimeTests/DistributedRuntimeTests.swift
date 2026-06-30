@@ -1058,6 +1058,17 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertEqual(packet.payload.count, packet.metadata.byteCount)
     }
 
+    func testSocketWorkerListenerAcceptTimeoutReturnsNil() throws {
+        let listener = try DistributedSocketWorkerListener.bind(host: "127.0.0.1", port: 0)
+        defer { listener.close() }
+
+        let start = Date()
+        let connection = try listener.accept(timeoutSeconds: 0.05)
+
+        XCTAssertNil(connection)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 1.0)
+    }
+
     func testTwoRemoteWorkerStagesRunThroughSeparateLoopbackTransports() async throws {
         let plan = makePlan(
             boundaryTensor: DistributedBoundaryTensorSpec(
