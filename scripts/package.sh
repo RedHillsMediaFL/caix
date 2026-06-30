@@ -26,21 +26,26 @@ fi
   --manifest "$DIR/docs/examples/cluster-stage-manifest.json"
 
 STAGE="$(mktemp -d)/$NAME"
-mkdir -p "$STAGE/bin" "$STAGE/models/exports" "$STAGE/scripts" "$STAGE/docs/examples"
+mkdir -p "$STAGE/bin" "$STAGE/models/exports" "$STAGE/scripts" "$STAGE/docs/examples" "$STAGE/Formula"
 cp .build/release/caix          "$STAGE/bin/caix"
 cp caix README.md LICENSE       "$STAGE/" 2>/dev/null || true
+cp Formula/caix.rb              "$STAGE/Formula/"
 cp -R web python                "$STAGE/"
 cp models/registry.json         "$STAGE/models/"
 cp docs/examples/cluster-stage-manifest.json "$STAGE/docs/examples/"
 cp scripts/install.sh scripts/check-coreai-runtime.sh scripts/check-brew-distributed.sh \
   scripts/check-distributed-readiness.sh scripts/check-stage-bundle-copy.sh \
-  scripts/check-tiny-cluster-smoke.sh "$STAGE/scripts/" 2>/dev/null || true
+  scripts/check-tiny-cluster-smoke.sh scripts/prepare-local-brew-tap.sh "$STAGE/scripts/" 2>/dev/null || true
 cp -R scripts/lib "$STAGE/scripts/" 2>/dev/null || true
 chmod +x "$STAGE/caix" "$STAGE/bin/caix"
 printf "%s\n" "$VERSION" > "$STAGE/VERSION"
 
 mkdir -p "$DIR/dist"
 ( cd "$(dirname "$STAGE")" && tar -czf "$DIR/dist/$NAME.tar.gz" "$NAME" )
+mkdir -p "$DIR/dist/Formula"
+cp scripts/prepare-local-brew-tap.sh "$DIR/dist/"
+cp Formula/caix.rb "$DIR/dist/Formula/"
 SIZE="$(du -h "$DIR/dist/$NAME.tar.gz" | awk '{print $1}')"
 echo "✓ dist/$NAME.tar.gz  ($SIZE)"
 echo "  contains a prebuilt binary — recipients run ./caix serve with no build."
+echo "  local tap helper: dist/prepare-local-brew-tap.sh"

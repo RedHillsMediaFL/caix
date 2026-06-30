@@ -60,6 +60,25 @@ brew install caix
 caix doctor
 ```
 
+## Local MacBook Tarball Test
+
+Before a public tap release exists, copy these package outputs to the MacBook:
+
+```text
+dist/caix-<version>-macos-arm64.tar.gz
+dist/prepare-local-brew-tap.sh
+dist/Formula/caix.rb
+```
+
+Then install the versioned tarball through a local tap:
+
+```bash
+./prepare-local-brew-tap.sh --tarball ./caix-0.2.0-beta-macos-arm64.tar.gz
+brew install redhillsmediafl/caix/caix
+brew test caix
+caix doctor
+```
+
 ## Homebrew/Core Later
 
 Wait until all are true:
