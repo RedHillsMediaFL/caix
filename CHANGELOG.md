@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.2.5-beta
+
+- Recovered stale caix heavy-task locks left by interrupted catalog installs.
+- Serialized Hugging Face local-dir downloads with `--max-workers 1` to avoid `.gitignore.lock`
+  contention in package installs.
+
 ## 0.2.4-beta
 
 - Fixed catalog installs for speculative/EAGLE packages so package repos install into package

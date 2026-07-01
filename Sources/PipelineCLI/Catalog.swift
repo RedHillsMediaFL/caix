@@ -456,7 +456,7 @@ enum Catalog {
         if let revision, !revision.isEmpty {
             command += ["--revision", revision]
         }
-        command += ["--local-dir", destination]
+        command += ["--max-workers", "1", "--local-dir", destination]
         return command
     }
 
@@ -723,20 +723,57 @@ enum Catalog {
         try FileManager.default.createDirectory(
             at: lock.deletingLastPathComponent(),
             withIntermediateDirectories: true)
-        let fd = open(lock.path, O_CREAT | O_EXCL | O_WRONLY, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)
-        guard fd >= 0 else {
-            if errno == EEXIST {
-                throw CatalogError("heavy-task lock exists: \(lock.path)")
+        for _ in 0..<2 {
+            let fd = open(lock.path, O_CREAT | O_EXCL | O_WRONLY, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)
+            guard fd >= 0 else {
+                if errno == EEXIST {
+                    if removeStaleHeavyTaskLock(lock) {
+                        FileHandle.standardError.write(Data("removed stale heavy-task lock: \(lock.path)\n".utf8))
+                        continue
+                    }
+                    throw CatalogError("heavy-task lock exists: \(lock.path)")
+                }
+                throw CatalogError("could not create heavy-task lock \(lock.path): errno \(errno)")
             }
-            throw CatalogError("could not create heavy-task lock \(lock.path): errno \(errno)")
+            let text = "pid=\(ProcessInfo.processInfo.processIdentifier)\nlabel=\(label)\nstarted=\(ISO8601DateFormatter().string(from: Date()))\n"
+            let data = Array(text.utf8)
+            _ = data.withUnsafeBytes { raw in
+                Darwin.write(fd, raw.baseAddress, raw.count)
+            }
+            close(fd)
+            return lock
         }
-        let text = "pid=\(ProcessInfo.processInfo.processIdentifier)\nlabel=\(label)\nstarted=\(ISO8601DateFormatter().string(from: Date()))\n"
-        let data = Array(text.utf8)
-        _ = data.withUnsafeBytes { raw in
-            Darwin.write(fd, raw.baseAddress, raw.count)
+        throw CatalogError("heavy-task lock exists: \(lock.path)")
+    }
+
+    private static func removeStaleHeavyTaskLock(_ lock: URL) -> Bool {
+        guard let text = try? String(contentsOf: lock, encoding: .utf8) else {
+            return false
         }
-        close(fd)
-        return lock
+        guard let pid = text
+            .split(separator: "\n")
+            .first(where: { $0.hasPrefix("pid=") })
+            .flatMap({ Int32($0.dropFirst("pid=".count)) })
+        else { return false }
+        guard pid > 0, pid != ProcessInfo.processInfo.processIdentifier else {
+            return false
+        }
+        if processExists(pid) {
+            return false
+        }
+        do {
+            try FileManager.default.removeItem(at: lock)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private static func processExists(_ pid: Int32) -> Bool {
+        if kill(pid, 0) == 0 {
+            return true
+        }
+        return errno == EPERM
     }
 
     private static func releaseHeavyTaskLock(_ lock: URL) {
