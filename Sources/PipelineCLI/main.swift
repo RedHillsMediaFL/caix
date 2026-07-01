@@ -127,7 +127,7 @@ func printUsage() {
         run OPTIONS:
           --model <dir>          Exported .aimodel bundle directory (required)
           --draft <dir>          Draft .aimodel bundle for speculative decoding (optional)
-          --draft-tokens <K>     Draft tokens proposed per step (default: 4; needs --draft)
+          --draft-tokens <K>     Max draft tokens per step; auto-tuned during decode (default: 4; needs --draft)
           --prompt <text>        Prompt text (required)
           --max-tokens <N>       Max tokens to generate (default: 64)
           --temperature <t>      Sampling temperature; 0 = greedy (default: 0)
@@ -483,7 +483,7 @@ func runCommand(_ argv: [String]) {
                 // The acceptance rate + speedup is the headline metric — always report it.
                 let summary = String(
                     format:
-                        "[coreai] speculative: %d prompt tok, %d generated, stop=%@, K=%d, "
+                        "[coreai] speculative: %d prompt tok, %d generated, stop=%@, final K=%d, "
                         + "%d/%d drafts accepted (%.1f%%), %.2f tok/target-pass, "
                         + "load=%.2fs prefill=%.2fs decode=%.2fs (%.1f tok/s)\n",
                     result.promptTokenCount, result.generatedTokenCount, result.stopReason.rawValue,
@@ -533,7 +533,7 @@ func eagleCommand(_ argv: [String]) {
     var tokenizer: String?
     var prompt: String?
     var maxTokens = 64
-    var draftTokens = 4   // Default for current EAGLE packages.
+    var draftTokens = 7   // Safe max for current non-unrolled EAGLE packages.
                           // K>=8 overflows the full-layer SDPA threadgroup limit on verify.
     var applyChatTemplate = true
     var verbose = false
@@ -608,7 +608,7 @@ func eagleCommand(_ argv: [String]) {
                 onToken: onToken)
             FileHandle.standardOutput.write(Data("\n".utf8))
             let summary = String(
-                format: "[coreai] eagle: %d prompt, %d generated, stop=%@, K=%d, "
+                format: "[coreai] eagle: %d prompt, %d generated, stop=%@, final K=%d, "
                     + "%d/%d accepted (%.1f%%), %.2f tok/pass, load=%.2fs prefill=%.2fs "
                     + "decode=%.2fs (%.1f tok/s)\n",
                 r.promptTokenCount, r.generatedTokenCount, r.stopReason.rawValue, r.draftTokens,

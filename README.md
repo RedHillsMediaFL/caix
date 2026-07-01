@@ -258,7 +258,7 @@ This gives you a private HTTPS URL on your tailnet without opening public ports.
 ## What is included
 
 - Core AI inference on Neural Engine + GPU. This is not llama.cpp or MLX.
-- MTP/speculative decoding for supported pairs.
+- MTP/speculative decoding for supported pairs; caix auto-tunes the draft window up to the safe cap.
 - Dashboard: RAM/GPU stats, load/unload/convert/delete, per-model usage, rolling/lifetime tok/s.
   Usage stats persist across restarts.
 - Chat: markdown, streaming, code blocks with copy, tables, and a thinking panel for reasoning

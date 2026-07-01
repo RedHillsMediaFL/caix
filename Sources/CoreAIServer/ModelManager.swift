@@ -570,7 +570,7 @@ public actor ModelManager {
                     targetURL: URL(fileURLWithPath: cfg.targetPath),
                     draftURL: URL(fileURLWithPath: cfg.draftPath),
                     tokenizerDir: URL(fileURLWithPath: cfg.tokenizerDir),
-                    draftTokens: 4, vocabSize: cfg.vocab, backbone: cfg.backbone,
+                    draftTokens: 7, vocabSize: cfg.vocab, backbone: cfg.backbone,
                     slidingWindow: cfg.slidingWindow, maxContext: cfg.maxContext, verbose: verbose,
                     unrolledURL: cfg.unrolledPath.map { URL(fileURLWithPath: $0) })
                 return ModelHandle(eagle: engine, name: cfg.name, bytes: cfg.bundleBytes)
@@ -588,7 +588,7 @@ public actor ModelManager {
                     targetURL: root.appendingPathComponent("eagle_target.aimodel", isDirectory: true),
                     draftURL: root.appendingPathComponent("eagle_draft.aimodel", isDirectory: true),
                     tokenizerDir: root.appendingPathComponent("tokenizer", isDirectory: true),
-                    draftTokens: 4, vocabSize: 262144, backbone: 2816,
+                    draftTokens: 7, vocabSize: 262144, backbone: 2816,
                     slidingWindow: 1024, maxContext: 4096, verbose: verbose,
                     unrolledURL: Self.eagleUnrolledURL(in: root))
                 return ModelHandle(eagle: engine, name: name, bytes: Self.dirSize(root))
@@ -886,7 +886,13 @@ public actor ModelManager {
 
     static func eagleUnrolledURL(in root: URL) -> URL? {
         let fm = FileManager.default
-        for name in ["eagle_draft_unrolled_k4.aimodel", "eagle_draft_unrolled.aimodel"] {
+        for name in [
+            "eagle_draft_unrolled_k7.aimodel",
+            "eagle_draft_unrolled_k6.aimodel",
+            "eagle_draft_unrolled_k5.aimodel",
+            "eagle_draft_unrolled_k4.aimodel",
+            "eagle_draft_unrolled.aimodel",
+        ] {
             let url = root.appendingPathComponent(name, isDirectory: true)
             var isDir = ObjCBool(false)
             if fm.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {

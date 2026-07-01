@@ -520,7 +520,7 @@ public enum CoreAIPipeline {
         tokenizerDir: String,
         prompt: String,
         options: Options = Options(),
-        draftTokens: Int = 6,
+        draftTokens: Int = 7,
         vocabSize: Int = 262144,
         backbone: Int = 2816,
         slidingWindow: Int = 1024,

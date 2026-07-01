@@ -579,10 +579,13 @@ public final class EagleEngine {
             if options.verbose { FileHandle.standardError.write(Data(("[coreai] " + s() + "\n").utf8)) }
         }
         let maxTokens = max(0, options.maxTokens)
-        let K = draftTokens
-        let capacity = min(promptTokens.count + maxTokens + K + 8, maxContext)
+        let maxDraftTokens = max(1, draftTokens)
+        var tuner = DraftTokenTuner(
+            initial: min(4, maxDraftTokens),
+            maximum: maxDraftTokens)
+        let capacity = min(promptTokens.count + maxTokens + maxDraftTokens + 8, maxContext)
         target.allocateCache(capacity: capacity)
-        log("eagle prompt -> \(promptTokens.count) tokens, K=\(K), cap=\(capacity)")
+        log("eagle prompt -> \(promptTokens.count) tokens, K<=\(maxDraftTokens), cap=\(capacity)")
 
         // Chunk the prefill: the full-attention layer's MPS SDPA threadgroup memory scales with
         // query length and overflows (>32KB) past ~10 query tokens at head_dim 512. Feeding the
@@ -662,20 +665,22 @@ public final class EagleEngine {
             let L = committed.count
             let anchor = committed[L - 1]
             let pos = Int32(L - 1)
+            let activeK = min(tuner.current, max(1, maxTokens - generated.count))
 
-            // DRAFT K tokens (EAGLE recurrence at constant position). Unrolled engine fuses all K
-            // micro-steps into ONE Core AI dispatch; otherwise step K times sequentially.
+            // DRAFT up to activeK tokens (EAGLE recurrence at constant position). Unrolled engines
+            // fuse their exported K into one Core AI dispatch; use the active prefix for verify.
             var drafts: [Int]
             if let unrolled = draftUnrolled {
-                drafts = try await unrolled.draftAll(
+                let proposed = try await unrolled.draftAll(
                     token: Int32(anchor), hidden: seedHidden, position: pos,
                     kFull: seedKV.0, vFull: seedKV.1, kSliding: seedKV.2, vSliding: seedKV.3)
+                drafts = Array(proposed.prefix(activeK))
             } else {
                 drafts = []
-                drafts.reserveCapacity(K)
+                drafts.reserveCapacity(activeK)
                 var token = Int32(anchor)
                 var hidden = seedHidden
-                for _ in 0..<K {
+                for _ in 0..<activeK {
                     let o = try await draft.step(
                         token: token, hidden: hidden, position: pos,
                         kFull: seedKV.0, vFull: seedKV.1, kSliding: seedKV.2, vSliding: seedKV.3)
@@ -690,7 +695,8 @@ public final class EagleEngine {
             let verdict = SpeculativeEngine.verify(drafts: drafts, targetRows: vf.logitsRows)
             let n = verdict.acceptedCount
 
-            drafted += K; accepted += n; iters += 1
+            drafted += activeK; accepted += n; iters += 1
+            tuner.observe(accepted: n, drafted: activeK)
             target.rollback(to: L + n)
 
             for t in verdict.acceptedTokens where running { if !emit(t) { running = false } }
@@ -711,16 +717,17 @@ public final class EagleEngine {
         }
         let accRate = drafted > 0 ? Double(accepted) / Double(drafted) : 0
         log(String(format: "eagle decode %d tok in %.3fs (%.1f tok/s) over %d passes; "
-                   + "drafts %d accepted %d (%.1f%%), %.2f tok/pass, stop=%@",
+                   + "drafts %d accepted %d (%.1f%%), %.2f tok/pass, final K=%d, stop=%@",
                    generated.count, decodeSeconds,
                    decodeSeconds > 0 ? Double(generated.count) / decodeSeconds : 0,
                    iters, drafted, accepted, accRate * 100,
-                   iters > 0 ? Double(generated.count) / Double(iters) : 0, stop.rawValue))
+                   iters > 0 ? Double(generated.count) / Double(iters) : 0,
+                   tuner.current, stop.rawValue))
 
         return CoreAIPipeline.SpeculativeResult(
             text: text, promptTokenCount: promptTokens.count, generatedTokenCount: generated.count,
             stopReason: stop, modelLoadSeconds: loadSeconds, prefillSeconds: prefillSeconds,
-            decodeSeconds: decodeSeconds, draftTokens: K, draftedTokens: drafted,
+            decodeSeconds: decodeSeconds, draftTokens: tuner.current, draftedTokens: drafted,
             acceptedDraftTokens: accepted, iterations: iters)
     }
 }

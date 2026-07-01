@@ -106,11 +106,12 @@ final class SpeculativeEngine {
         }
 
         let maxTokens = max(0, options.maxTokens)
-        let K = draftTokens
+        let maxDraftTokens = draftTokens
+        var tuner = DraftTokenTuner(initial: min(4, maxDraftTokens), maximum: maxDraftTokens)
 
         // Size both KV caches: room for prompt + all generated + a full draft batch of headroom,
         // floored to each model's per-model minimum (no-op for standard models).
-        let need = promptTokens.count + maxTokens + K + 8
+        let need = promptTokens.count + maxTokens + maxDraftTokens + 8
         let requested = max(options.kvCapacity ?? need, need)
         func capacity(_ engine: LLMEngine) -> Int {
             min(max(requested, engine.minKVCapacity + maxTokens), engine.maxContextLength)
@@ -118,7 +119,7 @@ final class SpeculativeEngine {
         try target.allocateKVCache(capacity: capacity(target))
         try draft.allocateKVCache(capacity: capacity(draft))
         log(
-            "speculative prompt -> \(promptTokens.count) tokens, K=\(K), "
+            "speculative prompt -> \(promptTokens.count) tokens, K<=\(maxDraftTokens), "
                 + "KV target=\(capacity(target)) draft=\(capacity(draft))")
 
         // Prefill both models on the prompt (target's last logits seed the first token). The two
@@ -179,16 +180,17 @@ final class SpeculativeEngine {
         while running {
             let L = committed.count
             let anchor = committed[L - 1]
+            let activeK = min(tuner.current, max(1, maxTokens - generated.count))
 
-            // 1. DRAFT: propose K tokens. Feed the unconsumed committed tail (>= the anchor) to
-            //    catch the draft up and produce d₀, then K-1 single-token forwards.
+            // 1. DRAFT: propose activeK tokens. Feed the unconsumed committed tail (>= the anchor)
+            //    to catch the draft up and produce d₀, then activeK-1 single-token forwards.
             var drafts: [Int] = []
-            drafts.reserveCapacity(K)
+            drafts.reserveCapacity(activeK)
             let tail = committed[draft.processedTokenCount..<L].map { Int32($0) }
             var dLogits = try await draft.step(tokens: tail)
             var d = Sampler.argmax(dLogits)
             drafts.append(d)
-            for _ in 1..<K {
+            for _ in 1..<activeK {
                 dLogits = try await draft.step(tokens: [Int32(d)])
                 d = Sampler.argmax(dLogits)
                 drafts.append(d)
@@ -204,9 +206,10 @@ final class SpeculativeEngine {
             let numAccepted = verdict.acceptedCount
             let correction = verdict.correctionToken  // target's token at the divergence/bonus
 
-            draftedTokens += K
+            draftedTokens += activeK
             acceptedDraftTokens += numAccepted
             iterations += 1
+            tuner.observe(accepted: numAccepted, drafted: activeK)
 
             // 4. COMMIT accepted prefix + correction (gated), then roll both caches back.
             //    Roll back BEFORE breaking so the (unused) post-stop state stays valid anyway.
@@ -228,11 +231,11 @@ final class SpeculativeEngine {
             String(
                 format:
                     "speculative decode %d tokens in %.3fs (%.1f tok/s) over %d target passes; "
-                    + "drafts %d accepted %d (%.1f%% accept), stop=%@",
+                    + "drafts %d accepted %d (%.1f%% accept), final K=%d, stop=%@",
                 generated.count, decodeSeconds,
                 decodeSeconds > 0 ? Double(generated.count) / decodeSeconds : 0,
                 iterations, draftedTokens, acceptedDraftTokens, accRate * 100,
-                stopReason.rawValue))
+                tuner.current, stopReason.rawValue))
 
         return CoreAIPipeline.SpeculativeResult(
             text: finalText,
@@ -242,7 +245,7 @@ final class SpeculativeEngine {
             modelLoadSeconds: max(target.loadSeconds, draft.loadSeconds),
             prefillSeconds: prefillSeconds,
             decodeSeconds: decodeSeconds,
-            draftTokens: K,
+            draftTokens: tuner.current,
             draftedTokens: draftedTokens,
             acceptedDraftTokens: acceptedDraftTokens,
             iterations: iterations)
