@@ -214,7 +214,7 @@ final class SpeculativeEngine {
             // 4. COMMIT accepted prefix + correction (gated), then roll both caches back.
             //    Roll back BEFORE breaking so the (unused) post-stop state stays valid anyway.
             target.rollbackKV(to: L + numAccepted)
-            draft.rollbackKV(to: min(L + numAccepted, L + K - 1))
+            draft.rollbackKV(to: min(L + numAccepted, L + activeK - 1))
 
             for t in verdict.acceptedTokens {
                 if !emit(t) { running = false; break }
