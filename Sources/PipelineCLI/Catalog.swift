@@ -1,4 +1,5 @@
 import Dispatch
+import Darwin
 import Foundation
 
 private final class CatalogExitCode: @unchecked Sendable {
@@ -37,12 +38,13 @@ func catalogCommand(_ argv: [String]) {
                 """
                 USAGE:
                   caix catalog <owner/search|collection-slug> [--limit N] [--json]
-                  caix catalog install <repo|single-result-search> [--exports DIR] [--name NAME]
+                  caix catalog install [repo|single-result-search] [--exports DIR] [--name NAME]
 
                 Examples:
                   caix catalog redhillsmediafl/qwen
                   caix catalog redhillsmediafl/qwen-caix-6a3fd5f6d272c154dbfcda67
-                  caix catalog install redhillsmediafl/rhm-qwen2.5-0.5b-instruct-caix --exports ~/.caix/models/exports
+                  caix catalog install
+                  caix catalog install redhillsmediafl/rhm-qwen2.5-0.5b-instruct-caix
                 """
             )
             exit(0)
@@ -83,7 +85,7 @@ func catalogCommand(_ argv: [String]) {
 
 func catalogInstallCommand(_ argv: [String]) {
     var target: String?
-    var exportsDir = "models/exports"
+    var exportsDir = caixDefaultExportsDisplayPath
     var name: String?
     var revision: String?
     var limit = 10
@@ -120,17 +122,18 @@ func catalogInstallCommand(_ argv: [String]) {
             print(
                 """
                 USAGE:
-                  caix catalog install <repo|single-result-search> [options]
+                  caix catalog install [repo|single-result-search] [options]
 
                 OPTIONS:
-                  --exports <dir>        Root directory for installed bundles (default: models/exports)
+                  --exports <dir>        Root directory for installed bundles (default: \(caixDefaultExportsDisplayPath))
                   --name <bundle-name>   Override destination bundle directory name
                   --revision <rev>       Override catalog revision
                   --limit <N>            Search result cap when target is not exact (default: 10)
                   --dry-run              Resolve and preflight only
 
                 Example:
-                  caix catalog install redhillsmediafl/rhm-qwen2.5-0.5b-instruct-caix --exports ~/.caix/models/exports
+                  caix catalog install
+                  caix catalog install redhillsmediafl/rhm-qwen2.5-0.5b-instruct-caix
                 """
             )
             exit(0)
@@ -142,8 +145,9 @@ func catalogInstallCommand(_ argv: [String]) {
         i += 1
     }
 
-    guard let query = target?.trimmingCharacters(in: .whitespacesAndNewlines), !query.isEmpty else {
-        fail("catalog install requires a repo or single-result search")
+    let query = target?.trimmingCharacters(in: .whitespacesAndNewlines)
+    if query?.isEmpty == true {
+        fail("catalog install target cannot be empty")
     }
 
     let semaphore = DispatchSemaphore(value: 0)
@@ -151,35 +155,16 @@ func catalogInstallCommand(_ argv: [String]) {
     Task {
         defer { semaphore.signal() }
         do {
-            let result = try await Catalog.fetch(target: query, limit: limit)
-            let entry = try Catalog.installableEntry(from: result, requested: query)
-            let localName = try Catalog.safeInstallName(name ?? entry.localDir ?? entry.bundleName)
-            let root = Catalog.expandedFileURL(exportsDir, isDirectory: true)
-            let destination = root.appendingPathComponent(localName, isDirectory: true)
-            try Catalog.preflightInstall(destinationRoot: root, incomingBytes: entry.sizeBytes)
-
-            let trimmedRevision = revision?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let resolvedRevision = (trimmedRevision?.isEmpty == false ? trimmedRevision : nil)
-                ?? entry.revision
-            let command = Catalog.hfDownloadCommand(
-                repo: entry.repo,
-                revision: resolvedRevision,
-                destination: destination.path)
-
-            print("installing \(entry.repo)")
-            print("  revision: \(resolvedRevision ?? "default")")
-            print("  destination: \(destination.path)")
-            print("  size: \(entry.size)")
-            print("  auth/cache: local Hugging Face settings, if configured")
-            if dryRun {
-                print("  dry-run: hf \(command.joined(separator: " "))")
-                return
+            if let query, !query.isEmpty {
+                let result = try await Catalog.fetch(target: query, limit: limit)
+                let entry = try Catalog.installableEntry(from: result, requested: query)
+                try Catalog.install(
+                    entry: entry, exportsDir: exportsDir, name: name, revision: revision,
+                    dryRun: dryRun)
+            } else {
+                try await Catalog.interactiveInstall(
+                    exportsDir: exportsDir, limit: max(limit, 50), dryRun: dryRun)
             }
-
-            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-            try Catalog.runHFDownload(command)
-            print("installed: \(destination.path)")
-            print("serve with: caix serve --exports \(root.path)")
         } catch {
             FileHandle.standardError.write(Data("catalog install error: \(error)\n".utf8))
             exitCode.value = 1
@@ -214,6 +199,47 @@ struct CatalogEntry: Codable {
 }
 
 enum Catalog {
+    private struct Family {
+        var name: String
+        var target: String
+        var note: String
+    }
+
+    private static let families: [Family] = [
+        Family(
+            name: "qwen",
+            target: "redhillsmediafl/qwen-caix-6a3fd5f6d272c154dbfcda67",
+            note: "small, fast, tool-friendly"),
+        Family(
+            name: "gemma",
+            target: "redhillsmediafl/gemma-caix-6a3fd5f57b67589b85e6eac6",
+            note: "regular, unified, assistant/MTP"),
+        Family(
+            name: "glm",
+            target: "redhillsmediafl/glm-caix-6a40604dfb87315cc99a558e",
+            note: "glm authored exports"),
+        Family(
+            name: "mistral",
+            target: "redhillsmediafl/mistral-caix-6a404e43a972c2f2621a000e",
+            note: "mistral-family exports"),
+        Family(
+            name: "gpt-oss",
+            target: "redhillsmediafl/gpt-oss-caix-6a404e428791003d8e6e79fc",
+            note: "gpt-oss exports"),
+        Family(
+            name: "ornith",
+            target: "redhillsmediafl/ornith-caix-6a3ff0de0d269f65f53ef064",
+            note: "ornith exports"),
+        Family(
+            name: "qwythos",
+            target: "redhillsmediafl/qwythos-caix-6a409e86fb87315cc9a2d69f",
+            note: "qwythos exports"),
+        Family(
+            name: "all caix",
+            target: "redhillsmediafl/caix",
+            note: "broad catalog search"),
+    ]
+
     static func fetch(target: String, limit: Int) async throws -> CatalogResult {
         let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw CatalogError("empty catalog target") }
@@ -264,8 +290,124 @@ enum Catalog {
             lines.append("  install: \(entry.install)")
         }
         lines.append("")
-        lines.append("download one: caix catalog install <repo> --exports ~/.caix/models/exports")
+        lines.append("download one: caix catalog install <repo>")
         return lines.joined(separator: "\n")
+    }
+
+    static func install(
+        entry: CatalogEntry,
+        exportsDir: String,
+        name: String?,
+        revision: String?,
+        dryRun: Bool
+    ) throws {
+        let localName = try safeInstallName(name ?? entry.localDir ?? entry.bundleName)
+        let root = expandedFileURL(exportsDir, isDirectory: true)
+        let destination = root.appendingPathComponent(localName, isDirectory: true)
+        try preflightInstall(destinationRoot: root, incomingBytes: entry.sizeBytes)
+
+        let trimmedRevision = revision?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedRevision = (trimmedRevision?.isEmpty == false ? trimmedRevision : nil)
+            ?? entry.revision
+        let command = hfDownloadCommand(
+            repo: entry.repo,
+            revision: resolvedRevision,
+            destination: destination.path)
+
+        print("installing \(entry.repo)")
+        print("  revision: \(resolvedRevision ?? "default")")
+        print("  destination: \(destination.path)")
+        print("  size: \(entry.size)")
+        print("  auth/cache: local Hugging Face settings, if configured")
+        if dryRun {
+            print("  dry-run: hf \(command.joined(separator: " "))")
+            return
+        }
+
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let lock = try acquireHeavyTaskLock(exportsRoot: root, label: "catalog download \(entry.repo)")
+        defer { releaseHeavyTaskLock(lock) }
+        try runHFDownload(command)
+        print("installed: \(destination.path)")
+        if root.path == caixDefaultExportsPath() {
+            print("serve with: caix serve")
+        } else {
+            print("serve with: caix serve --exports \(root.path)")
+        }
+    }
+
+    static func installInteractiveBlocking(
+        exportsDir: String = caixDefaultExportsDisplayPath,
+        limit: Int = 100,
+        dryRun: Bool = false
+    ) throws {
+        let semaphore = DispatchSemaphore(value: 0)
+        final class Box: @unchecked Sendable {
+            var result: Result<Void, Error>?
+        }
+        let box = Box()
+        Task {
+            defer { semaphore.signal() }
+            do {
+                try await interactiveInstall(exportsDir: exportsDir, limit: limit, dryRun: dryRun)
+                box.result = .success(())
+            } catch {
+                box.result = .failure(error)
+            }
+        }
+        while semaphore.wait(timeout: .now()) == .timedOut {
+            RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02))
+        }
+        try box.result?.get()
+    }
+
+    static func interactiveInstall(exportsDir: String, limit: Int, dryRun: Bool) async throws {
+        print("caix catalog install")
+        print("")
+        print("families")
+        for (index, family) in families.enumerated() {
+            let padded = family.name.padding(toLength: 10, withPad: " ", startingAt: 0)
+            print(String(format: "%2d. %@ %@", index + 1, padded, family.note))
+        }
+        let familyIndex = try promptIndex(
+            prompt: "family",
+            count: families.count,
+            defaultIndex: 0)
+        let family = families[familyIndex]
+        print("")
+        print("fetching \(family.name)...")
+        let result = try await fetch(target: family.target, limit: limit)
+        let installable = result.entries
+            .filter { $0.localDir != nil && $0.package != "manual" }
+            .sorted { lhs, rhs in
+                if lhs.base == rhs.base { return lhs.repo < rhs.repo }
+                return lhs.base < rhs.base
+            }
+        guard !installable.isEmpty else {
+            throw CatalogError("no installable bundles found for \(family.name)")
+        }
+        print("")
+        print("models")
+        for (index, entry) in installable.enumerated() {
+            let name = entry.localDir ?? entry.bundleName ?? entry.repo
+            print(String(format: "%2d. %@", index + 1, name))
+            print("    \(entry.repo)")
+            print("    \(entry.size) / \(entry.package) / \(entry.verification)")
+        }
+        let modelIndex = try promptIndex(
+            prompt: "model",
+            count: installable.count,
+            defaultIndex: 0)
+        let root = prompt(
+            "exports root [\(exportsDir)]",
+            defaultValue: exportsDir)
+        print("")
+        try install(
+            entry: installable[modelIndex],
+            exportsDir: root,
+            name: nil,
+            revision: nil,
+            dryRun: dryRun)
     }
 
     static func installableEntry(from result: CatalogResult, requested: String) throws -> CatalogEntry {
@@ -292,14 +434,7 @@ enum Catalog {
     }
 
     static func expandedFileURL(_ path: String, isDirectory: Bool) -> URL {
-        let expanded: String
-        if path == "~" {
-            expanded = NSHomeDirectory()
-        } else if path.hasPrefix("~/") {
-            expanded = NSHomeDirectory() + String(path.dropFirst())
-        } else {
-            expanded = path
-        }
+        let expanded = caixExpandPath(path)
         return URL(fileURLWithPath: expanded, isDirectory: isDirectory)
     }
 
@@ -538,6 +673,50 @@ enum Catalog {
         return current
     }
 
+    private static func heavyTaskLockPath(exportsRoot: URL) -> URL {
+        let env = ProcessInfo.processInfo.environment
+        if let raw = env["caix_heavy_task_lock"] ?? env["CAIX_HEAVY_TASK_LOCK"],
+           !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return URL(fileURLWithPath: caixExpandPath(raw))
+        }
+        let normalized = exportsRoot.standardizedFileURL
+        if normalized.lastPathComponent == "exports",
+           normalized.deletingLastPathComponent().lastPathComponent == "models" {
+            return normalized
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent(".agent-heavy-task.lock")
+        }
+        return URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+            .appendingPathComponent(".agent-heavy-task.lock")
+            .standardizedFileURL
+    }
+
+    private static func acquireHeavyTaskLock(exportsRoot: URL, label: String) throws -> URL {
+        let lock = heavyTaskLockPath(exportsRoot: exportsRoot)
+        try FileManager.default.createDirectory(
+            at: lock.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        let fd = open(lock.path, O_CREAT | O_EXCL | O_WRONLY, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)
+        guard fd >= 0 else {
+            if errno == EEXIST {
+                throw CatalogError("heavy-task lock exists: \(lock.path)")
+            }
+            throw CatalogError("could not create heavy-task lock \(lock.path): errno \(errno)")
+        }
+        let text = "pid=\(ProcessInfo.processInfo.processIdentifier)\nlabel=\(label)\nstarted=\(ISO8601DateFormatter().string(from: Date()))\n"
+        let data = Array(text.utf8)
+        _ = data.withUnsafeBytes { raw in
+            Darwin.write(fd, raw.baseAddress, raw.count)
+        }
+        close(fd)
+        return lock
+    }
+
+    private static func releaseHeavyTaskLock(_ lock: URL) {
+        try? FileManager.default.removeItem(at: lock)
+    }
+
     private static func int64Value(_ value: Any?) -> Int64? {
         if let n = value as? NSNumber { return n.int64Value }
         if let i = value as? Int { return Int64(i) }
@@ -628,4 +807,35 @@ enum Catalog {
 struct CatalogError: Error, CustomStringConvertible {
     var description: String
     init(_ description: String) { self.description = description }
+}
+
+private func prompt(_ prompt: String, defaultValue: String? = nil) -> String {
+    if let defaultValue {
+        print("\(prompt): ", terminator: "")
+        fflush(stdout)
+        let value = readLine()?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return value.isEmpty ? defaultValue : value
+    }
+    print("\(prompt): ", terminator: "")
+    fflush(stdout)
+    return readLine()?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+}
+
+private func promptIndex(prompt: String, count: Int, defaultIndex: Int) throws -> Int {
+    while true {
+        let raw = CatalogErrorPrompt.read(prompt: "\(prompt) [\(defaultIndex + 1)]")
+        if raw.isEmpty { return defaultIndex }
+        if let value = Int(raw), value >= 1, value <= count {
+            return value - 1
+        }
+        print("enter a number from 1 to \(count)")
+    }
+}
+
+private enum CatalogErrorPrompt {
+    static func read(prompt: String) -> String {
+        print("\(prompt): ", terminator: "")
+        fflush(stdout)
+        return readLine()?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
 }

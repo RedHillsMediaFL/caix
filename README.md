@@ -80,8 +80,7 @@ Homebrew is the intended default install path after tap testing and Core AI stab
 Current beta path:
 
 ```bash
-brew tap RedHillsMediaFL/caix
-brew install --HEAD caix
+brew install redhillsmediafl/caix/caix
 caix doctor
 ```
 
@@ -151,13 +150,15 @@ The first build downloads Swift dependencies and compiles. It takes a few minute
 
 caix serves Core AI `.aimodel` bundles. Get one of these two ways:
 
-**A. Download a converted bundle.** Put it in `models/exports/`:
+**A. Download a converted bundle.** The default install path is `~/.caix/models/exports`:
 
 ```bash
 # list converted Qwen repos and exact install commands
 caix catalog redhillsmediafl/qwen
-# download one into the default local exports directory:
-caix catalog install redhillsmediafl/rhm-qwen2.5-0.5b-instruct-caix --exports ~/.caix/models/exports
+# prompt through families and models, then download:
+caix catalog install
+# or install one repo directly:
+caix catalog install redhillsmediafl/rhm-qwen2.5-0.5b-instruct-caix
 ```
 
 `caix catalog install` wraps `hf download`, uses local Hugging Face credentials/cache when present,
@@ -181,7 +182,7 @@ Use the catalog for current install commands:
 ```bash
 caix catalog redhillsmediafl
 caix catalog redhillsmediafl/qwen
-caix catalog install <repo> --exports ~/.caix/models/exports
+caix catalog install <repo>
 ```
 
 Model cards list exact revisions, licenses, storage, RAM notes, and any speculative or EAGLE flags.
@@ -197,6 +198,8 @@ under `models/exports/` and caix will list it.
 
 ```bash
 caix serve
+caix dashboard
+caix chat
 ```
 
 From a source checkout, `./caix serve` also works.
@@ -205,6 +208,9 @@ Open:
 
 - **http://localhost:1237** — the dashboard (machine stats, models, live usage)
 - **http://localhost:1237/chat** — the chat view (markdown, streaming, tools, skills, MCP)
+
+`caix serve` prewarms the smallest chat-suitable installed model before it starts listening. Use
+`--prewarm <model|all|off>` or `--no-prewarm` to override.
 
 For OpenAI-compatible clients, use `http://localhost:1237/v1` with any API key:
 
@@ -272,8 +278,8 @@ This gives you a private HTTPS URL on your tailnet without opening public ports.
 ## Known limitations
 
 - **Beta toolchain required.** See [Requirements](#requirements).
-- **Cold loads are slow.** Core AI compiles the model on first use (~30-60 s for a 13 GB model).
-  The chat view shows a "loading model..." spinner. Later requests reuse compiled state.
+- **Cold loads are slow.** Core AI compiles the model before first use (~30-60 s for a 13 GB model).
+  `caix serve` prewarms by default; `--no-prewarm` accepts traffic immediately.
 - **Server fast path.** Standard language bundles use Apple's kept-hot CoreAILanguageModels engine
   by default after `/api/load`. `COREAI_LEGACY_ENGINE=1` uses the older sequential path for
   debugging. Hybrid qwen3_5/qwen3_5_moe bundles with packed recurrent state use the explicit Core
@@ -359,7 +365,7 @@ confirms the architecture after dequant.
 
 | | |
 |---|---|
-| Models | `models/exports/<name>/` (override with `caix_exports` or `--exports`) |
+| Models | `~/.caix/models/exports/<name>/` (override with `caix_exports` or `--exports`) |
 | HF cache | `$HF_HOME`; otherwise Hugging Face uses its local default |
 | Converter tmp | `$caix_tmpdir`; converter default is `/Volumes/SSD/coreai-tmp` |
 | Export index | optional JSON from `scripts/refresh-export-index.sh` (set `caix_export_index`) |

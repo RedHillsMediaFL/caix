@@ -26,7 +26,8 @@ public enum CoreAIServer {
         caixVersion: String = "unknown",
         verbose: Bool = false,
         eagleConfig: EagleConfig? = nil,
-        statsFile: String? = nil
+        statsFile: String? = nil,
+        prewarm: String = "smallest"
     ) async throws {
         // Persist usage stats (totals + per-model) across restarts, ollama/omlx-style.
         let statsPath = statsFile ?? (NSHomeDirectory() + "/.caix/usage.json")
@@ -43,7 +44,12 @@ public enum CoreAIServer {
             verbose: verbose,
             eagleConfig: eagleConfig)
 
+        try await runtime.prewarm(selection: prewarm)
+
         let router = Router()
+        router.addMiddleware {
+            LogRequestsMiddleware(.info)
+        }
         runtime.register(on: router)
 
         let app = Application(
@@ -65,6 +71,7 @@ public enum CoreAIServer {
                   dashboard   GET /api/stats  GET /api/models  GET /api/jobs
                               POST /api/convert  POST /api/load  POST /api/offload
                   runtime     \(linked)
+                  prewarm     \(prewarm)
                 """.appending("\n").utf8))
 
         try await app.runService()
@@ -119,6 +126,47 @@ final class ServerRuntime: Sendable {
         self.shellHTML =
             (try? String(contentsOf: shellURL, encoding: .utf8))
             ?? "<!doctype html><title>caix shell</title><p>web/shell.html not found at \(shellURL.path)</p>"
+    }
+
+    func prewarm(selection rawSelection: String) async throws {
+        let selection = rawSelection.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard selection != "off", selection != "none", selection != "false", selection != "no" else {
+            FileHandle.standardError.write(Data("[serve] prewarm skipped\n".utf8))
+            return
+        }
+        let models = await manager.servedModelsPreferredForChat()
+        guard !models.isEmpty else {
+            FileHandle.standardError.write(Data("[serve] prewarm skipped: no installed bundles\n".utf8))
+            return
+        }
+
+        let targets: [ModelEntry]
+        if selection == "all" {
+            targets = models
+        } else if selection == "smallest" || selection == "auto" || selection == "default" || selection.isEmpty {
+            targets = [models[0]]
+        } else if let exact = models.first(where: { $0.name == rawSelection }) {
+            targets = [exact]
+        } else {
+            throw CoreAIPipeline.RuntimeError.bundleNotFound(rawSelection)
+        }
+
+        for target in targets {
+            let warning = ModelSuitability.chatWarning(for: target.name)
+            if let warning {
+                FileHandle.standardError.write(Data("[serve] warning \(target.name): \(warning)\n".utf8))
+            }
+            let start = Date()
+            FileHandle.standardError.write(Data("[serve] prewarm \(target.name) ...\n".utf8))
+            let handle = try await manager.load(target.name)
+            var options = CoreAIPipeline.Options(maxTokens: 1, temperature: 0, verbose: verbose)
+            options.stopSequences = []
+            _ = try await handle.generate(
+                messages: [["role": "user", "content": "hi"]],
+                options: options)
+            let seconds = Date().timeIntervalSince(start)
+            FileHandle.standardError.write(Data(String(format: "[serve] prewarm %@ ready in %.2fs\n", target.name, seconds).utf8))
+        }
     }
 
     // MARK: - Route registration
@@ -929,7 +977,7 @@ final class ServerRuntime: Sendable {
 
     private func openAIModelsHandler() async -> Response {
         let created = Int(Date().timeIntervalSince1970)
-        let models = await manager.listModels().filter { $0.bundle }
+        let models = await manager.servedModelsPreferredForChat()
         let list = OpenAIModelList(
             data: models.map { .init(id: $0.name, created: created) })
         return JSONResponder.encode(list)
@@ -1057,7 +1105,7 @@ final class ServerRuntime: Sendable {
     /// Map a requested model name to an available bundle, falling back to the first bundle so
     /// generic client model ids (e.g. "gpt-4") still resolve to the local model.
     private func resolveModelName(_ requested: String) async -> String {
-        let bundles = await manager.listModels().filter { $0.bundle }
+        let bundles = await manager.servedModelsPreferredForChat()
         if bundles.contains(where: { $0.name == requested }) { return requested }
         return bundles.first?.name ?? requested
     }

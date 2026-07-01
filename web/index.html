@@ -104,7 +104,9 @@
     background:hsl(var(--accent));
     color:hsl(var(--accent-foreground));
     font:700 13px var(--mono);
+    overflow:hidden;
   }
+  .mark img{width:100%;height:100%;object-fit:cover;display:block}
   .brand-name{display:block;margin:0;font-size:17px;font-weight:700;line-height:1;color:hsl(var(--foreground))}
   .brand-copy{display:block;margin-top:2px;color:hsl(var(--muted-foreground));font:11px var(--mono)}
   .top-title{min-width:0;flex:1;color:hsl(var(--muted-foreground));font:12px var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -320,7 +322,7 @@
 <div class="app-shell">
   <header class="topbar">
     <a class="brand" href="#top" aria-label="caix dashboard">
-      <span class="mark">CX</span>
+      <span class="mark"><img src="/assets/caix-cakebot.png" alt="" aria-hidden="true"/></span>
       <span>
         <span class="brand-name">caix</span>
         <span class="brand-copy">Core AI local models</span>

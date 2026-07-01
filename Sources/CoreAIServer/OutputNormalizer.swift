@@ -80,8 +80,9 @@ extension OutputFormat {
 
         func has(_ needle: String) -> Bool { haystack.contains(needle) }
 
-        // Gemma 4: distinctive channel / turn / tool tokens.
-        let gemmaMarkers = ["<|channel>", "<channel|>", "<|tool_call>", "<tool_call|>", "<|think|>", "<|turn>"]
+        // Gemma 4: distinctive channel / turn / tool tokens. Some published templates also use
+        // slash markers such as `//thought` / `//final`.
+        let gemmaMarkers = ["<|channel>", "<channel|>", "<|tool_call>", "<tool_call|>", "<|think|>", "<|turn>", "//thought"]
         let looksGemma = gemmaMarkers.contains(where: has)
 
         // Qwen / ChatML: `<think>` reasoning and/or `<tool_call>` JSON, ChatML turn tokens.
@@ -103,16 +104,19 @@ extension OutputFormat {
             return OutputFormat(
                 family: .gemma,
                 // The thought channel carries reasoning; `<|think|>` is the thinking-enable token.
-                reasoningStarts: ["<|channel>thought", "<|think|>"],
-                reasoningEnds: ["<channel|>"],
+                reasoningStarts: ["<|channel>thought", "<|channel>analysis", "//thought", "<|think|>"],
+                reasoningEnds: ["<channel|>", "//final"],
                 // Reference markers: `<|tool_call|>{json}` (Gemma4PromptTemplate) and the raw
                 // start/end tokens `<|tool_call>` / `<tool_call|>`.
                 toolStarts: ["<|tool_call|>", "<|tool_call>"],
                 toolEnds: ["<tool_call|>", "<|tool_call|>"],
                 // Strip the answer channel scaffolding and stray turn tokens from final text.
-                dropMarkers: ["<|channel>final\n", "<|channel>final", "<turn|>"],
+                dropMarkers: [
+                    "<|channel>final\n", "<|channel>final", "//final", "<turn|>", "<|turn>",
+                    "<pad>", "<bos>", "<eos>", "</s>"
+                ],
                 implicitReasoningStart: detectImplicitReasoningStart(
-                    template: template, opens: ["<|channel>thought", "<|think|>"], closes: ["<channel|>"]))
+                    template: template, opens: ["<|channel>thought", "<|channel>analysis", "//thought", "<|think|>"], closes: ["<channel|>", "//final"]))
         }
 
         return .passthrough
@@ -522,10 +526,40 @@ extension StreamingNormalizer {
             case .toolCall(let t): calls.append(t)
             }
         }
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return NormalizedResult(
             reasoning: reasoning.trimmingCharacters(in: .whitespacesAndNewlines),
-            text: text.trimmingCharacters(in: .whitespacesAndNewlines),
+            text: collapseDuplicatedInitialWord(trimmedText),
             toolCalls: calls)
+    }
+
+    /// Some tiny random/coreai test exports can duplicate the first lexical token in decoded
+    /// final text (`HelloHello!`, `TheThe ...`). Keep this intentionally narrow: only collapse a
+    /// contiguous, title-cased word repeated at byte zero and followed by a non-word boundary.
+    public static func collapseDuplicatedInitialWord(_ text: String) -> String {
+        guard text.count >= 6, let first = text.unicodeScalars.first, CharacterSet.uppercaseLetters.contains(first) else {
+            return text
+        }
+        let scalars = Array(text.unicodeScalars)
+        let letters = CharacterSet.letters
+        let wordChars = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_"))
+        let maxWordLength = min(24, scalars.count / 2)
+        guard maxWordLength >= 3 else { return text }
+        for length in 3...maxWordLength {
+            guard scalars[0..<length].allSatisfy({ letters.contains($0) }) else {
+                return text
+            }
+            let firstWord = Array(scalars[0..<length])
+            let secondWord = Array(scalars[length..<(length * 2)])
+            guard firstWord == secondWord else { continue }
+            if scalars.count > length * 2, wordChars.contains(scalars[length * 2]) {
+                continue
+            }
+            let prefix = String(String.UnicodeScalarView(firstWord))
+            let suffix = String(String.UnicodeScalarView(scalars[(length * 2)..<scalars.count]))
+            return prefix + suffix
+        }
+        return text
     }
 }
 

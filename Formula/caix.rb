@@ -4,10 +4,10 @@ class Caix < Formula
   desc "Native Apple Core AI inference server for local language models"
   homepage "https://github.com/RedHillsMediaFL/caix"
   license "MIT"
-  version "0.2.2-beta"
+  version "0.2.3-beta"
 
-  # Head-only until the tap has a tested 0.x release tarball.
-  # Copy this file to RedHillsMediaFL/homebrew-caix/Formula/caix.rb for the tap.
+  # Source builds are kept for --HEAD; release taps should use the packaged tarball.
+  # Copy this file to RedHillsMediaFL/homebrew-caix/Formula/caix.rb only as a template.
   head "https://github.com/RedHillsMediaFL/caix.git", branch: "main"
 
   depends_on arch: :arm64
@@ -82,7 +82,9 @@ class Caix < Formula
     assert_match("--fail-on-warn", shell_output("#{bin}/caix deploy verify --help"))
     assert_match("--cluster", shell_output("#{bin}/caix --help"))
     assert_match("--prompt-tokens", shell_output("#{bin}/caix serve --help"))
+    assert_match("--prewarm", shell_output("#{bin}/caix serve --help"))
     assert_match("--join-timeout", shell_output("#{bin}/caix serve --help"))
+    assert_match("dashboard", shell_output("#{bin}/caix dashboard --help"))
     system pkgshare/"scripts/check-distributed-readiness.sh", "--help"
     system pkgshare/"scripts/check-tiny-cluster-smoke.sh", "--help"
     system pkgshare/"scripts/check-stage-bundle-copy.sh", "--help"

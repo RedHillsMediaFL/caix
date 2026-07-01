@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import CoreAIServer
 
 func chatTUICommand(_ argv: [String]) {
     var options = ChatTUI.Options()
@@ -49,9 +50,11 @@ func chatTUICommand(_ argv: [String]) {
                   /help                 Show commands
                   /models               List served models
                   /model <name>         Switch model
+                  /install              Select and install a catalog model
                   /shell ask|on|off     Control model-initiated shell tool access
                   /run <command>        Run a shell command now
                   /cwd <dir>            Change shell working directory
+                  /dashboard            Show native dashboard command
                   /system <text>        Set system prompt for future turns
                   /clear                Clear chat history
                   /quit                 Exit
@@ -165,11 +168,14 @@ struct ChatTUI {
 
     private mutating func printHeader() {
         log("session start endpoint=\(endpoint.absoluteString) model=\(model) shell=\(shellMode.rawValue) cwd=\(cwd)")
-        print("caix tui")
+        print("caix tui (cakes)")
         print("endpoint: \(endpoint.absoluteString)")
         print("model: \(model)")
         print("shell: \(shellMode.rawValue)   cwd: \(cwd)")
-        print("type /help for commands, /quit to exit")
+        if let warning = ModelSuitability.chatWarning(for: model) {
+            print("warning: \(warning)")
+        }
+        print("type /help for commands, /install for catalog, /quit to exit")
     }
 
     private mutating func handleCommand(_ input: String) throws -> Bool {
@@ -183,9 +189,11 @@ struct ChatTUI {
                 commands:
                   /models               list served models
                   /model <name>         switch model
+                  /install              select and install a catalog model
                   /shell ask|on|off     ask before shell, run directly, or disable
                   /run <command>        run a shell command now
                   /cwd <dir>            change shell working directory
+                  /dashboard            show native dashboard command
                   /system <text>        set system prompt for future turns
                   /clear                clear chat history
                   /log                  print redacted session log
@@ -210,6 +218,17 @@ struct ChatTUI {
             model = rest
             log("model switched to \(model)")
             print("model: \(model)")
+            if let warning = ModelSuitability.chatWarning(for: model) {
+                print("warning: \(warning)")
+            }
+        case "/install", "/catalog":
+            let root = (try? fetchServerExportsDir()) ?? caixDefaultExportsDisplayPath
+            print("install root: \(root)")
+            try Catalog.installInteractiveBlocking(exportsDir: root)
+            models = try fetchModels()
+            print("models refreshed: \(models.count)")
+        case "/dashboard":
+            print("run: caix dashboard --endpoint \(endpoint.absoluteString)")
         case "/shell":
             guard let mode = ShellMode(rawValue: rest.lowercased()) else {
                 print("usage: /shell ask|on|off")
@@ -230,7 +249,7 @@ struct ChatTUI {
                 print(cwd)
                 return false
             }
-            let expanded = expandPath(rest)
+            let expanded = caixExpandPath(rest)
             var isDir: ObjCBool = false
             guard FileManager.default.fileExists(atPath: expanded, isDirectory: &isDir), isDir.boolValue else {
                 print("not a directory: \(expanded)")
@@ -338,7 +357,7 @@ struct ChatTUI {
         request.setValue("caix/\(CaixBuildInfo.version)", forHTTPHeaderField: "User-Agent")
         request.httpBody = data
 
-        let (responseData, response) = try synchronousData(for: request)
+        let (responseData, response) = try synchronousData(for: request, progress: "thinking")
         guard let http = response as? HTTPURLResponse else {
             throw ChatTUIError("invalid response")
         }
@@ -428,13 +447,28 @@ struct ChatTUI {
         return names
     }
 
+    private func fetchServerExportsDir() throws -> String? {
+        var request = URLRequest(url: endpoint.appendingPathComponent("api/server"), timeoutInterval: 5)
+        request.setValue("caix/\(CaixBuildInfo.version)", forHTTPHeaderField: "User-Agent")
+        let (data, response) = try synchronousData(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            return nil
+        }
+        guard
+            let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let exports = object["exportsDir"] as? String,
+            !exports.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        return exports
+    }
+
     private mutating func runShell(command: String, cwd: String, timeout: Int, initiatedByModel: Bool) throws -> String {
         let redactedCommand = redact(command)
         guard !containsCredentialSyntax(command) else {
             log("shell refused credential-shaped command=\(redactedCommand)")
             throw ChatTUIError("refusing shell command with credential-shaped arguments")
         }
-        let expandedCWD = expandPath(cwd)
+        let expandedCWD = caixExpandPath(cwd)
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: expandedCWD, isDirectory: &isDir), isDir.boolValue else {
             throw ChatTUIError("cwd is not a directory: \(expandedCWD)")
@@ -473,7 +507,7 @@ struct ChatTUI {
         return String(redact(text).prefix(12_000))
     }
 
-    private func synchronousData(for request: URLRequest) throws -> (Data, URLResponse) {
+    private func synchronousData(for request: URLRequest, progress: String? = nil) throws -> (Data, URLResponse) {
         let semaphore = DispatchSemaphore(value: 0)
         final class Box: @unchecked Sendable {
             var result: Result<(Data, URLResponse), Error>?
@@ -490,8 +524,21 @@ struct ChatTUI {
             semaphore.signal()
         }
         task.resume()
+        let frames = ["|", "/", "-", "\\"]
+        var frame = 0
+        var lastTick = Date.distantPast
         while semaphore.wait(timeout: .now()) == .timedOut {
+            if let progress, Date().timeIntervalSince(lastTick) >= 0.12 {
+                print("\r\(progress) \(frames[frame])", terminator: "")
+                fflush(stdout)
+                frame = (frame + 1) % frames.count
+                lastTick = Date()
+            }
             RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02))
+        }
+        if let progress {
+            print("\r\(String(repeating: " ", count: progress.count + 4))\r", terminator: "")
+            fflush(stdout)
         }
         return try box.result?.get() ?? { throw ChatTUIError("empty response") }()
     }
@@ -514,12 +561,6 @@ private func readLine(prompt: String) -> String? {
     print(prompt, terminator: "")
     fflush(stdout)
     return Swift.readLine()
-}
-
-private func expandPath(_ path: String) -> String {
-    if path == "~" { return NSHomeDirectory() }
-    if path.hasPrefix("~/") { return NSHomeDirectory() + String(path.dropFirst()) }
-    return path
 }
 
 private func parseJSONObject(_ text: String) -> [String: Any] {

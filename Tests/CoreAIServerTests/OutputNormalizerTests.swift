@@ -72,6 +72,27 @@ final class OutputNormalizerTests: XCTestCase {
         XCTAssertEqual(r.reasoning, "")
     }
 
+    func testDuplicateInitialWordCleanup() {
+        XCTAssertEqual(
+            StreamingNormalizer.normalizeComplete("HelloHello! How can I help?", format: qwen).text,
+            "Hello! How can I help?")
+        XCTAssertEqual(
+            StreamingNormalizer.normalizeComplete("TheThe capital is Tallahassee.", format: qwen).text,
+            "The capital is Tallahassee.")
+    }
+
+    func testDuplicateInitialWordCleanupIsNarrow() {
+        XCTAssertEqual(
+            StreamingNormalizer.normalizeComplete("bye bye for now.", format: qwen).text,
+            "bye bye for now.")
+        XCTAssertEqual(
+            StreamingNormalizer.normalizeComplete("murmur is a word.", format: qwen).text,
+            "murmur is a word.")
+        XCTAssertEqual(
+            StreamingNormalizer.normalizeComplete("CanCanberra be reached?", format: qwen).text,
+            "CanCanberra be reached?")
+    }
+
     // MARK: Streaming — markers split across token boundaries
 
     /// Feed the raw text one Character at a time; the incremental events must reassemble into the
@@ -154,11 +175,11 @@ final class OutputNormalizerTests: XCTestCase {
     func testGemmaThoughtChannelAndTool() {
         let gemma = OutputFormat(
             family: .gemma,
-            reasoningStarts: ["<|channel>thought", "<|think|>"],
-            reasoningEnds: ["<channel|>"],
+            reasoningStarts: ["<|channel>thought", "<|channel>analysis", "//thought", "<|think|>"],
+            reasoningEnds: ["<channel|>", "//final"],
             toolStarts: ["<|tool_call|>", "<|tool_call>"],
             toolEnds: ["<tool_call|>", "<|tool_call|>"],
-            dropMarkers: ["<|channel>final\n", "<|channel>final", "<turn|>"])
+            dropMarkers: ["<|channel>final\n", "<|channel>final", "//final", "<turn|>", "<|turn>", "<pad>", "<bos>", "<eos>", "</s>"])
         let raw = "<|channel>thought\nWeighing options.<channel|>The result.<|tool_call|>{\"name\": \"lookup\", \"arguments\": {\"q\": \"x\"}}<tool_call|>"
         let r = StreamingNormalizer.normalizeComplete(raw, format: gemma)
         XCTAssertEqual(r.reasoning, "Weighing options.")
@@ -172,11 +193,22 @@ final class OutputNormalizerTests: XCTestCase {
         let gemma = OutputFormat(
             family: .gemma,
             reasoningStarts: ["<|channel>thought"], reasoningEnds: ["<channel|>"],
-            dropMarkers: ["<|channel>final\n", "<|channel>final", "<turn|>"])
+            dropMarkers: ["<|channel>final\n", "<|channel>final", "//final", "<turn|>", "<|turn>", "<pad>", "<bos>", "<eos>", "</s>"])
         let raw = "<|channel>thought\nthinking<channel|><|channel>final\nThe answer.<turn|>"
         let r = StreamingNormalizer.normalizeComplete(raw, format: gemma)
         XCTAssertEqual(r.reasoning, "thinking")
         XCTAssertEqual(r.text, "The answer.")
+    }
+
+    func testGemmaDropsPadAndSlashThoughtScaffolding() {
+        let gemma = OutputFormat(
+            family: .gemma,
+            reasoningStarts: ["<|channel>thought", "//thought"], reasoningEnds: ["<channel|>", "//final"],
+            dropMarkers: ["<|channel>final\n", "<|channel>final", "//final", "<turn|>", "<|turn>", "<pad>", "<bos>", "<eos>", "</s>"])
+        let raw = "Hey<pad>! there!//thought\nprivate scratch"
+        let r = StreamingNormalizer.normalizeComplete(raw, format: gemma)
+        XCTAssertEqual(r.text, "Hey! there!")
+        XCTAssertEqual(r.reasoning, "private scratch")
     }
 
     // MARK: JSONAny round-trip (tool args ⇆ Anthropic input)

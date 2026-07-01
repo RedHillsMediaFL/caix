@@ -19,7 +19,8 @@
   .app{display:grid;grid-template-columns:300px 1fr;height:100vh}
   /* ---- sidebar ---- */
   .side{border-right:1px solid var(--line);background:var(--surface);overflow-y:auto;padding:16px 14px;display:flex;flex-direction:column;gap:20px}
-  .logo{font-size:16px;font-weight:600;letter-spacing:-.01em}
+  .logo{font-size:16px;font-weight:600;letter-spacing:-.01em;display:flex;align-items:center;gap:8px}
+  .logo img{width:30px;height:30px;border-radius:7px;border:1px solid var(--line);object-fit:cover}
   .logo b{color:var(--signal)}.logo .sub{color:var(--faint);font-size:12px;font-weight:400}
   .side h3{font-size:11px;text-transform:uppercase;letter-spacing:.13em;color:var(--muted);margin:0 0 9px;font-weight:600}
   .mrow{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:8px;border:1px solid transparent}
@@ -99,7 +100,7 @@
 <body>
 <div class="app">
   <aside class="side">
-    <div class="logo"><b>caix</b> <span class="sub">chat</span> · <a href="/">dashboard ↗</a></div>
+    <div class="logo"><img src="/assets/caix-cakebot.png" alt="" aria-hidden="true"/><span><b>caix</b> <span class="sub">chat</span> · <a href="/">dashboard ↗</a></span></div>
 
     <section>
       <h3>Models</h3>
@@ -187,7 +188,12 @@ const api=(u,o)=>fetch(u,o).then(r=>r.json());
 marked.setOptions({breaks:true,gfm:true});
 function md(t){try{return DOMPurify.sanitize(marked.parse(t||''));}catch(e){return (t||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}}
 const isMTP=n=>/mtp|eagle|spec/i.test(n||'');
+const isComponent=n=>/draft|eagle-target|eagle_draft/i.test(n||'')||(/assistant/i.test(n||'')&&!/instruct|-it-/i.test(n||''));
+const isChatTuned=n=>/instruct|-it-|chat|qwythos/i.test(n||'');
+const chatScore=n=>(isComponent(n)?900:500)+(isChatTuned(n)?-300:0)+(/qwen/i.test(n||'')?-50:0)+(/gemma/i.test(n||'')&&!isChatTuned(n)?120:0)+(isMTP(n)?80:0);
+const modelWarn=n=>isComponent(n)?'component bundle':(!isChatTuned(n)?'not chat-tuned':'');
 const esc=s=>(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const fixInitialRepeat=s=>(s||'').replace(/^([A-Z][A-Za-z]{2,23})\1(?![A-Za-z0-9_])/,'$1');
 const redactLog=s=>(s||'').replace(/\b((?:[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|AUTHORIZATION|CREDENTIAL)[A-Z0-9_]*)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s]+)/gi,'$1[redacted]')
   .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/\-]+=*/gi,'$1[redacted]')
   .replace(/([?&](?:access_token|token|signature|x-amz-signature)=)[^&\s"]+/gi,'$1[redacted]');
@@ -218,7 +224,7 @@ async function loadModels(){
     return;
   }
   // chat model picker
-  const bundles=MODELS.filter(m=>m.bundle).map(m=>m.name).sort((a,b)=>(isMTP(b)?1:0)-(isMTP(a)?1:0));
+  const bundles=MODELS.filter(m=>m.bundle).map(m=>m.name).sort((a,b)=>chatScore(a)-chatScore(b)||a.localeCompare(b));
   const sel=$('chatmodel');
   if(sel.dataset.opts!==bundles.join('|')){const cur=sel.value;
     sel.innerHTML=bundles.map(n=>`<option value="${escA(n)}">${esc(n)}${isMTP(n)?'  · MTP':''}</option>`).join('');
@@ -322,7 +328,10 @@ $('mcpclear').onclick=()=>{MCP={url:'',tools:[]};$('mcpurl').value='';$('mcptool
 // ---------- chat (streaming, markdown, agent loop) ----------
 let history=[],streaming=false,abortCtrl=null;
 function updateBadge(){const m=$('chatmodel').value,b=$('mtpbadge');
-  if(isMTP(m)){b.textContent='MTP · speculative';b.className='badge';}else{b.textContent='standard';b.className='badge std';}}
+  const warn=modelWarn(m);
+  if(warn){b.textContent=warn;b.className='badge std';}
+  else if(isMTP(m)){b.textContent='MTP · speculative';b.className='badge';}
+  else{b.textContent='chat-ready';b.className='badge std';}}
 function copyCode(btn){const pre=btn.parentElement,code=pre.querySelector('code');navigator.clipboard.writeText(code.innerText);btn.textContent='copied';setTimeout(()=>btn.textContent='copy',1200);}
 function render(){
   const wrap=$('scroll').querySelector('.wrap');
@@ -372,7 +381,7 @@ async function streamTurn(a){
       const dl=blk.split('\n').find(l=>l.startsWith('data:'));if(!dl)continue;const p=dl.slice(5).trim();if(p==='[DONE]')continue;
       try{const d=JSON.parse(p);const del=(d.choices&&d.choices[0]&&d.choices[0].delta)||{};
         if(del.reasoning_content){if(!firstByte)addLog('chat',`first byte ${Math.round(performance.now()-t0)}ms`);firstByte=true;a.wait='';a.reasoning=(a.reasoning||'')+del.reasoning_content;}
-        if(del.content){if(!firstByte)addLog('chat',`first byte ${Math.round(performance.now()-t0)}ms`);firstByte=true;a.wait='';if(!firstAt)firstAt=performance.now();a.content=(a.content||'')+del.content;nTok++;}
+        if(del.content){if(!firstByte)addLog('chat',`first byte ${Math.round(performance.now()-t0)}ms`);firstByte=true;a.wait='';if(!firstAt)firstAt=performance.now();a.content=fixInitialRepeat((a.content||'')+del.content);nTok++;}
         if(del.tool_calls)for(const tc of del.tool_calls){const ix=tc.index||0;tcs[ix]=tcs[ix]||{id:tc.id,name:'',args:''};
           if(tc.id)tcs[ix].id=tc.id;if(tc.function&&tc.function.name)tcs[ix].name+=tc.function.name;if(tc.function&&tc.function.arguments)tcs[ix].args+=tc.function.arguments;}
         const el=(performance.now()-(firstAt||t0))/1000;if(nTok)$('live').innerHTML=`<b>${(nTok/Math.max(el,.001)).toFixed(1)}</b> tok/s · ${nTok} tok`;

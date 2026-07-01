@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.2.3-beta
+
+- Added the native terminal dashboard (`caix dashboard`) and interactive catalog install prompts.
+- Defaulted model installs and serving to `~/.caix/models/exports`, with `--exports` still available.
+- Added serve prewarm controls and request logging so cold loads happen before the server accepts traffic.
+- Improved chat model selection/warnings, stripped leaked Gemma scaffolding markers, and collapsed repeated first words.
+- Added the cakebot brand mark to the dashboard and browser chat.
+
+## 0.2.2-beta
+
 ### Added
 
 - Added `caix --version`, `caix doctor`, a Core AI runtime checker, and a tap-ready Homebrew formula

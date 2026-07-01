@@ -19,6 +19,48 @@ public struct ModelEntry: Codable, Sendable {
     public var mode: String?
 }
 
+public enum ModelSuitability: Sendable {
+    public static func chatWarning(for name: String) -> String? {
+        let lower = name.lowercased()
+        if isComponent(lower) {
+            return "component bundle; benchmark or pair it with its target, do not use as a standalone chat model"
+        }
+        if isChatTuned(lower) { return nil }
+        if lower.contains("gemma") {
+            return "this looks like a base Gemma target, not an -it/-instruct chat model"
+        }
+        return "this model name does not look chat-tuned; answers may be incoherent"
+    }
+
+    public static func isChatTuned(_ name: String) -> Bool {
+        let lower = name.lowercased()
+        return lower.contains("instruct")
+            || lower.contains("-it-")
+            || lower.hasSuffix("-it")
+            || lower.contains("-it-coreai")
+            || lower.contains("chat")
+            || lower.contains("qwythos")
+    }
+
+    public static func score(_ name: String, mode: String? = nil) -> Int {
+        let lower = name.lowercased()
+        if isComponent(lower) { return 900 }
+        var score = 500
+        if isChatTuned(lower) { score -= 300 }
+        if lower.contains("qwen") { score -= 50 }
+        if lower.contains("gemma") && !isChatTuned(lower) { score += 120 }
+        if lower.contains("mtp") || mode == "eagle" { score += 80 }
+        return score
+    }
+
+    private static func isComponent(_ lower: String) -> Bool {
+        lower.contains("draft")
+            || lower.contains("eagle-target")
+            || lower.contains("eagle_draft")
+            || (lower.contains("assistant") && !lower.contains("instruct") && !lower.contains("-it-"))
+    }
+}
+
 // MARK: - Per-model hot handle
 
 /// A loaded model plus the gate that serialises generation against it.
@@ -298,6 +340,17 @@ public actor ModelManager {
                     memoryBytes: nil, mode: "registry"))
         }
         return entries
+    }
+
+    public func servedModelsPreferredForChat() -> [ModelEntry] {
+        listModels()
+            .filter { $0.bundle }
+            .sorted {
+                let lhs = ModelSuitability.score($0.name, mode: $0.mode)
+                let rhs = ModelSuitability.score($1.name, mode: $1.mode)
+                if lhs == rhs { return $0.name < $1.name }
+                return lhs < rhs
+            }
     }
 
     // MARK: Load / offload / lookup

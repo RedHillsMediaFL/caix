@@ -32,6 +32,9 @@ case "run":
 case "chat", "tui":
     chatTUICommand(Array(args.dropFirst(2)))
 
+case "dashboard":
+    dashboardCommand(Array(args.dropFirst(2)))
+
 case "serve":
     serveCommand(Array(args.dropFirst(2)))
 
@@ -75,6 +78,7 @@ func printUsage() {
           caix run --model <bundle-dir> --prompt "..." [options]
           caix chat [--endpoint http://127.0.0.1:1237] [--shell ask|on|off]
           caix tui [--endpoint http://127.0.0.1:1237] [--shell ask|on|off]
+          caix dashboard [--endpoint http://127.0.0.1:1237]
           caix inspect --model <bundle-dir>
           caix bench --model <bundle-dir> [options]
           caix catalog <owner/search|collection-slug> [options]
@@ -87,12 +91,15 @@ func printUsage() {
         serve OPTIONS:
           --port <N>             Listen port (default: 1237)
           --host <H>             Bind host (default: 127.0.0.1)
-          --exports <dir>        Exported bundles dir (default: ./exports)
+          --exports <dir>        Exported bundles dir (default: ~/.caix/models/exports)
           --registry <path>      Model registry JSON (default: ./models/registry.json)
           --web <dir>            Dashboard web dir (default: ./web)
           --convert-script <p>   convert.py path (default: ./python/converter/convert.py)
           --python <exe>         Python executable for conversion (default: python3)
           --stats-file <path>     Persistent usage stats JSON (default: ~/.caix/usage.json)
+          --prewarm <model|smallest|all|off>
+                                  Warm model before listening (default: smallest)
+          --no-prewarm            Start serving without first-request compile warmup
           --cluster <manifest>    Stage manifest for distributed coordinator mode
           --remote-stage <id>     Remote stage id; repeatable (default: all transformer stages)
           --prompt-tokens <list>  Comma-separated token ids for a staged POC request
@@ -687,13 +694,14 @@ func serveCommand(_ argv: [String]) {
     let cwd = FileManager.default.currentDirectoryPath
     var host = "127.0.0.1"
     var port = 1237
-    var exportsDir = cwd + "/exports"
+    var exportsDir = caixDefaultExportsPath()
     var registryPath = cwd + "/models/registry.json"
     var webDir = cwd + "/web"
     var convertScript = cwd + "/python/converter/convert.py"
     var python = "python3"
     var verbose = false
     var statsFile: String? = nil   // usage-stats persistence (default ~/.caix/usage.json)
+    var prewarm = "smallest"
     var clusterManifest: String? = nil
     var clusterOptions = ClusterRuntimeOptions()
     // EAGLE MTP model. Enabled by default with the known bundle paths; disable with --no-eagle,
@@ -736,6 +744,8 @@ func serveCommand(_ argv: [String]) {
         case "--convert-script": convertScript = value(arg)
         case "--python": python = value(arg)
         case "--stats-file": statsFile = value(arg)
+        case "--prewarm": prewarm = value(arg)
+        case "--no-prewarm": prewarm = "off"
         case "--cluster": clusterManifest = value(arg)
         case "--remote-stage": clusterOptions.remoteStageIDs.append(value(arg))
         case "--prompt-tokens":
@@ -838,7 +848,8 @@ func serveCommand(_ argv: [String]) {
                 caixVersion: CaixBuildInfo.version,
                 verbose: verbose,
                 eagleConfig: eagleConfig,
-                statsFile: statsFile)
+                statsFile: statsFile,
+                prewarm: prewarm)
         } catch {
             FileHandle.standardError.write(Data("serve error: \(error)\n".utf8))
             exitCode = 1
