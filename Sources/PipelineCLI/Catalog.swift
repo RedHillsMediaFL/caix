@@ -332,7 +332,12 @@ enum Catalog {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: hf)
         process.arguments = arguments
-        process.environment = ProcessInfo.processInfo.environment
+        var env = ProcessInfo.processInfo.environment
+        env["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+        if env["HF_HUB_DISABLE_XET", default: ""].isEmpty {
+            env["HF_HUB_DISABLE_XET"] = "1"
+        }
+        process.environment = env
         process.standardOutput = FileHandle.standardOutput
         process.standardError = FileHandle.standardError
         try process.run()

@@ -4,7 +4,7 @@ class Caix < Formula
   desc "Native Apple Core AI inference server for local language models"
   homepage "https://github.com/RedHillsMediaFL/caix"
   license "MIT"
-  version "0.2.1-beta"
+  version "0.2.2-beta"
 
   # Head-only until the tap has a tested 0.x release tarball.
   # Copy this file to RedHillsMediaFL/homebrew-caix/Formula/caix.rb for the tap.

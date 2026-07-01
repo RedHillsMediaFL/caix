@@ -159,6 +159,7 @@
 - Added `caix catalog install` to download converted caix bundles through local Hugging Face settings.
 - Added `caix chat` / `caix tui` terminal chat with shell-tool controls.
 - Added exact Hub revisions to `caix catalog` install commands when the metadata includes a SHA.
+- Disabled Xet for caix-managed bundle downloads to avoid local cache/file-exists races.
 - Pinned dashboard RHM downloads to the discovered Hub revision and defaulted direct bundles to the metadata bundle name.
 - Defaulted converter and support-check HF cache placement to the checkout parent volume to reduce
   boot-disk writes during HF conversions.

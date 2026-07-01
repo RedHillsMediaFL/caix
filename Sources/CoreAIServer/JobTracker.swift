@@ -31,7 +31,8 @@ actor JobTracker {
 
     private static func subprocessEnvironment(
         pythonUnbuffered: Bool = false,
-        disableHFProgressBars: Bool = false
+        disableHFProgressBars: Bool = false,
+        disableHFXet: Bool = false
     ) -> [String: String] {
         var env = ProcessInfo.processInfo.environment
         if pythonUnbuffered {
@@ -39,6 +40,9 @@ actor JobTracker {
         }
         if disableHFProgressBars {
             env["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+        }
+        if disableHFXet, env["HF_HUB_DISABLE_XET", default: ""].isEmpty {
+            env["HF_HUB_DISABLE_XET"] = "1"
         }
         return env
     }
@@ -287,7 +291,7 @@ actor JobTracker {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = argv
-        process.environment = Self.subprocessEnvironment(disableHFProgressBars: true)
+        process.environment = Self.subprocessEnvironment(disableHFProgressBars: true, disableHFXet: true)
         process.standardOutput = logHandle ?? FileHandle.nullDevice
         process.standardError = logHandle ?? FileHandle.nullDevice
         process.terminationHandler = { proc in
