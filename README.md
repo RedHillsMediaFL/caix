@@ -154,14 +154,14 @@ caix serves Core AI `.aimodel` bundles. Get one of these two ways:
 **A. Download a converted bundle.** Put it in `models/exports/`:
 
 ```bash
-export HF_HOME=${HF_HOME:-/Volumes/SSD/hf-cache}
-scripts/check-disk-pressure.sh --path /Volumes/SSD --floor-gib 500
-mkdir -p models/exports
 # list converted Qwen repos and exact install commands
 caix catalog redhillsmediafl/qwen
-# Qwen3-4B model with tool-calling support:
-hf download redhillsmediafl/rhm-qwen3-4b-caix --revision <catalog-revision> --local-dir models/exports/qwen3-4b-coreai
+# download one into the default local exports directory:
+caix catalog install redhillsmediafl/rhm-qwen2.5-0.5b-instruct-caix --exports ~/.caix/models/exports
 ```
+
+`caix catalog install` wraps `hf download`, uses local Hugging Face credentials/cache when present,
+and runs a disk preflight first.
 
 ### Model catalog
 
@@ -181,6 +181,7 @@ Use the catalog for current install commands:
 ```bash
 caix catalog redhillsmediafl
 caix catalog redhillsmediafl/qwen
+caix catalog install <repo> --exports ~/.caix/models/exports
 ```
 
 Model cards list exact revisions, licenses, storage, RAM notes, and any speculative or EAGLE flags.
@@ -233,7 +234,7 @@ curl http://127.0.0.1:1237/v1/models
 
 When OpenCode sends an installed model ID to `/v1/chat/completions`, caix hot-loads the matching
 local bundle from the exports directory. If the ID is not installed yet, use the dashboard's RHM
-installer or `hf download` to add the converted bundle first.
+installer or `caix catalog install` to add the converted bundle first.
 
 ### Other devices
 
@@ -255,7 +256,9 @@ This gives you a private HTTPS URL on your tailnet without opening public ports.
 - Dashboard: RAM/GPU stats, load/unload/convert/delete, per-model usage, rolling/lifetime tok/s.
   Usage stats persist across restarts.
 - Chat: markdown, streaming, code blocks with copy, tables, and a thinking panel for reasoning
-  models.
+  models. The chat page includes a redacted session log for debugging.
+- Terminal chat: `caix chat` / `caix tui` talks to a local caix server and includes shell-tool
+  controls (`ask`, `on`, `off`).
 - Skills: choose or write a system prompt.
 - Tools: built-in `calculator`, `clock`, and `fetch_url`. Use qwen-family models for tool-heavy
   chats; the gemma MTP model is weak at tool calls.
@@ -357,7 +360,7 @@ confirms the architecture after dequant.
 | | |
 |---|---|
 | Models | `models/exports/<name>/` (override with `caix_exports` or `--exports`) |
-| HF cache | `$HF_HOME`; caix defaults it to `/Volumes/SSD/hf-cache` when unset |
+| HF cache | `$HF_HOME`; otherwise Hugging Face uses its local default |
 | Converter tmp | `$caix_tmpdir`; converter default is `/Volumes/SSD/coreai-tmp` |
 | Export index | optional JSON from `scripts/refresh-export-index.sh` (set `caix_export_index`) |
 | Web UI | `web/` (served at `/` and `/chat`) |

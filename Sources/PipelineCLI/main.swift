@@ -29,6 +29,9 @@ case "stats":
 case "run":
     runCommand(Array(args.dropFirst(2)))
 
+case "chat", "tui":
+    chatTUICommand(Array(args.dropFirst(2)))
+
 case "serve":
     serveCommand(Array(args.dropFirst(2)))
 
@@ -70,6 +73,8 @@ func printUsage() {
           caix doctor [--no-fail]
           caix stats
           caix run --model <bundle-dir> --prompt "..." [options]
+          caix chat [--endpoint http://127.0.0.1:1237] [--shell ask|on|off]
+          caix tui [--endpoint http://127.0.0.1:1237] [--shell ask|on|off]
           caix inspect --model <bundle-dir>
           caix bench --model <bundle-dir> [options]
           caix catalog <owner/search|collection-slug> [options]
@@ -125,6 +130,15 @@ func printUsage() {
           --raw                  Skip the chat template (raw completion)
           --kv-capacity <N>      Fixed KV cache capacity override (auto-floored per model)
           --verbose              Emit timing/diagnostics to stderr
+
+        chat / tui OPTIONS:
+          --endpoint <url>       caix server endpoint (default: http://127.0.0.1:1237)
+          --model <name>         Served model id (default: first /v1/models result)
+          --shell <mode>         Shell tool access: ask, on, off (default: ask)
+          --cwd <dir>            Shell working directory (default: current directory)
+          --max-tokens <N>       Max response tokens (default: 1024)
+          --temperature <t>      Sampling temperature (default: 0.7)
+          --system <text>        System prompt
 
         bench OPTIONS:
           --model <dir>          Exported .aimodel bundle directory (required)

@@ -156,6 +156,8 @@
 - Added a metadata-only Hugging Face revision collector for benchmark manifests.
 - Added a generated tester request sheet for model verification and raw benchmark collection.
 - Added `caix catalog` for metadata-backed Hugging Face caix repo discovery.
+- Added `caix catalog install` to download converted caix bundles through local Hugging Face settings.
+- Added `caix chat` / `caix tui` terminal chat with shell-tool controls.
 - Added exact Hub revisions to `caix catalog` install commands when the metadata includes a SHA.
 - Pinned dashboard RHM downloads to the discovered Hub revision and defaulted direct bundles to the metadata bundle name.
 - Defaulted converter and support-check HF cache placement to the checkout parent volume to reduce
@@ -163,6 +165,7 @@
 - Added explicit text-only errors for OpenAI/Anthropic requests that include multimodal content blocks.
 - Added server-side discovery for installable `redhillsmediafl/*-caix` Hugging Face model repos.
 - Added `POST /api/rhm-download` to install already-converted RHM Core AI bundles into the local exports directory.
+- Added a redacted session log to the browser chat page for copy/download debugging.
 - Added persistent converter and support-check logs under `~/.caix/logs` and `~/.caix/support-logs`.
 - Rebuilt the dashboard as a model-agnostic server console with simple and advanced modes, local model controls, RHM installs, arbitrary HF support checks, conversion jobs, server health, and a link to the dedicated `/chat` page.
 - Added persistent classic speculative serving for target+draft packages with nested `draft/` bundles, enabling the RHM Qwen MTP package to run as MTP instead of target-only.

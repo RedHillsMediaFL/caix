@@ -44,6 +44,9 @@
   .tog input{width:auto;accent-color:var(--signal)}
   .hintbox{font-family:var(--mono);font-size:11px;margin-top:8px;line-height:1.5}
   .ok-txt{color:var(--ok)}.bad-txt{color:var(--bad)}.work-txt{color:var(--work)}
+  .logbox{height:142px;overflow:auto;border:1px solid var(--line);border-radius:7px;background:#0c0e12;
+       padding:8px 9px;font-family:var(--mono);font-size:10.5px;line-height:1.45;color:var(--muted);white-space:pre-wrap}
+  .logrow{display:block;margin-bottom:4px}.logrow b{color:var(--text);font-weight:500}
   /* ---- chat main ---- */
   .main{display:flex;flex-direction:column;height:100vh;min-width:0}
   .top{display:flex;align-items:center;gap:12px;padding:11px 18px;border-bottom:1px solid var(--line);flex-wrap:wrap}
@@ -147,6 +150,16 @@
       </div>
       <div id="mcptools" class="hintbox" style="color:var(--faint)"></div>
     </section>
+
+    <section>
+      <h3>Logs</h3>
+      <div style="display:flex;gap:7px;margin-bottom:8px">
+        <button class="ico" id="copylog">Copy</button>
+        <button class="ico" id="downloadlog">Download</button>
+        <button class="ico danger" id="clearlog">Clear</button>
+      </div>
+      <div id="chatlog" class="logbox"></div>
+    </section>
   </aside>
 
   <main class="main">
@@ -175,12 +188,32 @@ marked.setOptions({breaks:true,gfm:true});
 function md(t){try{return DOMPurify.sanitize(marked.parse(t||''));}catch(e){return (t||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}}
 const isMTP=n=>/mtp|eagle|spec/i.test(n||'');
 const esc=s=>(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const redactLog=s=>(s||'').replace(/\b((?:[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|AUTHORIZATION|CREDENTIAL)[A-Z0-9_]*)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s]+)/gi,'$1[redacted]')
+  .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/\-]+=*/gi,'$1[redacted]')
+  .replace(/([?&](?:access_token|token|signature|x-amz-signature)=)[^&\s"]+/gi,'$1[redacted]');
+let LOG=[];
+function addLog(type,detail){
+  LOG.push({t:new Date().toISOString(),type,detail:redactLog(String(detail||''))});
+  if(LOG.length>300)LOG=LOG.slice(LOG.length-300);
+  renderLog();
+}
+function logText(){return LOG.map(x=>`${x.t} ${x.type} ${x.detail}`).join('\n');}
+function renderLog(){
+  const el=$('chatlog'); if(!el)return;
+  el.innerHTML=LOG.map(x=>`<span class="logrow">${esc(x.t.slice(11,19))} <b>${esc(x.type)}</b> ${esc(x.detail)}</span>`).join('');
+  el.scrollTop=el.scrollHeight;
+}
+function downloadText(name,text){
+  const blob=new Blob([text],{type:'text/plain'}),url=URL.createObjectURL(blob),a=document.createElement('a');
+  a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),500);
+}
 
 // ---------- model management ----------
 let MODELS=[];
 const escA=s=>esc(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 async function loadModels(){
   try{MODELS=await api('/api/models');}catch(e){
+    addLog('models','load failed: '+(e.message||e));
     if(!MODELS.length)$('modellist').innerHTML='<div class="empty" style="padding:8px">server offline</div>';
     return;
   }
@@ -211,24 +244,28 @@ $('modellist').addEventListener('click',e=>{
   else if(a==='pick')pick(n);
 });
 function pick(n){const s=$('chatmodel'); if([...s.options].some(o=>o.value===n)){s.value=n;updateBadge();loadModels();}}
-async function act(a,name){try{await api('/api/'+a,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:name})});}catch(e){}loadModels();}
-async function convReg(name){try{await api('/api/convert',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:name})});}catch(e){}}
+async function act(a,name){addLog('model',a+' '+name);try{await api('/api/'+a,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:name})});}catch(e){addLog('model','failed: '+(e.message||e));}loadModels();}
+async function convReg(name){addLog('convert','registry '+name);try{await api('/api/convert',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:name})});}catch(e){addLog('convert','failed: '+(e.message||e));}}
 async function del(name){if(!confirm('Delete bundle '+name+' from disk? This cannot be undone.'))return;
   try{const d=await api('/api/delete',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:name})});
-    if(d.error)alert('Delete failed: '+(d.error.message||d.error));}catch(e){alert('Delete failed: '+e);}loadModels();}
+    if(d.error){addLog('delete','failed: '+(d.error.message||d.error));alert('Delete failed: '+(d.error.message||d.error));}}catch(e){addLog('delete','failed: '+e);alert('Delete failed: '+e);}loadModels();}
 
 // ---------- download / convert from HF ----------
 function hfShow(h,c){$('hfresult').textContent=h;$('hfresult').className='hintbox '+(c||'');}
 $('hfcheck').onclick=async()=>{const repo=$('hfrepo').value.trim();if(!repo)return hfShow('paste a repo id','bad-txt');
+  addLog('hf-check',repo);
   hfShow('checking…');try{const d=await api('/api/check-support',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({hf_repo:repo})});
-    hfShow(d.supported?`✓ supported · ${d.model_type}${d.params_b?` · ~${d.params_b}B`:''}`:`⚑ needs authoring · ${d.reason||d.next_step||'model path not authored yet'}`,d.supported?'ok-txt':'bad-txt');}catch(e){hfShow('check failed','bad-txt');}};
+    addLog('hf-check',d.supported?'supported '+(d.model_type||'model'):'needs authoring');
+    hfShow(d.supported?`✓ supported · ${d.model_type}${d.params_b?` · ~${d.params_b}B`:''}`:`⚑ needs authoring · ${d.reason||d.next_step||'model path not authored yet'}`,d.supported?'ok-txt':'bad-txt');}catch(e){addLog('hf-check','failed: '+(e.message||e));hfShow('check failed','bad-txt');}};
 $('hfconvert').onclick=async()=>{const repo=$('hfrepo').value.trim();if(!repo)return hfShow('paste a repo id','bad-txt');
+  addLog('hf-convert',repo);
   hfShow('checking + converting…','work-txt');
   try{const d=await api('/api/convert-hf',{method:'POST',headers:{'content-type':'application/json'},
     body:JSON.stringify({hf_repo:repo,compression:$('hfcomp').value,compute_precision:$('hfprec').value})});
+    addLog('hf-convert',d.started?'started '+(d.name||repo):'not started');
     if(d.started)hfShow(`▸ converting ${d.name} — appears in the list when done`,'work-txt');
     else if(d.supported===false)hfShow(`⚑ needs authoring · ${d.next_step||d.reason||'not converted'}`,'bad-txt');
-    else hfShow(JSON.stringify(d));}catch(e){hfShow('convert failed','bad-txt');}loadModels();};
+    else hfShow(JSON.stringify(d));}catch(e){addLog('hf-convert','failed: '+(e.message||e));hfShow('convert failed','bad-txt');}loadModels();};
 
 // ---------- skills ----------
 $('skillsel').onchange=()=>{const v=$('skillsel').value,ta=$('sysprompt');
@@ -258,12 +295,19 @@ function activeTools(){
   return t;
 }
 async function runTool(name,args){
+  addLog('tool',name+' start');
   if(name.startsWith('mcp__')){const real=name.slice(5);
     const d=await api('/api/mcp',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({url:MCP.url,method:'tools/call',params:{name:real,arguments:args}})});
     if(d.error)throw (d.error.message||JSON.stringify(d.error));
-    const c=d.result&&d.result.content;return Array.isArray(c)?c.map(x=>x.text||JSON.stringify(x)).join('\n'):JSON.stringify(d.result);}
+    const c=d.result&&d.result.content;
+    const out=Array.isArray(c)?c.map(x=>x.text||JSON.stringify(x)).join('\n'):JSON.stringify(d.result);
+    addLog('tool',name+' ok '+String(out).length+' chars');
+    return out;}
   const ct=Object.values(CLIENT_TOOLS).find(t=>t.def.function.name===name);
-  if(!ct)throw 'unknown tool '+name; return await ct.run(args||{});
+  if(!ct)throw 'unknown tool '+name;
+  const out=await ct.run(args||{});
+  addLog('tool',name+' ok '+String(out).length+' chars');
+  return out;
 }
 $('mcpconnect').onclick=async()=>{const url=$('mcpurl').value.trim();if(!url)return;
   $('mcptools').innerHTML='<span class="spin"></span> connecting…';$('mcptools').className='hintbox work-txt';
@@ -314,19 +358,21 @@ async function streamTurn(a){
   const body={model:$('chatmodel').value,messages:buildMessages(),max_tokens:1024,temperature:0.7,top_p:0.95,stream:true};
   if(tools.length)body.tools=tools;
   const t0=performance.now();let nTok=0,firstAt=0,firstByte=false;
+  addLog('chat',`request model=${body.model} messages=${body.messages.length} tools=${tools.length}`);
   const tcs={}; // index -> {id,name,args}
   const wait=setInterval(()=>{if(firstByte)return;const s=Math.round((performance.now()-t0)/1000);
     a.wait=s<4?`connecting…  ${s}s`:`loading model — first run compiles (~1 min)  ${s}s`;
     $('live').innerHTML=`<span class="spin"></span> ${a.wait}`;render();},400);
   const res=await fetch('/v1/chat/completions',{method:'POST',headers:{'content-type':'application/json'},signal:abortCtrl.signal,body:JSON.stringify(body)});
+  addLog('chat','http '+res.status);
   if(!res.ok||!res.body){clearInterval(wait);throw new Error('HTTP '+res.status);}
   const rd=res.body.getReader(),dec=new TextDecoder();let buf='';
   for(;;){const {done,value}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});let nl;
     while((nl=buf.indexOf('\n\n'))>=0){const blk=buf.slice(0,nl);buf=buf.slice(nl+2);
       const dl=blk.split('\n').find(l=>l.startsWith('data:'));if(!dl)continue;const p=dl.slice(5).trim();if(p==='[DONE]')continue;
       try{const d=JSON.parse(p);const del=(d.choices&&d.choices[0]&&d.choices[0].delta)||{};
-        if(del.reasoning_content){firstByte=true;a.wait='';a.reasoning=(a.reasoning||'')+del.reasoning_content;}
-        if(del.content){firstByte=true;a.wait='';if(!firstAt)firstAt=performance.now();a.content=(a.content||'')+del.content;nTok++;}
+        if(del.reasoning_content){if(!firstByte)addLog('chat',`first byte ${Math.round(performance.now()-t0)}ms`);firstByte=true;a.wait='';a.reasoning=(a.reasoning||'')+del.reasoning_content;}
+        if(del.content){if(!firstByte)addLog('chat',`first byte ${Math.round(performance.now()-t0)}ms`);firstByte=true;a.wait='';if(!firstAt)firstAt=performance.now();a.content=(a.content||'')+del.content;nTok++;}
         if(del.tool_calls)for(const tc of del.tool_calls){const ix=tc.index||0;tcs[ix]=tcs[ix]||{id:tc.id,name:'',args:''};
           if(tc.id)tcs[ix].id=tc.id;if(tc.function&&tc.function.name)tcs[ix].name+=tc.function.name;if(tc.function&&tc.function.arguments)tcs[ix].args+=tc.function.arguments;}
         const el=(performance.now()-(firstAt||t0))/1000;if(nTok)$('live').innerHTML=`<b>${(nTok/Math.max(el,.001)).toFixed(1)}</b> tok/s · ${nTok} tok`;
@@ -338,6 +384,7 @@ async function streamTurn(a){
   const calls=Object.values(tcs).filter(t=>t.name);
   if(calls.length)a.tool_calls=calls.map(c=>({id:c.id||('call_'+Math.random().toString(36).slice(2,8)),type:'function',function:{name:c.name,arguments:c.args||'{}'}}));
   if(nTok){const dt=(performance.now()-(firstAt||t0))/1000;a.tps=`${nTok} tok · ${(nTok/Math.max(dt,.001)).toFixed(1)} tok/s${isMTP($('chatmodel').value)?' · MTP':''}`;}
+  addLog('chat',`done tokens=${nTok} tool_calls=${calls.length}`);
   return a;
 }
 async function send(){
@@ -354,22 +401,26 @@ async function send(){
       // execute tool calls, append results, loop
       for(const tc of a.tool_calls){
         let out;const args=(()=>{try{return JSON.parse(tc.function.arguments||'{}');}catch(e){return {};}})();
-        try{out=await runTool(tc.function.name,args);}catch(e){out='[tool error: '+e+']';}
+        try{out=await runTool(tc.function.name,args);}catch(e){addLog('tool',tc.function.name+' error '+e);out='[tool error: '+e+']';}
         history.push({role:'tool',tool_call_id:tc.id,name:tc.function.name,argstr:tc.function.arguments,content:String(out)});
         render();
       }
     }
-  }catch(e){if(e.name!=='AbortError'){const last=history[history.length-1];if(last&&last.role==='assistant')last.content+=(last.content?'\n':'')+'[error: '+e.message+']';}}
+  }catch(e){addLog('chat',e.name==='AbortError'?'aborted':'error '+(e.message||e));if(e.name!=='AbortError'){const last=history[history.length-1];if(last&&last.role==='assistant')last.content+=(last.content?'\n':'')+'[error: '+e.message+']';}}
   setStreaming(false);abortCtrl=null;render();
 }
 $('send').onclick=send;
 $('stop').onclick=()=>{if(abortCtrl)abortCtrl.abort();};
 $('newchat').onclick=()=>{if(streaming)return;history=[];$('live').textContent='';render();};
+$('copylog').onclick=()=>navigator.clipboard.writeText(logText());
+$('downloadlog').onclick=()=>downloadText('caix-chat-log-'+new Date().toISOString().replace(/[:.]/g,'-')+'.txt',logText()+'\n');
+$('clearlog').onclick=()=>{LOG=[];renderLog();};
 $('showthink').onchange=render;
 $('chatmodel').onchange=()=>{updateBadge();loadModels();};
 const ta=$('prompt');
 ta.addEventListener('input',()=>{ta.style.height='auto';ta.style.height=Math.min(200,ta.scrollHeight)+'px';});
 ta.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
+addLog('ui','chat opened');
 loadModels();setInterval(loadModels,4000);
 </script>
 </body>

@@ -88,7 +88,7 @@ final class JobTrackerTests: XCTestCase {
         XCTAssertTrue(jobs.isEmpty)
     }
 
-    func testStartDownloadRHMPassesExactRevisionToHF() async throws {
+    func testStartDownloadRHMPassesExactRevisionToHFAndDoesNotForceHFHome() async throws {
         let root = try makeTempDir()
         let bin = root.appendingPathComponent("bin", isDirectory: true)
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
@@ -137,7 +137,7 @@ final class JobTrackerTests: XCTestCase {
         XCTAssertTrue(argv.contains("example-coreai"))
         let hfHome = try String(contentsOf: envLog, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        XCTAssertEqual(hfHome, "/Volumes/SSD/hf-cache")
+        XCTAssertEqual(hfHome, "")
     }
 
     func testRunCheckSupportReturnsFastJSON() async throws {

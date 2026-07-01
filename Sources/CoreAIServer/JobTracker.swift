@@ -34,9 +34,6 @@ actor JobTracker {
         disableHFProgressBars: Bool = false
     ) -> [String: String] {
         var env = ProcessInfo.processInfo.environment
-        if env["HF_HOME", default: ""].isEmpty {
-            env["HF_HOME"] = "/Volumes/SSD/hf-cache"
-        }
         if pythonUnbuffered {
             env["PYTHONUNBUFFERED"] = "1"
         }

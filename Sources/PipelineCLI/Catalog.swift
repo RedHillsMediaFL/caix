@@ -1,7 +1,16 @@
 import Dispatch
 import Foundation
 
+private final class CatalogExitCode: @unchecked Sendable {
+    var value: Int32 = 0
+}
+
 func catalogCommand(_ argv: [String]) {
+    if argv.first == "install" {
+        catalogInstallCommand(Array(argv.dropFirst()))
+        return
+    }
+
     var target: String?
     var limit = 25
     var emitJSON = false
@@ -28,10 +37,12 @@ func catalogCommand(_ argv: [String]) {
                 """
                 USAGE:
                   caix catalog <owner/search|collection-slug> [--limit N] [--json]
+                  caix catalog install <repo|single-result-search> [--exports DIR] [--name NAME]
 
                 Examples:
                   caix catalog redhillsmediafl/qwen
                   caix catalog redhillsmediafl/qwen-caix-6a3fd5f6d272c154dbfcda67
+                  caix catalog install redhillsmediafl/rhm-qwen2.5-0.5b-instruct-caix --exports ~/.caix/models/exports
                 """
             )
             exit(0)
@@ -45,7 +56,7 @@ func catalogCommand(_ argv: [String]) {
 
     let query = target ?? "redhillsmediafl/caix"
     let semaphore = DispatchSemaphore(value: 0)
-    nonisolated(unsafe) var exitCode: Int32 = 0
+    let exitCode = CatalogExitCode()
     Task {
         defer { semaphore.signal() }
         do {
@@ -61,13 +72,123 @@ func catalogCommand(_ argv: [String]) {
             }
         } catch {
             FileHandle.standardError.write(Data("catalog error: \(error)\n".utf8))
-            exitCode = 1
+            exitCode.value = 1
         }
     }
     while semaphore.wait(timeout: .now()) == .timedOut {
         RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02))
     }
-    exit(exitCode)
+    exit(exitCode.value)
+}
+
+func catalogInstallCommand(_ argv: [String]) {
+    var target: String?
+    var exportsDir = "models/exports"
+    var name: String?
+    var revision: String?
+    var limit = 10
+    var dryRun = false
+
+    func fail(_ message: String) -> Never {
+        FileHandle.standardError.write(Data("error: \(message)\n".utf8))
+        exit(2)
+    }
+
+    func value(_ option: String, _ index: inout Int) -> String {
+        index += 1
+        guard index < argv.count else { fail("\(option) needs a value") }
+        return argv[index]
+    }
+
+    var i = 0
+    while i < argv.count {
+        let arg = argv[i]
+        switch arg {
+        case "--exports":
+            exportsDir = value(arg, &i)
+        case "--name":
+            name = value(arg, &i)
+        case "--revision":
+            revision = value(arg, &i)
+        case "--limit":
+            let raw = value(arg, &i)
+            guard let parsed = Int(raw), parsed > 0 else { fail("--limit needs a positive integer") }
+            limit = parsed
+        case "--dry-run":
+            dryRun = true
+        case "-h", "--help":
+            print(
+                """
+                USAGE:
+                  caix catalog install <repo|single-result-search> [options]
+
+                OPTIONS:
+                  --exports <dir>        Root directory for installed bundles (default: models/exports)
+                  --name <bundle-name>   Override destination bundle directory name
+                  --revision <rev>       Override catalog revision
+                  --limit <N>            Search result cap when target is not exact (default: 10)
+                  --dry-run              Resolve and preflight only
+
+                Example:
+                  caix catalog install redhillsmediafl/rhm-qwen2.5-0.5b-instruct-caix --exports ~/.caix/models/exports
+                """
+            )
+            exit(0)
+        default:
+            if arg.hasPrefix("-") { fail("unknown catalog install option: \(arg)") }
+            if target != nil { fail("catalog install accepts one target") }
+            target = arg
+        }
+        i += 1
+    }
+
+    guard let query = target?.trimmingCharacters(in: .whitespacesAndNewlines), !query.isEmpty else {
+        fail("catalog install requires a repo or single-result search")
+    }
+
+    let semaphore = DispatchSemaphore(value: 0)
+    let exitCode = CatalogExitCode()
+    Task {
+        defer { semaphore.signal() }
+        do {
+            let result = try await Catalog.fetch(target: query, limit: limit)
+            let entry = try Catalog.installableEntry(from: result, requested: query)
+            let localName = try Catalog.safeInstallName(name ?? entry.localDir ?? entry.bundleName)
+            let root = Catalog.expandedFileURL(exportsDir, isDirectory: true)
+            let destination = root.appendingPathComponent(localName, isDirectory: true)
+            try Catalog.preflightInstall(destinationRoot: root, incomingBytes: entry.sizeBytes)
+
+            let trimmedRevision = revision?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let resolvedRevision = (trimmedRevision?.isEmpty == false ? trimmedRevision : nil)
+                ?? entry.revision
+            let command = Catalog.hfDownloadCommand(
+                repo: entry.repo,
+                revision: resolvedRevision,
+                destination: destination.path)
+
+            print("installing \(entry.repo)")
+            print("  revision: \(resolvedRevision ?? "default")")
+            print("  destination: \(destination.path)")
+            print("  size: \(entry.size)")
+            print("  auth/cache: local Hugging Face settings, if configured")
+            if dryRun {
+                print("  dry-run: hf \(command.joined(separator: " "))")
+                return
+            }
+
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            try Catalog.runHFDownload(command)
+            print("installed: \(destination.path)")
+            print("serve with: caix serve --exports \(root.path)")
+        } catch {
+            FileHandle.standardError.write(Data("catalog install error: \(error)\n".utf8))
+            exitCode.value = 1
+        }
+    }
+    while semaphore.wait(timeout: .now()) == .timedOut {
+        RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02))
+    }
+    exit(exitCode.value)
 }
 
 struct CatalogResult: Codable {
@@ -142,7 +263,83 @@ enum Catalog {
             lines.append("  package: \(entry.package)")
             lines.append("  install: \(entry.install)")
         }
+        lines.append("")
+        lines.append("download one: caix catalog install <repo> --exports ~/.caix/models/exports")
         return lines.joined(separator: "\n")
+    }
+
+    static func installableEntry(from result: CatalogResult, requested: String) throws -> CatalogEntry {
+        let installable = result.entries.filter { $0.localDir != nil && $0.package != "manual" }
+        if let exact = installable.first(where: { $0.repo.caseInsensitiveCompare(requested) == .orderedSame }) {
+            return exact
+        }
+        guard installable.count == 1, let only = installable.first else {
+            let choices = installable.prefix(8).map(\.repo).joined(separator: "\n  ")
+            let suffix = choices.isEmpty ? "no installable caix bundles matched" : "choose one exact repo:\n  \(choices)"
+            throw CatalogError("ambiguous install target '\(requested)': \(suffix)")
+        }
+        return only
+    }
+
+    static func safeInstallName(_ raw: String?) throws -> String {
+        guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            throw CatalogError("catalog entry has no safe local bundle name")
+        }
+        guard safeLocalName(raw) != nil else {
+            throw CatalogError("unsafe bundle name '\(raw)'")
+        }
+        return raw
+    }
+
+    static func expandedFileURL(_ path: String, isDirectory: Bool) -> URL {
+        let expanded: String
+        if path == "~" {
+            expanded = NSHomeDirectory()
+        } else if path.hasPrefix("~/") {
+            expanded = NSHomeDirectory() + String(path.dropFirst())
+        } else {
+            expanded = path
+        }
+        return URL(fileURLWithPath: expanded, isDirectory: isDirectory)
+    }
+
+    static func preflightInstall(destinationRoot: URL, incomingBytes: Int64?) throws {
+        guard let available = availableBytes(for: destinationRoot) else {
+            throw CatalogError("disk preflight failed: could not inspect free space for \(destinationRoot.path)")
+        }
+        let reserve = installReserveBytes()
+        let payload = max(0, incomingBytes ?? 0)
+        let (required, overflow) = reserve.addingReportingOverflow(payload)
+        if overflow || available < required {
+            throw CatalogError(
+                "insufficient disk: free \(humanBytes(available)), required \(overflow ? "overflow" : humanBytes(required)) (payload \(incomingBytes.map(humanBytes) ?? "unknown") + reserve \(humanBytes(reserve)))")
+        }
+    }
+
+    static func hfDownloadCommand(repo: String, revision: String?, destination: String) -> [String] {
+        var command = ["download", repo]
+        if let revision, !revision.isEmpty {
+            command += ["--revision", revision]
+        }
+        command += ["--local-dir", destination]
+        return command
+    }
+
+    static func runHFDownload(_ arguments: [String]) throws {
+        guard let hf = findExecutable("hf") else {
+            throw CatalogError("hf CLI not found; install it with: curl -LsSf https://hf.co/cli/install.sh | bash -s")
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: hf)
+        process.arguments = arguments
+        process.environment = ProcessInfo.processInfo.environment
+        process.standardOutput = FileHandle.standardOutput
+        process.standardError = FileHandle.standardError
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw CatalogError("hf download failed with exit code \(process.terminationStatus)")
+        }
     }
 
     private static func searchModels(target: String, limit: Int) async throws -> [ModelRef] {
@@ -244,9 +441,9 @@ enum Catalog {
 
     private static func installCommand(repo: String, revision: String?, localDir: String) -> String {
         if let revision, !revision.isEmpty {
-            return "hf download \(repo) --revision \(revision) --local-dir models/exports/\(localDir)"
+            return "caix catalog install \(repo) --revision \(revision)"
         }
-        return "hf download \(repo) --local-dir models/exports/\(localDir)"
+        return "caix catalog install \(repo)"
     }
 
     private static func packageKind(siblings: [String]) -> String {
@@ -305,6 +502,37 @@ enum Catalog {
         return String(format: "%.1f %@", value, units[unit])
     }
 
+    private static func installReserveBytes() -> Int64 {
+        let env = ProcessInfo.processInfo.environment
+        let raw = env["CAIX_INSTALL_RESERVE_GIB"]
+            ?? env["CAIX_STOP_FLOOR_GIB"]
+            ?? env["STOP_FLOOR_GIB"]
+        let gib = raw.flatMap { Int64($0.trimmingCharacters(in: .whitespacesAndNewlines)) } ?? 10
+        let clamped = max(0, gib)
+        let (bytes, overflow) = clamped.multipliedReportingOverflow(by: 1_073_741_824)
+        return overflow ? Int64.max : bytes
+    }
+
+    private static func availableBytes(for url: URL) -> Int64? {
+        let probe = existingAncestor(for: url)
+        guard let attrs = try? FileManager.default.attributesOfFileSystem(forPath: probe.path),
+              let free = attrs[.systemFreeSize] as? NSNumber
+        else { return nil }
+        return free.int64Value
+    }
+
+    private static func existingAncestor(for url: URL) -> URL {
+        var current = url
+        var isDir: ObjCBool = false
+        while !FileManager.default.fileExists(atPath: current.path, isDirectory: &isDir) {
+            let parent = current.deletingLastPathComponent()
+            if parent.path == current.path { break }
+            current = parent
+        }
+        _ = isDir
+        return current
+    }
+
     private static func int64Value(_ value: Any?) -> Int64? {
         if let n = value as? NSNumber { return n.int64Value }
         if let i = value as? Int { return Int64(i) }
@@ -346,7 +574,7 @@ enum Catalog {
 
     private static func fetchData(_ url: URL) async throws -> Data {
         var request = URLRequest(url: url, timeoutInterval: 20)
-        request.setValue("caix/0.2.0-beta", forHTTPHeaderField: "User-Agent")
+        request.setValue("caix/\(CaixBuildInfo.version)", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await session.data(for: request)
         if let http = response as? HTTPURLResponse, http.statusCode < 200 || http.statusCode >= 300 {
             throw CatalogError("HTTP \(http.statusCode) from \(url.absoluteString)")
