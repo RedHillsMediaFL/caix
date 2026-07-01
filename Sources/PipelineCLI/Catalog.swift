@@ -1,6 +1,7 @@
 import Dispatch
 import Darwin
 import Foundation
+import CoreAIServer
 
 private final class CatalogExitCode: @unchecked Sendable {
     var value: Int32 = 0
@@ -563,6 +564,7 @@ enum Catalog {
             repo: resolvedRepo,
             revision: revision,
             bundleName: safeLocalName(metadata?.name),
+            bundleMetadata: metadata,
             tags: tags,
             siblings: siblings,
             usedStorage: int64Value(obj["usedStorage"]),
@@ -579,7 +581,12 @@ enum Catalog {
 
     private static func entry(from detail: ModelDetail, readme: String?) -> CatalogEntry {
         let package = packageKind(siblings: detail.siblings)
-        let localName = installName(repo: detail.repo, bundleName: detail.bundleName, package: package)
+        let localName = installName(
+            repo: detail.repo,
+            bundleName: detail.bundleName,
+            sourceModelID: detail.bundleMetadata?.source?.hfModelId,
+            tokenizer: detail.bundleMetadata?.language?.tokenizer,
+            package: package)
         let install = localName.map {
             installCommand(repo: detail.repo, revision: detail.revision, localDir: $0)
         } ?? "manual; inspect the model card"
@@ -598,14 +605,26 @@ enum Catalog {
             updated: detail.lastModified)
     }
 
-    private static func installName(repo: String, bundleName: String?, package: String) -> String? {
+    private static func installName(
+        repo: String,
+        bundleName: String?,
+        sourceModelID: String?,
+        tokenizer: String?,
+        package: String
+    ) -> String? {
         guard package != "manual" else { return nil }
+        let repoDerived = repoDerivedInstallName(repo: repo)
         if package == "standard" {
-            return safeLocalName(bundleName) ?? repoDerivedInstallName(repo: repo)
+            return ModelNameRepair.preferredInstallName(
+                metadataName: bundleName,
+                repoDerivedName: repoDerived,
+                fallbackName: repo.split(separator: "/").last.map(String.init) ?? "model-coreai",
+                sourceModelID: sourceModelID,
+                tokenizer: tokenizer)
         }
         // Speculative/EAGLE packages often embed the target bundle name in root metadata.json.
         // Install the package into its own directory so it cannot collide with the standalone target.
-        return repoDerivedInstallName(repo: repo) ?? safeLocalName(bundleName)
+        return repoDerived ?? safeLocalName(bundleName)
     }
 
     private static func repoDerivedInstallName(repo: String) -> String? {
@@ -1027,6 +1046,7 @@ enum Catalog {
         var repo: String
         var revision: String?
         var bundleName: String?
+        var bundleMetadata: BundleMetadata?
         var tags: [String]
         var siblings: [String]
         var usedStorage: Int64?
@@ -1036,6 +1056,20 @@ enum Catalog {
 
     private struct BundleMetadata: Decodable {
         var name: String?
+        var source: Source?
+        var language: Language?
+
+        struct Source: Decodable {
+            var hfModelId: String?
+
+            enum CodingKeys: String, CodingKey {
+                case hfModelId = "hf_model_id"
+            }
+        }
+
+        struct Language: Decodable {
+            var tokenizer: String?
+        }
     }
 }
 

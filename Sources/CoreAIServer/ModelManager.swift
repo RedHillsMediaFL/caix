@@ -42,6 +42,25 @@ public enum ModelSuitability: Sendable {
             || lower.contains("qwythos")
     }
 
+    public static func inferredBillions(from name: String) -> Double? {
+        let lower = name.lowercased()
+        let scalars = Array(lower)
+        var i = 0
+        while i < scalars.count {
+            if scalars[i].isNumber {
+                var j = i
+                while j < scalars.count, scalars[j].isNumber || scalars[j] == "." { j += 1 }
+                if j < scalars.count, scalars[j] == "b" {
+                    return Double(String(scalars[i..<j]))
+                }
+                i = j
+            } else {
+                i += 1
+            }
+        }
+        return nil
+    }
+
     public static func score(_ name: String, mode: String? = nil) -> Int {
         let lower = name.lowercased()
         if isComponent(lower) { return 900 }
@@ -58,6 +77,81 @@ public enum ModelSuitability: Sendable {
             || lower.contains("eagle-target")
             || lower.contains("eagle_draft")
             || (lower.contains("assistant") && !lower.contains("instruct") && !lower.contains("-it-"))
+    }
+}
+
+public enum ModelNameRepair: Sendable {
+    public static func preferredServedName(
+        directoryName: String,
+        metadataName: String?,
+        sourceModelID: String?,
+        tokenizer: String?
+    ) -> String {
+        let preferred = safeName(metadataName) ?? directoryName
+        return preservingInstructionTuningMarker(
+            in: preferred,
+            fallback: directoryName,
+            provenance: [sourceModelID, tokenizer])
+    }
+
+    public static func preferredInstallName(
+        metadataName: String?,
+        repoDerivedName: String?,
+        fallbackName: String,
+        sourceModelID: String?,
+        tokenizer: String?
+    ) -> String {
+        let preferred = safeName(metadataName) ?? safeName(repoDerivedName) ?? fallbackName
+        return preservingInstructionTuningMarker(
+            in: preferred,
+            fallback: safeName(repoDerivedName) ?? fallbackName,
+            provenance: [sourceModelID, tokenizer])
+    }
+
+    private static func preservingInstructionTuningMarker(
+        in name: String,
+        fallback: String,
+        provenance: [String?]
+    ) -> String {
+        guard !ModelSuitability.isChatTuned(name),
+              provenance.contains(where: { hasInstructionTunedToken($0) })
+        else { return name }
+        if let repaired = insertingITMarker(in: name), safeName(repaired) != nil {
+            return repaired
+        }
+        if !ModelSuitability.isChatTuned(fallback),
+           let repaired = insertingITMarker(in: fallback),
+           safeName(repaired) != nil {
+            return repaired
+        }
+        return name
+    }
+
+    private static func hasInstructionTunedToken(_ raw: String?) -> Bool {
+        guard let raw else { return false }
+        return raw.lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .contains("it")
+    }
+
+    private static func insertingITMarker(in raw: String) -> String? {
+        let lower = raw.lowercased()
+        if lower.hasSuffix("-coreai") {
+            return String(raw.dropLast("-coreai".count)) + "-it-coreai"
+        }
+        if lower.hasSuffix("-caix") {
+            return String(raw.dropLast("-caix".count)) + "-it-caix"
+        }
+        return raw + "-it"
+    }
+
+    private static func safeName(_ raw: String?) -> String? {
+        guard let value = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            return nil
+        }
+        guard value.count <= 160 else { return nil }
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
+        return value.unicodeScalars.allSatisfy { allowed.contains($0) } ? value : nil
     }
 }
 
@@ -84,6 +178,12 @@ final class ModelHandle: @unchecked Sendable {
     init(model: PersistentModel) {
         self.backend = .persistent(model)
         self.displayName = model.name
+        self.bytes = model.bundleByteSize
+    }
+
+    init(model: PersistentModel, name: String) {
+        self.backend = .persistent(model)
+        self.displayName = name
         self.bytes = model.bundleByteSize
     }
 
@@ -224,6 +324,7 @@ public struct EagleConfig: Sendable {
 public actor ModelManager {
     private struct DiscoveredBundle: Sendable {
         var name: String
+        var directoryName: String
         var mode: String
     }
 
@@ -274,7 +375,20 @@ public actor ModelManager {
             guard isDirectory(url), let mode = bundleMode(at: url) else {
                 continue
             }
-            entries.append(DiscoveredBundle(name: name, mode: mode))
+            let identity: (metadataName: String?, sourceModelID: String?, tokenizer: String?) =
+                mode == "standard" ? bundleIdentity(at: url) : (nil, nil, nil)
+            let servedName = mode == "standard"
+                ? ModelNameRepair.preferredServedName(
+                    directoryName: name,
+                    metadataName: identity.metadataName,
+                    sourceModelID: identity.sourceModelID,
+                    tokenizer: identity.tokenizer)
+                : name
+            entries.append(
+                DiscoveredBundle(
+                    name: servedName,
+                    directoryName: name,
+                    mode: mode))
         }
         return entries.sorted { $0.name < $1.name }
     }
@@ -355,7 +469,7 @@ public actor ModelManager {
 
     // MARK: Load / offload / lookup
 
-    public func isLoaded(_ name: String) -> Bool { handles[name] != nil }
+    public func isLoaded(_ name: String) -> Bool { handles[canonicalName(for: name)] != nil }
 
     public func loadedNames() -> [String] { Array(handles.keys).sorted() }
 
@@ -381,12 +495,18 @@ public actor ModelManager {
 
     /// Resolve a bundle directory name to its path under `exportsDir`.
     private func bundlePath(for name: String) -> String {
-        exportsDir.appendingPathComponent(name).path
+        let directoryName = resolvedBundle(for: name)?.directoryName ?? name
+        return exportsDir.appendingPathComponent(directoryName).path
+    }
+
+    public func resolveServedModelName(_ requested: String) -> String? {
+        resolvedBundle(for: requested)?.name
     }
 
     /// Return the hot handle for `name`, loading the bundle if necessary. Concurrent calls for
     /// the same name share a single in-flight load.
     func handle(for name: String) async throws -> ModelHandle {
+        let name = canonicalName(for: name)
         if let h = handles[name] { return h }
         return try await load(name)
     }
@@ -395,12 +515,14 @@ public actor ModelManager {
     /// `tokenizer/` directory (chat_template + special tokens) and memoized. Models with no
     /// recognised reasoning/tool markers resolve to ``OutputFormat/passthrough``.
     func outputFormat(for name: String) -> OutputFormat {
+        let name = canonicalName(for: name)
         if let f = formats[name] { return f }
         let tokenizerDir: URL
         if let cfg = eagleConfig, cfg.name == name {
             tokenizerDir = URL(fileURLWithPath: cfg.tokenizerDir)
         } else {
-            tokenizerDir = exportsDir.appendingPathComponent(name).appendingPathComponent("tokenizer")
+            let directoryName = resolvedBundle(for: name)?.directoryName ?? name
+            tokenizerDir = exportsDir.appendingPathComponent(directoryName).appendingPathComponent("tokenizer")
         }
         let format = OutputFormat.detect(modelName: name, tokenizerDir: tokenizerDir)
         formats[name] = format
@@ -410,6 +532,7 @@ public actor ModelManager {
     /// Load (or hot-swap to) the bundle `name`. Idempotent; de-duplicates concurrent loads.
     @discardableResult
     func load(_ name: String) async throws -> ModelHandle {
+        let name = canonicalName(for: name)
         let verbose = self.verbose
         func log(_ message: @autoclosure () -> String) {
             if verbose {
@@ -485,7 +608,7 @@ public actor ModelManager {
                     FileHandle.standardError.write(Data("[server] loading persistent bundle \(name)\n".utf8))
                 }
                 let model = try await PersistentModel.load(bundlePath: path, verbose: verbose)
-                return ModelHandle(model: model)
+                return ModelHandle(model: model, name: name)
             }
         }
         loadTasks[name] = task
@@ -502,7 +625,7 @@ public actor ModelManager {
     /// Offload a resident model. Returns `true` if it was loaded.
     @discardableResult
     public func offload(_ name: String) -> Bool {
-        handles.removeValue(forKey: name) != nil
+        handles.removeValue(forKey: canonicalName(for: name)) != nil
     }
 
     /// Offload every resident model. Returns the model names that were unloaded.
@@ -521,13 +644,16 @@ public actor ModelManager {
         if FileManager.default.fileExists(atPath: heavyTaskLockPath.path) {
             return "refusing to delete bundle while heavy-task lock exists: \(heavyTaskLockPath.path)"
         }
-        let dir = exportsDir.appendingPathComponent(name)
+        let bundle = resolvedBundle(for: name)
+        let servedName = bundle?.name ?? name
+        let directoryName = bundle?.directoryName ?? name
+        let dir = exportsDir.appendingPathComponent(directoryName)
         guard Self.isDirectory(dir),
               Self.isLoadableBundle(at: dir) else {
             return "no bundle named '\(name)' under exports"
         }
-        handles.removeValue(forKey: name)
-        formats.removeValue(forKey: name)
+        handles.removeValue(forKey: servedName)
+        formats.removeValue(forKey: servedName)
         do {
             try FileManager.default.removeItem(at: dir)
         } catch {
@@ -538,6 +664,14 @@ public actor ModelManager {
     }
 
     // MARK: Helpers
+
+    private func resolvedBundle(for name: String) -> DiscoveredBundle? {
+        bundleEntries().first { $0.name == name || $0.directoryName == name }
+    }
+
+    private func canonicalName(for name: String) -> String {
+        resolvedBundle(for: name)?.name ?? name
+    }
 
     private static func defaultHeavyTaskLockPath(exportsDir: URL) -> URL {
         let env = ProcessInfo.processInfo.environment
@@ -627,10 +761,30 @@ public actor ModelManager {
         guard let bundles = object["bundles"] as? [[String: Any]] else { return nil }
         let entries = bundles.compactMap { item -> DiscoveredBundle? in
             guard let name = item["name"] as? String, !name.isEmpty else { return nil }
+            let directoryName = item["directoryName"] as? String
+                ?? item["directory_name"] as? String
+                ?? name
             let mode = item["mode"] as? String ?? "standard"
-            return DiscoveredBundle(name: name, mode: mode)
+            return DiscoveredBundle(name: name, directoryName: directoryName, mode: mode)
         }
         return entries.sorted { $0.name < $1.name }
+    }
+
+    private static func bundleIdentity(at root: URL) -> (
+        metadataName: String?, sourceModelID: String?, tokenizer: String?
+    ) {
+        let meta = root.appendingPathComponent("metadata.json")
+        guard
+            let data = readSmallFile(meta, timeoutSeconds: 0.5),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return (nil, nil, nil) }
+        let source = object["source"] as? [String: Any]
+        let language = object["language"] as? [String: Any]
+        return (
+            object["name"] as? String,
+            source?["hf_model_id"] as? String,
+            language?["tokenizer"] as? String
+        )
     }
 
     private static func childNames(in directory: URL) -> [String] {

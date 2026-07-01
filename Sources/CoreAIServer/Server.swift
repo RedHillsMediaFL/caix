@@ -44,7 +44,7 @@ public enum CoreAIServer {
             verbose: verbose,
             eagleConfig: eagleConfig)
 
-        try await runtime.prewarm(selection: prewarm)
+        await runtime.prewarm(selection: prewarm)
 
         let router = Router()
         router.addMiddleware {
@@ -128,7 +128,7 @@ final class ServerRuntime: Sendable {
             ?? "<!doctype html><title>caix shell</title><p>web/shell.html not found at \(shellURL.path)</p>"
     }
 
-    func prewarm(selection rawSelection: String) async throws {
+    func prewarm(selection rawSelection: String) async {
         let selection = rawSelection.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard selection != "off", selection != "none", selection != "false", selection != "no" else {
             FileHandle.standardError.write(Data("[serve] prewarm skipped\n".utf8))
@@ -147,8 +147,13 @@ final class ServerRuntime: Sendable {
             targets = [models[0]]
         } else if let exact = models.first(where: { $0.name == rawSelection }) {
             targets = [exact]
+        } else if let resolved = await manager.resolveServedModelName(rawSelection),
+                  let exact = models.first(where: { $0.name == resolved }) {
+            targets = [exact]
         } else {
-            throw CoreAIPipeline.RuntimeError.bundleNotFound(rawSelection)
+            FileHandle.standardError.write(
+                Data("[serve] prewarm skipped: model not served: \(rawSelection)\n".utf8))
+            return
         }
 
         for target in targets {
@@ -156,17 +161,38 @@ final class ServerRuntime: Sendable {
             if let warning {
                 FileHandle.standardError.write(Data("[serve] warning \(target.name): \(warning)\n".utf8))
             }
+            if let reason = Self.prewarmSkipReason(for: target) {
+                FileHandle.standardError.write(
+                    Data("[serve] prewarm \(target.name) skipped: \(reason)\n".utf8))
+                continue
+            }
             let start = Date()
             FileHandle.standardError.write(Data("[serve] prewarm \(target.name) ...\n".utf8))
-            let handle = try await manager.load(target.name)
-            var options = CoreAIPipeline.Options(maxTokens: 1, temperature: 0, verbose: verbose)
-            options.stopSequences = []
-            _ = try await handle.generate(
-                messages: [["role": "user", "content": "hi"]],
-                options: options)
-            let seconds = Date().timeIntervalSince(start)
-            FileHandle.standardError.write(Data(String(format: "[serve] prewarm %@ ready in %.2fs\n", target.name, seconds).utf8))
+            do {
+                let handle = try await manager.load(target.name)
+                var options = CoreAIPipeline.Options(maxTokens: 1, temperature: 0, verbose: verbose)
+                options.stopSequences = []
+                _ = try await handle.generate(
+                    messages: [["role": "user", "content": "hi"]],
+                    options: options)
+                let seconds = Date().timeIntervalSince(start)
+                FileHandle.standardError.write(Data(String(format: "[serve] prewarm %@ ready in %.2fs\n", target.name, seconds).utf8))
+            } catch {
+                _ = await manager.offload(target.name)
+                FileHandle.standardError.write(
+                    Data("[serve] prewarm \(target.name) failed; serving will continue and first real request can load normally: \(error)\n".utf8))
+            }
         }
+    }
+
+    static func prewarmSkipReason(for target: ModelEntry) -> String? {
+        let lower = target.name.lowercased()
+        if lower.contains("gemma"),
+           let billions = ModelSuitability.inferredBillions(from: target.name),
+           billions >= 20 {
+            return "large Gemma bundles can hit CoreAI/MPS prewarm threadgroup limits; first real request will load normally"
+        }
+        return nil
     }
 
     // MARK: - Route registration
@@ -317,6 +343,8 @@ final class ServerRuntime: Sendable {
         let defaultName = Self.defaultRHMInstallName(
             repo: body.repo,
             metadataName: meta?.name,
+            sourceModelID: meta?.source?.hfModelId,
+            tokenizer: meta?.language?.tokenizer,
             layout: layout)
         let name = body.name?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
             ?? defaultName
@@ -642,6 +670,8 @@ final class ServerRuntime: Sendable {
             let name = Self.defaultRHMInstallName(
                 repo: repo,
                 metadataName: meta?.name,
+                sourceModelID: meta?.source?.hfModelId,
+                tokenizer: meta?.language?.tokenizer,
                 layout: layout)
             out.append(RHMModelEntry(
                 repo: repo,
@@ -715,6 +745,8 @@ final class ServerRuntime: Sendable {
     private static func defaultRHMInstallName(
         repo: String,
         metadataName: String?,
+        sourceModelID: String? = nil,
+        tokenizer: String? = nil,
         layout: RHMRepoLayout?
     ) -> String {
         if layout?.hasDraftBundle == true || layout?.hasEaglePackage == true {
@@ -722,9 +754,12 @@ final class ServerRuntime: Sendable {
                 ?? safeRHMDownloadName(metadataName)
                 ?? defaultRHMDownloadName(for: repo)
         }
-        return safeRHMDownloadName(metadataName)
-            ?? repoDerivedRHMInstallName(for: repo)
-            ?? defaultRHMDownloadName(for: repo)
+        return ModelNameRepair.preferredInstallName(
+            metadataName: metadataName,
+            repoDerivedName: repoDerivedRHMInstallName(for: repo),
+            fallbackName: defaultRHMDownloadName(for: repo),
+            sourceModelID: sourceModelID,
+            tokenizer: tokenizer)
     }
 
     private static func repoDerivedRHMInstallName(for repo: String) -> String? {
@@ -1136,6 +1171,7 @@ final class ServerRuntime: Sendable {
     /// Map a requested model name to an available bundle, falling back to the first bundle so
     /// generic client model ids (e.g. "gpt-4") still resolve to the local model.
     private func resolveModelName(_ requested: String) async -> String {
+        if let resolved = await manager.resolveServedModelName(requested) { return resolved }
         let bundles = await manager.servedModelsPreferredForChat()
         if bundles.contains(where: { $0.name == requested }) { return requested }
         return bundles.first?.name ?? requested
@@ -1263,6 +1299,20 @@ struct RHMDownloadRequest: Codable, Sendable {
 struct RHMBundleMetadata: Codable, Sendable {
     var name: String?
     var kind: String?
+    var source: Source?
+    var language: Language?
+
+    struct Source: Codable, Sendable {
+        var hfModelId: String?
+
+        enum CodingKeys: String, CodingKey {
+            case hfModelId = "hf_model_id"
+        }
+    }
+
+    struct Language: Codable, Sendable {
+        var tokenizer: String?
+    }
 }
 
 struct RHMRepoLayout: Sendable {
