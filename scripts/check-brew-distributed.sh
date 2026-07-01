@@ -51,6 +51,120 @@ else
   }
 fi
 
+check_local_warning_fail_on_warn() {
+  local tmpdir server_pid port caix_version rc
+  tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/caix-deploy-verify-warning.XXXXXX")"
+  server_pid=""
+  cleanup_local_warning() {
+    if [[ -n "$server_pid" ]]; then
+      kill "$server_pid" 2>/dev/null || true
+      wait "$server_pid" 2>/dev/null || true
+      server_pid=""
+    fi
+    rm -rf "$tmpdir"
+  }
+  trap cleanup_local_warning EXIT INT TERM
+
+  caix_version="$("$caix_binary" --version | awk 'NR == 1 {print $2}')"
+  cat >"$tmpdir/server.py" <<'PY'
+import json
+import os
+import socket
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+version = os.environ["CAIX_TEST_VERSION"]
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        pass
+
+    def do_GET(self):
+        if self.path == "/api/server":
+            body = {
+                "ok": True,
+                "name": "coreai-pipeline",
+                "caix_version": version,
+                "machine_name": socket.gethostname(),
+                "runtime_linked": True,
+                "compute_unit": "gpu",
+            }
+            data = json.dumps(body).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        self.send_response(404)
+        self.end_headers()
+
+server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+with open(os.environ["CAIX_TEST_PORT_FILE"], "w", encoding="utf-8") as fh:
+    fh.write(str(server.server_address[1]))
+    fh.write("\n")
+server.serve_forever()
+PY
+  CAIX_TEST_VERSION="$caix_version" CAIX_TEST_PORT_FILE="$tmpdir/port" \
+    python3 "$tmpdir/server.py" >"$tmpdir/server.out" 2>"$tmpdir/server.err" &
+  server_pid="$!"
+
+  for _ in {1..100}; do
+    [[ -s "$tmpdir/port" ]] && break
+    if ! kill -0 "$server_pid" 2>/dev/null; then
+      echo "error: deploy verify warning test server exited" >&2
+      sed -n '1,80p' "$tmpdir/server.err" >&2 || true
+      exit 1
+    fi
+    sleep 0.05
+  done
+  [[ -s "$tmpdir/port" ]] || {
+    echo "error: deploy verify warning test server did not start" >&2
+    exit 1
+  }
+  port="$(<"$tmpdir/port")"
+
+  "$caix_binary" deploy verify --endpoint "http://127.0.0.1:$port" \
+    --min-machines 1 --no-speed-test --max-latency-ms 10000 \
+    --json >"$tmpdir/diagnostic.json"
+  CAIX_VERIFY_JSON="$tmpdir/diagnostic.json" python3 - <<'PY'
+import json
+import os
+import sys
+
+doc = json.load(open(os.environ["CAIX_VERIFY_JSON"], encoding="utf-8"))
+if doc.get("ok") is not True:
+    sys.exit("diagnostic local warning probe should be ok without --fail-on-warn")
+warnings = "\n".join(doc.get("warnings", []))
+if "local machine endpoint" not in warnings:
+    sys.exit("diagnostic local warning probe did not produce local-machine warning")
+PY
+
+  set +e
+  "$caix_binary" deploy verify --endpoint "http://127.0.0.1:$port" \
+    --min-machines 1 --no-speed-test --max-latency-ms 10000 \
+    --fail-on-warn --json >"$tmpdir/fail-on-warn.json"
+  rc="$?"
+  set -e
+  [[ "$rc" -ne 0 ]] || {
+    echo "error: deploy verify --fail-on-warn ignored local-machine warning" >&2
+    exit 1
+  }
+  CAIX_VERIFY_JSON="$tmpdir/fail-on-warn.json" python3 - <<'PY'
+import json
+import os
+import sys
+
+doc = json.load(open(os.environ["CAIX_VERIFY_JSON"], encoding="utf-8"))
+if doc.get("ok") is not False:
+    sys.exit("--fail-on-warn local warning probe should not be ok")
+warnings = "\n".join(doc.get("warnings", []))
+if "local machine endpoint" not in warnings:
+    sys.exit("--fail-on-warn local warning probe did not report local-machine warning")
+PY
+  cleanup_local_warning
+  trap - EXIT INT TERM
+}
+
 "$caix_binary" --version
 "$caix_binary" doctor --no-fail
 "$caix_binary" cluster plan --help >/dev/null
@@ -109,6 +223,7 @@ if [[ "$require_ready" == "1" ]]; then
   "$caix_binary" deploy verify --help 2>/dev/null | grep -q -- '--speed-bytes'
   "$caix_binary" deploy verify --help 2>/dev/null | grep -q -- '--min-mbps'
   "$caix_binary" deploy verify --help 2>/dev/null | grep -q -- '--fail-on-warn'
+  check_local_warning_fail_on_warn
 fi
 
 if [[ "${#endpoints[@]}" -gt 0 ]]; then
