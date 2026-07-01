@@ -469,6 +469,9 @@ enum Catalog {
         process.arguments = arguments
         var env = ProcessInfo.processInfo.environment
         env["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+        if env["HF_HUB_VERBOSITY", default: ""].isEmpty {
+            env["HF_HUB_VERBOSITY"] = "error"
+        }
         if env["HF_HUB_DISABLE_XET", default: ""].isEmpty {
             env["HF_HUB_DISABLE_XET"] = "1"
         }
@@ -558,9 +561,8 @@ enum Catalog {
     }
 
     private static func entry(from detail: ModelDetail, readme: String?) -> CatalogEntry {
-        let name = detail.repo.split(separator: "/").last.map(String.init) ?? detail.repo
         let package = packageKind(siblings: detail.siblings)
-        let localName = package == "manual" ? nil : (detail.bundleName ?? name)
+        let localName = installName(repo: detail.repo, bundleName: detail.bundleName, package: package)
         let install = localName.map {
             installCommand(repo: detail.repo, revision: detail.revision, localDir: $0)
         } ?? "manual; inspect the model card"
@@ -577,6 +579,30 @@ enum Catalog {
             package: package,
             install: install,
             updated: detail.lastModified)
+    }
+
+    private static func installName(repo: String, bundleName: String?, package: String) -> String? {
+        guard package != "manual" else { return nil }
+        if package == "standard" {
+            return safeLocalName(bundleName) ?? repoDerivedInstallName(repo: repo)
+        }
+        // Speculative/EAGLE packages often embed the target bundle name in root metadata.json.
+        // Install the package into its own directory so it cannot collide with the standalone target.
+        return repoDerivedInstallName(repo: repo) ?? safeLocalName(bundleName)
+    }
+
+    private static func repoDerivedInstallName(repo: String) -> String? {
+        guard var stem = repo.split(separator: "/").last.map(String.init) else { return nil }
+        if stem.hasPrefix("rhm-") {
+            stem.removeFirst("rhm-".count)
+        }
+        if stem.hasSuffix("-caix") {
+            stem.removeLast("-caix".count)
+        }
+        if !stem.hasSuffix("-coreai") {
+            stem += "-coreai"
+        }
+        return safeLocalName(stem)
     }
 
     private static func installCommand(repo: String, revision: String?, localDir: String) -> String {

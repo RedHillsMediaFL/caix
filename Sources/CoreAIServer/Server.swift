@@ -314,9 +314,10 @@ final class ServerRuntime: Sendable {
         guard directBundle || (layout?.hasEaglePackage == true) else {
             return JSONResponder.error("repo is not an installable caix bundle", status: .badRequest)
         }
-        let defaultName = directBundle
-            ? (Self.safeRHMDownloadName(meta?.name) ?? Self.defaultRHMDownloadName(for: body.repo))
-            : Self.defaultRHMDownloadName(for: body.repo)
+        let defaultName = Self.defaultRHMInstallName(
+            repo: body.repo,
+            metadataName: meta?.name,
+            layout: layout)
         let name = body.name?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
             ?? defaultName
         if let err = await jobs.startDownloadRHM(
@@ -638,9 +639,10 @@ final class ServerRuntime: Sendable {
             let directBundle = layout.hasMetadata && ((meta?.kind ?? "llm") == "llm")
             let installable = directBundle || layout.hasEaglePackage
             let safeBundleName = Self.safeRHMDownloadName(meta?.name)
-            let name = directBundle
-                ? (safeBundleName ?? Self.defaultRHMDownloadName(for: repo))
-                : Self.defaultRHMDownloadName(for: repo)
+            let name = Self.defaultRHMInstallName(
+                repo: repo,
+                metadataName: meta?.name,
+                layout: layout)
             out.append(RHMModelEntry(
                 repo: repo,
                 revision: layout.revision,
@@ -708,6 +710,35 @@ final class ServerRuntime: Sendable {
 
     private static func defaultRHMDownloadName(for repo: String) -> String {
         repo.split(separator: "/").last.map(String.init) ?? "rhm-model-caix"
+    }
+
+    private static func defaultRHMInstallName(
+        repo: String,
+        metadataName: String?,
+        layout: RHMRepoLayout?
+    ) -> String {
+        if layout?.hasDraftBundle == true || layout?.hasEaglePackage == true {
+            return repoDerivedRHMInstallName(for: repo)
+                ?? safeRHMDownloadName(metadataName)
+                ?? defaultRHMDownloadName(for: repo)
+        }
+        return safeRHMDownloadName(metadataName)
+            ?? repoDerivedRHMInstallName(for: repo)
+            ?? defaultRHMDownloadName(for: repo)
+    }
+
+    private static func repoDerivedRHMInstallName(for repo: String) -> String? {
+        guard var stem = repo.split(separator: "/").last.map(String.init) else { return nil }
+        if stem.hasPrefix("rhm-") {
+            stem.removeFirst("rhm-".count)
+        }
+        if stem.hasSuffix("-caix") {
+            stem.removeLast("-caix".count)
+        }
+        if !stem.hasSuffix("-coreai") {
+            stem += "-coreai"
+        }
+        return safeRHMDownloadName(stem)
     }
 
     private static func safeRHMDownloadName(_ raw: String?) -> String? {

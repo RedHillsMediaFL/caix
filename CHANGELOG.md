@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.2.4-beta
+
+- Fixed catalog installs for speculative/EAGLE packages so package repos install into package
+  directories like `qwen3-4b-mtp-coreai` instead of colliding with standalone target bundles.
+- Quieted transient Hugging Face local-dir lock chatter during caix-launched downloads.
+
 ## 0.2.3-beta
 
 - Added the native terminal dashboard (`caix dashboard`) and interactive catalog install prompts.

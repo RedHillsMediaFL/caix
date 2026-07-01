@@ -41,6 +41,9 @@ actor JobTracker {
         if disableHFProgressBars {
             env["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
         }
+        if disableHFProgressBars, env["HF_HUB_VERBOSITY", default: ""].isEmpty {
+            env["HF_HUB_VERBOSITY"] = "error"
+        }
         if disableHFXet, env["HF_HUB_DISABLE_XET", default: ""].isEmpty {
             env["HF_HUB_DISABLE_XET"] = "1"
         }
