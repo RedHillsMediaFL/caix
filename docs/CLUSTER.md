@@ -14,6 +14,7 @@ Use tiny random staged assets for fast transport checks. Real Qwen remains gated
 
 ```bash
 caix cluster plan --manifest qwen3-stages.json --workers main=64,mbp=32,mini=16
+caix cluster plan --manifest qwen3-stages.json --workers main=64,mbp=32 --kv-capacity 4096 --headroom-gb 6
 caix cluster plan --model models/exports/qwen3-staged --worker main=64 --worker mini=16
 caix cluster plan --manifest qwen3-stages.json --json
 caix deploy verify --endpoint main.local:1237 --endpoint mbp.local:1237
@@ -28,8 +29,10 @@ It does not load models, run staged inference, or prove tensor transport.
 single-bundle exports do not include that block, so the command reports a TODO telling the exporter
 what metadata is missing.
 
-The planner preserves stage order and assigns each stage to the first worker, in the order supplied,
-with enough remaining memory. Worker memory is a dry-run budget in GB.
+The planner preserves stage order and assigns each stage to a worker with enough remaining memory.
+Worker memory is a dry-run budget in GB. Pass `--kv-capacity` to include a conservative per-stage KV
+cache estimate and `--headroom-gb` to reserve OS/runtime memory on every worker. Without
+`--kv-capacity`, placement does not include KV cache memory.
 
 ## Thunderbolt Test Gate
 

@@ -162,6 +162,14 @@ the distributed smoke from the installed `caix`, not a checkout binary. Use `cai
 ... --join-timeout 120` on the coordinator and `caix cluster join ... --connect-timeout 120` on
 workers so failures exit cleanly. Do not publish distributed release notes until this gate passes.
 
+Before trying a staged model that can pressure 32 GB unified memory, dry-run placement with KV and
+headroom included:
+
+```bash
+caix cluster plan --manifest /path/to/stage-manifest.json \
+  --workers studio=64,macbook=32 --kv-capacity 4096 --headroom-gb 6
+```
+
 Before copying the staged bundle to the MacBook, write copy digests on the source:
 
 ```bash

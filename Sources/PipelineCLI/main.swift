@@ -163,6 +163,8 @@ func printUsage() {
           --model <bundle-dir>   Read cluster.stages from bundle metadata.json
           --worker <name=GB>     Worker memory budget; repeat or use --workers a=64,b=32
           --workers <list>       Comma-separated worker memory budgets
+          --kv-capacity <N>      Include estimated KV cache for N tokens
+          --headroom-gb <GB>     Reserve per-worker OS/runtime headroom
           --dry-run              Accepted for clarity; planning is dry-run only
           --json                 Emit machine-readable JSON
 

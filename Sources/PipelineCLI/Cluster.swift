@@ -14,6 +14,7 @@ struct ClusterPlanStage: Codable {
     var layers: String?
     var memoryGB: Double?
     var assetGB: Double?
+    var kvCacheGB: Double?
     var planningMemoryGB: Double?
 
     enum CodingKeys: String, CodingKey {
@@ -28,6 +29,7 @@ struct ClusterPlanStage: Codable {
         case layers
         case memoryGB = "memory_gb"
         case assetGB = "asset_gb"
+        case kvCacheGB = "kv_cache_gb"
         case planningMemoryGB = "planning_memory_gb"
     }
 }
@@ -35,10 +37,12 @@ struct ClusterPlanStage: Codable {
 struct ClusterWorkerBudget: Codable {
     var name: String
     var memoryGB: Double
+    var availableMemoryGB: Double?
 
     enum CodingKeys: String, CodingKey {
         case name
         case memoryGB = "memory_gb"
+        case availableMemoryGB = "available_memory_gb"
     }
 }
 
@@ -50,6 +54,11 @@ private struct ClusterPlanSource {
     var boundaryTensor: DistributedBoundaryTensorSpec?
     var positionMode: DistributedPositionMode
     var runtimePlan: DistributedStagePlan
+}
+
+private struct ClusterPlanOptions {
+    var kvCapacity: Int?
+    var headroomGB: Double
 }
 
 struct ClusterAssignment: Codable {
@@ -67,6 +76,8 @@ struct ClusterPlanOutput: Codable {
     var boundaryTensor: DistributedBoundaryTensorSpec?
     var positionMode: DistributedPositionMode
     var workers: [ClusterWorkerBudget]
+    var kvCapacity: Int?
+    var headroomGB: Double
     var assignments: [ClusterAssignment]
     var runtimePlan: DistributedStagePlan
     var warnings: [String]
@@ -81,6 +92,8 @@ struct ClusterPlanOutput: Codable {
         case boundaryTensor = "boundary_tensor"
         case positionMode = "position_mode"
         case workers
+        case kvCapacity = "kv_capacity"
+        case headroomGB = "headroom_gb"
         case assignments
         case runtimePlan = "runtime_plan"
         case warnings
@@ -119,6 +132,8 @@ private func clusterUsage() {
         plan OPTIONS:
           --worker <name=GB>     Worker memory budget; repeatable
           --workers <list>       Comma-separated worker memory budgets
+          --kv-capacity <N>      Reserve estimated KV cache memory for N tokens
+          --headroom-gb <GB>     Reserve this much memory per worker for OS/runtime headroom
           --dry-run              Accepted for clarity; planning is dry-run only
           --json                 Emit machine-readable JSON
 
@@ -246,6 +261,8 @@ private func clusterPlanCommand(_ argv: [String]) {
     var manifestPath: String?
     var modelPath: String?
     var workerSpecs: [String] = []
+    var kvCapacity: Int?
+    var headroomGB = 0.0
     var emitJSON = false
 
     func fail(_ message: String) -> Never {
@@ -273,6 +290,18 @@ private func clusterPlanCommand(_ argv: [String]) {
             i += 1
             guard i < argv.count else { fail("--workers needs a comma-separated list") }
             workerSpecs += argv[i].split(separator: ",").map(String.init)
+        case "--kv-capacity":
+            i += 1
+            guard i < argv.count, let parsed = Int(argv[i]), parsed > 0 else {
+                fail("--kv-capacity needs a positive integer")
+            }
+            kvCapacity = parsed
+        case "--headroom-gb":
+            i += 1
+            guard i < argv.count, let parsed = Double(argv[i]), parsed >= 0 else {
+                fail("--headroom-gb needs a non-negative number")
+            }
+            headroomGB = parsed
         case "--dry-run":
             break
         case "--json":
@@ -291,6 +320,7 @@ private func clusterPlanCommand(_ argv: [String]) {
     }
 
     do {
+        let options = ClusterPlanOptions(kvCapacity: kvCapacity, headroomGB: headroomGB)
         let source: String
         let baseURL: URL
         let planSource: ClusterPlanSource
@@ -299,7 +329,7 @@ private func clusterPlanCommand(_ argv: [String]) {
             source = manifestURL.path
             baseURL = manifestURL.deletingLastPathComponent()
             planSource = try loadClusterPlanSource(
-                from: manifestURL, baseURL: baseURL, metadataMode: false)
+                from: manifestURL, baseURL: baseURL, metadataMode: false, options: options)
         } else {
             let root = URL(fileURLWithPath: expandPath(modelPath!), isDirectory: true)
                 .standardizedFileURL
@@ -307,14 +337,18 @@ private func clusterPlanCommand(_ argv: [String]) {
             baseURL = root
             planSource = try loadClusterPlanSource(
                 from: root.appendingPathComponent("metadata.json"), baseURL: baseURL,
-                metadataMode: true)
+                metadataMode: true, options: options)
         }
 
-        let workers = try workerSpecs.map(parseWorkerBudget)
+        let workers = try workerSpecs.map { try parseWorkerBudget($0, headroomGB: headroomGB) }
         let stages = planSource.stages
         let assignments = assignClusterStages(stages, workers: workers)
         let runtimePlan = planSource.runtimePlan
-        var warnings = clusterWarnings(stages: stages, workers: workers, assignments: assignments)
+        var warnings = clusterWarnings(
+            stages: stages,
+            workers: workers,
+            assignments: assignments,
+            options: options)
         if planSource.totalLayerCountDerived {
             warnings.append(
                 "Manifest has no total_layer_count. Derived \(planSource.totalLayerCount) from layer ranges.")
@@ -328,6 +362,8 @@ private func clusterPlanCommand(_ argv: [String]) {
             boundaryTensor: planSource.boundaryTensor,
             positionMode: planSource.positionMode,
             workers: workers,
+            kvCapacity: kvCapacity,
+            headroomGB: headroomGB,
             assignments: assignments,
             runtimePlan: runtimePlan,
             warnings: warnings,
@@ -353,7 +389,8 @@ private func clusterPlanCommand(_ argv: [String]) {
 private func loadClusterPlanSource(
     from url: URL,
     baseURL: URL,
-    metadataMode: Bool
+    metadataMode: Bool,
+    options: ClusterPlanOptions
 ) throws -> ClusterPlanSource {
     let manifest: DistributedStageManifest
     do {
@@ -385,7 +422,14 @@ private func loadClusterPlanSource(
     let stages = manifest.stages.map { stage in
         let assetGB = stageAssetFootprintGB(
             paths: [stage.resolvedAssetPath, stage.resolvedDecodeAssetPath].compactMap { $0 })
-        let planningMemoryGB = [stage.memoryGB, assetGB].compactMap { $0 }.max()
+        let kvCacheGB = stageKVCacheGB(
+            stage: stage,
+            boundaryTensor: manifest.boundaryTensor,
+            kvCapacity: options.kvCapacity)
+        let assetPlusKVGB = [assetGB, kvCacheGB].compactMap { $0 }.reduce(0, +)
+        let planningMemoryGB = [stage.memoryGB, assetPlusKVGB > 0 ? assetPlusKVGB : nil]
+            .compactMap { $0 }
+            .max()
         return ClusterPlanStage(
             name: stage.id,
             path: stage.assetName,
@@ -400,6 +444,7 @@ private func loadClusterPlanSource(
             layers: stage.layerDescription,
             memoryGB: stage.memoryGB,
             assetGB: assetGB,
+            kvCacheGB: kvCacheGB,
             planningMemoryGB: planningMemoryGB)
     }
     return ClusterPlanSource(
@@ -412,12 +457,16 @@ private func loadClusterPlanSource(
         runtimePlan: manifest.runtimePlan)
 }
 
-private func parseWorkerBudget(_ spec: String) throws -> ClusterWorkerBudget {
+private func parseWorkerBudget(_ spec: String, headroomGB: Double) throws -> ClusterWorkerBudget {
     let parts = spec.split(separator: "=", maxSplits: 1).map(String.init)
     guard parts.count == 2, !parts[0].isEmpty, let memory = Double(parts[1]), memory > 0 else {
         throw ClusterPlanError("bad worker budget '\(spec)'; use name=GB")
     }
-    return ClusterWorkerBudget(name: parts[0], memoryGB: memory)
+    let available = max(0, memory - headroomGB)
+    return ClusterWorkerBudget(
+        name: parts[0],
+        memoryGB: memory,
+        availableMemoryGB: headroomGB > 0 ? available : nil)
 }
 
 private func assignClusterStages(
@@ -439,17 +488,22 @@ private func assignClusterStages(
                 ClusterAssignment(stage: stage.name, worker: worker, reason: "stage memory not specified"))
             continue
         }
-        let candidates = workers.filter { (used[$0.name] ?? 0) + need <= $0.memoryGB }
+        let candidates = workers.filter {
+            let capacity = $0.availableMemoryGB ?? $0.memoryGB
+            return (used[$0.name] ?? 0) + need <= capacity
+        }
         if let worker = candidates.min(by: { lhs, rhs in
             let lhsUsed = used[lhs.name] ?? 0
             let rhsUsed = used[rhs.name] ?? 0
-            let lhsRatio = lhsUsed / lhs.memoryGB
-            let rhsRatio = rhsUsed / rhs.memoryGB
+            let lhsCapacity = lhs.availableMemoryGB ?? lhs.memoryGB
+            let rhsCapacity = rhs.availableMemoryGB ?? rhs.memoryGB
+            let lhsRatio = lhsCapacity > 0 ? lhsUsed / lhsCapacity : Double.infinity
+            let rhsRatio = rhsCapacity > 0 ? rhsUsed / rhsCapacity : Double.infinity
             if lhsRatio != rhsRatio {
                 return lhsRatio < rhsRatio
             }
-            let lhsRemaining = lhs.memoryGB - lhsUsed
-            let rhsRemaining = rhs.memoryGB - rhsUsed
+            let lhsRemaining = lhsCapacity - lhsUsed
+            let rhsRemaining = rhsCapacity - rhsUsed
             if lhsRemaining != rhsRemaining {
                 return lhsRemaining > rhsRemaining
             }
@@ -470,7 +524,8 @@ private func assignClusterStages(
 private func clusterWarnings(
     stages: [ClusterPlanStage],
     workers: [ClusterWorkerBudget],
-    assignments: [ClusterAssignment]
+    assignments: [ClusterAssignment],
+    options: ClusterPlanOptions
 ) -> [String] {
     var warnings: [String] = []
     if workers.isEmpty {
@@ -486,12 +541,22 @@ private func clusterWarnings(
         warnings.append("Missing local decode stage bundle paths: \(missingDecode.joined(separator: ", ")).")
     }
     if stages.contains(where: { stage in
-        guard let assetGB = stage.assetGB, let memoryGB = stage.memoryGB else { return false }
-        return assetGB > memoryGB
+        let lowerBound = [stage.assetGB, stage.kvCacheGB].compactMap { $0 }.reduce(0, +)
+        guard lowerBound > 0, let memoryGB = stage.memoryGB else { return false }
+        return lowerBound > memoryGB
     }) {
         warnings.append(
-            "Local asset footprint exceeds manifest memory_gb for one or more stages; "
-                + "placement used asset size as a lower bound. Runtime memory can be higher.")
+            "Local asset plus KV footprint exceeds manifest memory_gb for one or more stages; "
+                + "placement used the larger lower bound. Runtime memory can be higher.")
+    }
+    if options.kvCapacity == nil,
+        stages.contains(where: { $0.role == DistributedStageRole.transformerLayers.rawValue })
+    {
+        warnings.append(
+            "KV cache memory is not included; pass --kv-capacity <tokens> for runtime-capacity planning.")
+    }
+    if options.headroomGB > 0, workers.contains(where: { ($0.availableMemoryGB ?? $0.memoryGB) <= 0 }) {
+        warnings.append("Headroom reserve leaves one or more workers with no available planning memory.")
     }
     if !workers.isEmpty && assignments.contains(where: { $0.worker == nil }) {
         warnings.append("One or more stages could not be placed with the supplied worker budgets.")
@@ -522,8 +587,20 @@ private func renderClusterPlan(_ output: ClusterPlanOutput) -> String {
         lines.append(
             "workers: "
                 + output.workers
-                .map { "\($0.name)=\(formatGB($0.memoryGB))" }
+                .map {
+                    var parts = ["\($0.name)=\(formatGB($0.memoryGB))"]
+                    if let available = $0.availableMemoryGB {
+                        parts.append("available=\(formatGB(available))")
+                    }
+                    return parts.joined(separator: " ")
+                }
                 .joined(separator: ", "))
+    }
+    if let kvCapacity = output.kvCapacity {
+        lines.append("kv capacity: \(kvCapacity)")
+    }
+    if output.headroomGB > 0 {
+        lines.append("worker headroom: \(formatGB(output.headroomGB))")
     }
     lines.append("")
     for stage in output.stages {
@@ -532,6 +609,7 @@ private func renderClusterPlan(_ output: ClusterPlanOutput) -> String {
             stage.layers.map { "layers=\($0)" },
             stage.memoryGB.map { "memory=\(formatGB($0))" },
             stage.assetGB.map { "asset=\(formatGB($0))" },
+            stage.kvCacheGB.map { "kv_cache=\(formatGB($0))" },
             stage.planningMemoryGB.map { "plan_memory=\(formatGB($0))" },
             stage.resolvedPath.map { "path=\($0)" },
             stage.pathExists.map { $0 ? "path_status=ok" : "path_status=missing" },
@@ -569,6 +647,31 @@ private func expandPath(_ path: String) -> String {
 
 private func formatGB(_ value: Double) -> String {
     value.rounded() == value ? "\(Int(value))GB" : String(format: "%.1fGB", value)
+}
+
+private func stageKVCacheGB(
+    stage: DistributedStageManifestStage,
+    boundaryTensor: DistributedBoundaryTensorSpec?,
+    kvCapacity: Int?
+) -> Double? {
+    guard stage.role == .transformerLayers,
+        let range = stage.layerRange,
+        let boundaryTensor,
+        let hiddenSize = boundaryTensor.shape.last,
+        hiddenSize > 0,
+        let kvCapacity,
+        kvCapacity > 0
+    else {
+        return nil
+    }
+    let layerCount = range.upperBound - range.lowerBound
+    guard layerCount > 0 else { return nil }
+    let bytes = Double(layerCount)
+        * Double(kvCapacity)
+        * Double(hiddenSize)
+        * Double(2)
+        * Double(boundaryTensor.scalarType.byteWidth)
+    return bytes / 1_073_741_824
 }
 
 private func stageAssetFootprintGB(paths: [String]) -> Double? {
