@@ -309,29 +309,42 @@ enum Catalog {
         let trimmedRevision = revision?.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedRevision = (trimmedRevision?.isEmpty == false ? trimmedRevision : nil)
             ?? entry.revision
-        let command = hfDownloadCommand(
-            repo: entry.repo,
-            revision: resolvedRevision,
-            destination: destination.path)
-
         print("installing \(entry.repo)")
         print("  revision: \(resolvedRevision ?? "default")")
         print("  destination: \(destination.path)")
         print("  size: \(entry.size)")
         print("  auth/cache: local Hugging Face settings, if configured")
         if dryRun {
+            let command = hfDownloadCommand(
+                repo: entry.repo,
+                revision: resolvedRevision,
+                destination: destination.path)
             print("  dry-run: hf \(command.joined(separator: " "))")
             return
         }
 
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
         let lock = try acquireHeavyTaskLock(exportsRoot: root, label: "catalog download \(entry.repo)")
         defer { releaseHeavyTaskLock(lock) }
         let destinationLock = try acquireDestinationInstallLock(destination: destination, label: entry.repo)
         defer { releaseDestinationInstallLock(destinationLock) }
         try cleanStaleHFLocalLocks(destination: destination)
+        try cleanPreviousInstallStaging(root: root, localName: localName)
+        let staging = try makeInstallStagingDirectory(root: root, localName: localName)
+        var stagingNeedsCleanup = true
+        defer {
+            if stagingNeedsCleanup {
+                try? FileManager.default.removeItem(at: staging)
+            }
+        }
+        let command = hfDownloadCommand(
+            repo: entry.repo,
+            revision: resolvedRevision,
+            destination: staging.path)
         try runHFDownload(command)
+        try cleanStaleHFLocalLocks(destination: staging)
+        try commitStagedInstall(staging: staging, destination: destination)
+        stagingNeedsCleanup = false
         print("installed: \(destination.path)")
         if root.path == caixDefaultExportsPath() {
             print("serve with: caix serve")
@@ -785,7 +798,10 @@ enum Catalog {
     }
 
     private static func acquireDestinationInstallLock(destination: URL, label: String) throws -> URL {
-        let lock = destination.appendingPathComponent(".caix-install.lock")
+        try cleanLegacyDestinationInstallLock(destination)
+        let lock = destination
+            .deletingLastPathComponent()
+            .appendingPathComponent(".\(destination.lastPathComponent).caix-install.lock")
         for _ in 0..<2 {
             let fd = open(lock.path, O_CREAT | O_EXCL | O_WRONLY, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)
             guard fd >= 0 else {
@@ -813,6 +829,70 @@ enum Catalog {
 
     private static func releaseDestinationInstallLock(_ lock: URL) {
         try? FileManager.default.removeItem(at: lock)
+    }
+
+    private static func cleanLegacyDestinationInstallLock(_ destination: URL) throws {
+        let legacy = destination.appendingPathComponent(".caix-install.lock")
+        guard FileManager.default.fileExists(atPath: legacy.path) else { return }
+        if removeStaleHeavyTaskLock(legacy) {
+            FileHandle.standardError.write(Data("removed stale catalog install lock: \(legacy.path)\n".utf8))
+            return
+        }
+        throw CatalogError("catalog install already active for \(destination.path)")
+    }
+
+    private static func makeInstallStagingDirectory(root: URL, localName: String) throws -> URL {
+        let parent = root.appendingPathComponent(".caix-install-staging", isDirectory: true)
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        let name = "\(localName).\(ProcessInfo.processInfo.processIdentifier).\(UUID().uuidString)"
+        let staging = parent.appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: false)
+        return staging
+    }
+
+    private static func cleanPreviousInstallStaging(root: URL, localName: String) throws {
+        let parent = root.appendingPathComponent(".caix-install-staging", isDirectory: true)
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: parent,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles])
+        else { return }
+        let prefix = "\(localName)."
+        for entry in entries where entry.lastPathComponent.hasPrefix(prefix) {
+            do {
+                try FileManager.default.removeItem(at: entry)
+                FileHandle.standardError.write(Data("removed stale catalog install staging: \(entry.path)\n".utf8))
+            } catch {
+                throw CatalogError("could not remove stale catalog install staging \(entry.path): \(error)")
+            }
+        }
+    }
+
+    private static func commitStagedInstall(staging: URL, destination: URL) throws {
+        let fm = FileManager.default
+        let root = destination.deletingLastPathComponent()
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        if !fm.fileExists(atPath: destination.path) {
+            try fm.moveItem(at: staging, to: destination)
+            return
+        }
+
+        let backups = root.appendingPathComponent(".caix-install-backups", isDirectory: true)
+        try fm.createDirectory(at: backups, withIntermediateDirectories: true)
+        let backup = backups
+            .appendingPathComponent("\(destination.lastPathComponent).\(ProcessInfo.processInfo.processIdentifier).\(UUID().uuidString)", isDirectory: true)
+        do {
+            try fm.moveItem(at: destination, to: backup)
+            do {
+                try fm.moveItem(at: staging, to: destination)
+                try? fm.removeItem(at: backup)
+            } catch {
+                try? fm.moveItem(at: backup, to: destination)
+                throw error
+            }
+        } catch {
+            throw CatalogError("could not finalize install at \(destination.path): \(error)")
+        }
     }
 
     private static func cleanStaleHFLocalLocks(destination: URL) throws {

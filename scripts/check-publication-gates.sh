@@ -51,6 +51,7 @@ fi
 run "$SCRIPT_DIR/check-token-handling.sh"
 run "$SCRIPT_DIR/check-public-copy.sh"
 run "$SCRIPT_DIR/check-version-sync.sh"
+run "$SCRIPT_DIR/check-catalog-install-locks.sh"
 run "$SCRIPT_DIR/check-disk-pressure-guard.sh"
 run "$SCRIPT_DIR/check-export-cleanliness.sh"
 run "$SCRIPT_DIR/check-cleanup-safety.sh"
