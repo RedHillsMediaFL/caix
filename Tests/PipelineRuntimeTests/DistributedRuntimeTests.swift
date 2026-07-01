@@ -1058,6 +1058,35 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertEqual(packet.payload.count, packet.metadata.byteCount)
     }
 
+    func testSocketWorkerConnectionConnectsWithTimeoutOption() async throws {
+        let listener = try DistributedSocketWorkerListener.bind(host: "127.0.0.1", port: 0)
+        defer { listener.close() }
+
+        let accepted = Task {
+            try listener.accept()
+        }
+        let connection = try DistributedSocketWorkerConnection.connect(
+            host: "127.0.0.1",
+            port: listener.boundPort,
+            timeoutSeconds: 1)
+        defer { connection.close() }
+        let serverConnection = try await accepted.value
+        serverConnection.close()
+    }
+
+    func testSocketWorkerConnectionRejectsNegativeConnectTimeout() {
+        XCTAssertThrowsError(
+            try DistributedSocketWorkerConnection.connect(
+                host: "127.0.0.1",
+                port: 1,
+                timeoutSeconds: -1)
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedSocketTransportError,
+                .timedOut(operation: "connect"))
+        }
+    }
+
     func testSocketWorkerListenerAcceptTimeoutReturnsNil() throws {
         let listener = try DistributedSocketWorkerListener.bind(host: "127.0.0.1", port: 0)
         defer { listener.close() }

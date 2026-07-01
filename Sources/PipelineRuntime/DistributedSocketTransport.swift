@@ -191,10 +191,14 @@ public final class DistributedSocketWorkerConnection: @unchecked Sendable {
 
     public static func connect(
         host: String,
-        port: Int
+        port: Int,
+        timeoutSeconds: Double? = nil
     ) throws -> DistributedSocketWorkerConnection {
         guard (1...65_535).contains(port) else {
             throw DistributedSocketTransportError.badAddress("\(host):\(port)")
+        }
+        if let timeoutSeconds, timeoutSeconds < 0 {
+            throw DistributedSocketTransportError.timedOut(operation: "connect")
         }
         let fd = Darwin.socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else {
@@ -207,22 +211,98 @@ public final class DistributedSocketWorkerConnection: @unchecked Sendable {
             address.sin_port = in_port_t(port).bigEndian
             address.sin_addr = try resolveIPv4Address(host)
 
-            let result = withUnsafePointer(to: &address) { pointer in
-                pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
-                    Darwin.connect(
-                        fd,
-                        sockaddrPointer,
-                        socklen_t(MemoryLayout<sockaddr_in>.size))
+            if let timeoutSeconds {
+                try connectWithTimeout(fd: fd, address: &address, timeoutSeconds: timeoutSeconds)
+            } else {
+                let result = connectSocket(fd: fd, address: &address)
+                guard result == 0 else {
+                    throw DistributedSocketTransportError.socketError(
+                        operation: "connect", errno: errno)
                 }
-            }
-            guard result == 0 else {
-                throw DistributedSocketTransportError.socketError(
-                    operation: "connect", errno: errno)
             }
             return DistributedSocketWorkerConnection(fileDescriptor: fd)
         } catch {
             Darwin.close(fd)
             throw error
+        }
+    }
+
+    private static func connectSocket(fd: Int32, address: inout sockaddr_in) -> Int32 {
+        withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
+                Darwin.connect(
+                    fd,
+                    sockaddrPointer,
+                    socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+    }
+
+    private static func connectWithTimeout(
+        fd: Int32,
+        address: inout sockaddr_in,
+        timeoutSeconds: Double
+    ) throws {
+        let originalFlags = Darwin.fcntl(fd, F_GETFL, 0)
+        guard originalFlags >= 0 else {
+            throw DistributedSocketTransportError.socketError(operation: "fcntl", errno: errno)
+        }
+        guard Darwin.fcntl(fd, F_SETFL, originalFlags | O_NONBLOCK) == 0 else {
+            throw DistributedSocketTransportError.socketError(operation: "fcntl", errno: errno)
+        }
+
+        let result = connectSocket(fd: fd, address: &address)
+        if result == 0 {
+            guard Darwin.fcntl(fd, F_SETFL, originalFlags) == 0 else {
+                throw DistributedSocketTransportError.socketError(operation: "fcntl", errno: errno)
+            }
+            return
+        }
+        let connectErrno = errno
+        guard connectErrno == EINPROGRESS else {
+            throw DistributedSocketTransportError.socketError(
+                operation: "connect", errno: connectErrno)
+        }
+
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while true {
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else {
+                throw DistributedSocketTransportError.timedOut(operation: "connect")
+            }
+            var pollFD = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+            let timeoutMS = Int32(min(remaining * 1000.0, Double(Int32.max)).rounded(.up))
+            let pollResult = Darwin.poll(&pollFD, 1, timeoutMS)
+            if pollResult > 0 {
+                var socketStatus: Int32 = 0
+                var length = socklen_t(MemoryLayout<Int32>.size)
+                guard Darwin.getsockopt(
+                    fd,
+                    SOL_SOCKET,
+                    SO_ERROR,
+                    &socketStatus,
+                    &length) == 0
+                else {
+                    throw DistributedSocketTransportError.socketError(
+                        operation: "getsockopt", errno: errno)
+                }
+                guard socketStatus == 0 else {
+                    throw DistributedSocketTransportError.socketError(
+                        operation: "connect", errno: socketStatus)
+                }
+                guard Darwin.fcntl(fd, F_SETFL, originalFlags) == 0 else {
+                    throw DistributedSocketTransportError.socketError(
+                        operation: "fcntl", errno: errno)
+                }
+                return
+            }
+            if pollResult == 0 {
+                throw DistributedSocketTransportError.timedOut(operation: "connect")
+            }
+            if errno == EINTR {
+                continue
+            }
+            throw DistributedSocketTransportError.socketError(operation: "poll", errno: errno)
         }
     }
 

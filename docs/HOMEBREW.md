@@ -1,12 +1,13 @@
 # Homebrew
 
-Homebrew should be the default install path once it is tested and verified.
+Homebrew is the default install path for MacBook validation and versioned beta releases.
 
 Current state:
 
 - Apple Core AI is still beta.
 - caix is still beta.
-- The formula is HEAD-only for the tap.
+- The public tap installs the packaged arm64 binary for versioned releases.
+- `--HEAD` source installs are for tap development only; do not use them for MacBook validation.
 - Versioned tap releases must stay below `1.0.0` while Core AI is beta.
 - Do not submit to Homebrew/core until macOS 27 and Core AI are stable.
 
@@ -20,11 +21,13 @@ Formula/caix.rb
 
 Copy this repo's `Formula/caix.rb` there.
 
-Current install:
+Current install or upgrade:
 
 ```bash
 brew tap RedHillsMediaFL/caix
-brew install --HEAD caix
+brew update
+brew upgrade redhillsmediafl/caix/caix || brew install redhillsmediafl/caix/caix
+caix --version
 caix doctor
 ```
 
@@ -73,7 +76,7 @@ dist/Formula/caix.rb
 Then install the versioned tarball through a local tap:
 
 ```bash
-./prepare-local-brew-tap.sh --tarball ./caix-0.2.0-beta-macos-arm64.tar.gz
+./prepare-local-brew-tap.sh --tarball ./caix-<version>-macos-arm64.tar.gz
 brew install redhillsmediafl/caix/caix
 brew test caix
 caix doctor
@@ -97,15 +100,31 @@ Then open a PR against `Homebrew/homebrew-core` adding `Formula/c/caix.rb`, or r
 Keep the formula blunt: what it installs, required macOS/Core AI version, and how to run `caix
 doctor`. No marketing copy.
 
-## Distributed Testing
+## MacBook Distributed POC Prep
 
-When distributed inference is ready for Thunderbolt testing, test it through the Brew-installed
-binary first:
+Use the Brew-installed binary only. Do not use checkout binaries for MacBook validation.
+
+On both Macs, upgrade or install the current versioned tap release:
 
 ```bash
 brew tap RedHillsMediaFL/caix
-brew reinstall caix
+brew update
+brew upgrade redhillsmediafl/caix/caix || brew install redhillsmediafl/caix/caix
+caix --version
 brew test caix
+caix doctor
+```
+
+If the current validation task needs the public MTP package, install it with the catalog command.
+This downloads a model bundle, so do not run it from automation unless that task is assigned:
+
+```bash
+caix catalog install redhillsmediafl/rhm-qwen3-4b-mtp-caix
+```
+
+For the tiny staged hardware POC, verify the tiny manifest and installed distributed surface first:
+
+```bash
 caix_prefix="$(brew --prefix caix)"
 "$caix_prefix/share/caix/scripts/check-distributed-readiness.sh" --tiny-poc \
   --tiny-manifest /path/to/qwen3-tiny-random-coreai-staged-rope-input-f16-2x1/stage-manifest.json \
@@ -119,7 +138,16 @@ caix_prefix="$(brew --prefix caix)"
 caix serve --host 0.0.0.0 --port 1237
 ```
 
-From the coordinator, verify both machines and link speed:
+From the coordinator, verify both machines and link speed directly:
+
+```bash
+caix deploy verify \
+  --endpoint <main-mac-host>:1237 --endpoint <macbook-host>:1237 \
+  --min-machines 2 --speed-bytes 4194304 --min-mbps 500 --max-latency-ms 20 \
+  --fail-on-warn
+```
+
+Then run the Brew surface checker with the same endpoints and tiny manifest:
 
 ```bash
 "$caix_prefix/share/caix/scripts/check-brew-distributed.sh" --caix "$(command -v caix)" --ready \
@@ -128,11 +156,11 @@ From the coordinator, verify both machines and link speed:
   --min-machines 2 --speed-bytes 4194304 --min-mbps 500 --max-latency-ms 20
 ```
 
-The Brew checker fails on identity, version, latency, or link-speed blocker warnings. A local
-endpoint warning is advisory; judge the remote endpoint for the cable path. Run the distributed
-smoke from the installed `caix`, not a checkout binary. Use `caix serve --cluster ...
---join-timeout 120` on the coordinator and `caix cluster join ... --connect-timeout 120` on workers
-so failures exit cleanly. Do not publish distributed release notes until this gate passes.
+The Brew checker fails on identity, local-machine, version, latency, or link-speed warnings unless
+`--allow-warnings` is passed for a diagnostic rerun. Do not use warning-allowed runs as proof. Run
+the distributed smoke from the installed `caix`, not a checkout binary. Use `caix serve --cluster
+... --join-timeout 120` on the coordinator and `caix cluster join ... --connect-timeout 120` on
+workers so failures exit cleanly. Do not publish distributed release notes until this gate passes.
 
 Before copying the staged bundle to the MacBook, write copy digests on the source:
 

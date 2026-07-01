@@ -246,7 +246,11 @@ private func connectToClusterCoordinator(
     var lastError: Error?
     repeat {
         do {
-            return try DistributedSocketWorkerConnection.connect(host: host, port: port)
+            let remaining = deadline.timeIntervalSinceNow
+            return try DistributedSocketWorkerConnection.connect(
+                host: host,
+                port: port,
+                timeoutSeconds: min(0.5, max(0.001, remaining)))
         } catch {
             lastError = error
             let remaining = deadline.timeIntervalSinceNow
