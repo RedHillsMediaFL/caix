@@ -402,6 +402,7 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertEqual(hello.hiddenSize, 2)
         XCTAssertEqual(hello.boundaryScalarType, .float16)
         XCTAssertEqual(hello.cacheContract, "stateful")
+        XCTAssertEqual(hello.acceptsTokenIDs, false)
         XCTAssertEqual(hello.freeMemoryBytes, 1024)
         XCTAssertEqual(hello.computeUnit, "all")
         XCTAssertEqual(hello.labels, ["lane": "middle"])
@@ -1878,9 +1879,18 @@ final class DistributedRuntimeTests: XCTestCase {
             positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 3),
             positionIDs: [0, 1, 2],
             hiddenState: packet.metadata)
+        let middleStageWithTokenIDs = DistributedStageForwardFrame(
+            stageID: "layers-0-16",
+            requestID: "req-1",
+            stepIndex: 0,
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 3),
+            positionIDs: [0, 1, 2],
+            tokenIDs: [10, 11, 12],
+            hiddenState: packet.metadata)
 
         XCTAssertNoThrow(try firstStage.validate(against: plan))
         XCTAssertNoThrow(try middleStage.validate(against: plan))
+        XCTAssertNoThrow(try middleStageWithTokenIDs.validate(against: plan))
     }
 
     func testForwardFrameRejectsWrongPayloadForRole() throws {
@@ -1909,7 +1919,29 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertThrowsError(try badMiddleStage.validate(against: plan)) { error in
             XCTAssertEqual(
                 error as? DistributedStageExecutionError,
-                .invalidForwardInput("transformer_layers stage must not receive token_ids"))
+                .invalidForwardInput("transformer_layers stage requires a hidden state"))
+        }
+
+        let packet = try hiddenPacket(
+            requestID: "req-1",
+            source: "embed",
+            destination: "layers-0-16",
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 2),
+            stepIndex: 0,
+            fill: 7)
+        let badTokenCount = DistributedStageForwardFrame(
+            stageID: "layers-0-16",
+            requestID: "req-1",
+            stepIndex: 0,
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 2),
+            positionIDs: [0, 1],
+            tokenIDs: [7],
+            hiddenState: packet.metadata)
+
+        XCTAssertThrowsError(try badTokenCount.validate(against: plan)) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidForwardInput("token_ids count must match position_range"))
         }
     }
 
@@ -1993,6 +2025,40 @@ final class DistributedRuntimeTests: XCTestCase {
             ])
 
         XCTAssertNoThrow(try contract.validate(for: descriptor, boundaryTensor: boundary))
+    }
+
+    func testStageIOContractAllowsOptionalInputIDsOnHiddenStages() throws {
+        let boundary = DistributedBoundaryTensorSpec(
+            name: "hidden_states", shape: [1, -1, 2], scalarType: .float16)
+        let transformer = stage(
+            "layers-0-16", .transformerLayers,
+            range: DistributedLayerRange(lowerBound: 0, upperBound: 16),
+            assetName: "layers_0_16")
+        let head = stage("final", .finalNormHead, assetName: "final")
+        let transformerContract = DistributedStageIOContract(
+            inputs: [
+                ioTensor(.hiddenStates, .float16, [1, -1, 2]),
+                ioTensor(.positionIDs, .int32, [1, -1]),
+                ioTensor(.inputIDs, .int32, [1, -1]),
+            ],
+            outputs: [
+                ioTensor(.hiddenStates, .float16, [1, -1, 2])
+            ])
+        let headContract = DistributedStageIOContract(
+            inputs: [
+                ioTensor(.hiddenStates, .float16, [1, -1, 2]),
+                ioTensor(.positionIDs, .int32, [1, -1]),
+                ioTensor(.inputIDs, .int32, [1, -1]),
+            ],
+            outputs: [
+                ioTensor(.logits, .float16, [1, -1, 151_936])
+            ])
+
+        XCTAssertNoThrow(try transformerContract.validate(for: transformer, boundaryTensor: boundary))
+        XCTAssertNoThrow(try headContract.validate(
+            for: head,
+            boundaryTensor: boundary,
+            vocabSize: 151_936))
     }
 
     func testStageIOContractRejectsUndeclaredRoPEInputs() {
@@ -2926,6 +2992,43 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertEqual(handles[3].inputs.first?.hiddenState?.metadata.sourceStageID, "layers-16-32")
     }
 
+    func testSameMachinePipelineForwardsTokenIDsOnlyToCapableStages() async throws {
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 2], scalarType: .float16))
+        var handles = makeFakeHandles(for: plan)
+        let descriptor = handles[1].descriptor
+        handles[1] = FakeDistributedStageHandle(
+            descriptor: descriptor,
+            acceptsTokenIDs: true
+        ) { input in
+            let packet = try self.hiddenPacket(
+                requestID: input.requestID,
+                source: descriptor.id,
+                destination: "layers-16-32",
+                positionRange: input.positionRange,
+                stepIndex: input.stepIndex,
+                fill: 9)
+            return DistributedStageForwardOutput(
+                stageID: descriptor.id,
+                stepIndex: input.stepIndex,
+                hiddenState: packet)
+        }
+        let pipeline = try DistributedSameMachinePipeline(plan: plan, stages: handles)
+
+        try await pipeline.allocate(requestID: "req-token-routing", kvCapacity: 16)
+        _ = try await pipeline.forward(
+            requestID: "req-token-routing",
+            stepIndex: 0,
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 2),
+            tokenIDs: [5, 6])
+
+        XCTAssertEqual(handles[0].inputs.first?.tokenIDs, [5, 6])
+        XCTAssertEqual(handles[1].inputs.first?.tokenIDs, [5, 6])
+        XCTAssertEqual(handles[2].inputs.first?.tokenIDs, [])
+        XCTAssertEqual(handles[3].inputs.first?.tokenIDs, [])
+    }
+
     func testSameMachinePipelineBuildsFromManifestHandleMap() async throws {
         let manifest = try DistributedStageManifest.decode(
             from: Data(stageManifestJSON(modelKey: "model", includeTotalLayerCount: true).utf8),
@@ -3664,6 +3767,7 @@ final class DistributedRuntimeTests: XCTestCase {
 
 private final class FakeDistributedStageHandle: DistributedStageHandle, @unchecked Sendable {
     let descriptor: DistributedStageDescriptor
+    let acceptsTokenIDs: Bool
     var allocatedRequests: [String] = []
     var allocatedKVCaps: [Int] = []
     var inputs: [DistributedStageForwardInput] = []
@@ -3673,9 +3777,11 @@ private final class FakeDistributedStageHandle: DistributedStageHandle, @uncheck
 
     init(
         descriptor: DistributedStageDescriptor,
+        acceptsTokenIDs: Bool? = nil,
         output: @escaping (DistributedStageForwardInput) throws -> DistributedStageForwardOutput
     ) {
         self.descriptor = descriptor
+        self.acceptsTokenIDs = acceptsTokenIDs ?? (descriptor.role == .embeddings)
         self.output = output
     }
 

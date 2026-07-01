@@ -172,7 +172,8 @@ func runClusterServeRuntime(
             let descriptor = try requireDescriptor(for: stageID, in: manifest)
             handlesByStageID[stageID] = try DistributedRemoteStageHandle(
                 plan: manifest.runtimePlan,
-                descriptor: descriptor
+                descriptor: descriptor,
+                acceptsTokenIDs: hello.acceptsTokenIDs
             ) { request in
                 try connection.roundTrip(request)
             }

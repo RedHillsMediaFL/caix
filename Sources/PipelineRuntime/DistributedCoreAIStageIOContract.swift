@@ -262,7 +262,7 @@ private struct DistributedCoreAIStageExecutionIO {
                 ropeSinInput: nil)
         case .transformerLayers:
             return DistributedCoreAIStageExecutionIO(
-                inputIDs: nil,
+                inputIDs: try optionalInput(.inputIDs, descriptor: descriptor),
                 positionIDs: positionIDs,
                 hiddenStatesInput: try input(.hiddenStates, descriptor: descriptor),
                 hiddenStatesOutput: try output(.hiddenStates, descriptor: descriptor),
@@ -279,7 +279,7 @@ private struct DistributedCoreAIStageExecutionIO {
                     "distributed final_norm_head stage '\(stage.id)' requires vocab_size")
             }
             return DistributedCoreAIStageExecutionIO(
-                inputIDs: nil,
+                inputIDs: try optionalInput(.inputIDs, descriptor: descriptor),
                 positionIDs: positionIDs,
                 hiddenStatesInput: try input(.hiddenStates, descriptor: descriptor),
                 hiddenStatesOutput: nil,
@@ -301,6 +301,15 @@ private struct DistributedCoreAIStageExecutionIO {
         return DistributedCoreAIStageNDArrayBinding(
             name: name,
             descriptor: ndArrayDescriptor)
+    }
+
+    private static func optionalInput(
+        _ tensorName: DistributedStageIOTensorName,
+        descriptor: InferenceFunctionDescriptor
+    ) throws -> DistributedCoreAIStageNDArrayBinding? {
+        let name = tensorName.rawValue
+        guard descriptor.inputNames.contains(name) else { return nil }
+        return try input(tensorName, descriptor: descriptor)
     }
 
     private static func input(
@@ -355,6 +364,10 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
     public let assetURL: URL
     public let functionName: String
     public let ioContract: DistributedStageIOContract
+
+    public var acceptsTokenIDs: Bool {
+        executionIO.inputIDs != nil
+    }
 
     private let model: AIModel
     private let prefillFunction: InferenceFunction
@@ -570,6 +583,11 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
                 hiddenInputBinding.name: hiddenInput,
                 executionIO.positionIDs.name: positionIDs,
             ]
+            if let inputIDsBinding = executionIO.inputIDs {
+                inputs[inputIDsBinding.name] = try DistributedCoreAIStageNDArrayIO.makeInputIDs(
+                    tokenIDs: input.tokenIDs,
+                    descriptor: inputIDsBinding.descriptor)
+            }
             if let rope = descriptor.rope,
                 let ropeCosInput = executionIO.ropeCosInput,
                 let ropeSinInput = executionIO.ropeSinInput
@@ -644,12 +662,18 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
                 descriptor: logitsOutputBinding.descriptor)
             var outputViews = InferenceFunction.MutableViews()
             outputViews.insert(&logits, for: logitsOutputBinding.name)
+            var inputs = [
+                hiddenInputBinding.name: hiddenInput,
+                executionIO.positionIDs.name: positionIDs,
+            ]
+            if let inputIDsBinding = executionIO.inputIDs {
+                inputs[inputIDsBinding.name] = try DistributedCoreAIStageNDArrayIO.makeInputIDs(
+                    tokenIDs: input.tokenIDs,
+                    descriptor: inputIDsBinding.descriptor)
+            }
             try await run(
                 activeFunction,
-                inputs: [
-                    hiddenInputBinding.name: hiddenInput,
-                    executionIO.positionIDs.name: positionIDs,
-                ],
+                inputs: inputs,
                 outputViews: consume outputViews,
                 requestState: &requestState)
             let logitsRow = try DistributedCoreAIStageNDArrayIO.readLastLogitsRow(
@@ -827,9 +851,16 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
                     "embeddings stage must not receive hidden_state")
             }
         case .transformerLayers, .finalNormHead:
-            guard input.tokenIDs.isEmpty else {
-                throw DistributedStageExecutionError.invalidForwardInput(
-                    "\(descriptor.role.rawValue) stage must not receive token_ids")
+            if executionIO.inputIDs != nil {
+                guard input.tokenIDs.count == input.positionRange.count else {
+                    throw DistributedStageExecutionError.invalidForwardInput(
+                        "token_ids count must match position_range")
+                }
+            } else {
+                guard input.tokenIDs.isEmpty else {
+                    throw DistributedStageExecutionError.invalidForwardInput(
+                        "\(descriptor.role.rawValue) stage must not receive token_ids")
+                }
             }
             guard let hiddenState = input.hiddenState else {
                 throw DistributedStageExecutionError.invalidForwardInput(

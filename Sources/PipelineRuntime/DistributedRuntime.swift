@@ -626,6 +626,7 @@ public struct DistributedStageIOContract: Codable, Hashable, Sendable {
             var allowedInputs = Set([
                 DistributedStageIOTensorName.hiddenStates.rawValue,
                 DistributedStageIOTensorName.positionIDs.rawValue,
+                DistributedStageIOTensorName.inputIDs.rawValue,
             ])
             if let rope = stage.rope {
                 allowedInputs.insert(rope.cosInputName)
@@ -651,6 +652,9 @@ public struct DistributedStageIOContract: Codable, Hashable, Sendable {
                 in: outputByName,
                 kind: "output",
                 stageID: stage.id)
+            if let inputIDs = inputByName[DistributedStageIOTensorName.inputIDs.rawValue] {
+                try Self.validateInputIDsTensor(inputIDs, kind: "input", stageID: stage.id)
+            }
             try Self.validateHiddenStateTensor(
                 hiddenInput,
                 kind: "input",
@@ -678,7 +682,7 @@ public struct DistributedStageIOContract: Codable, Hashable, Sendable {
 
         case .finalNormHead:
             try Self.requireOnlyTensors(
-                [.hiddenStates, .positionIDs],
+                [.hiddenStates, .positionIDs, .inputIDs],
                 in: inputByName,
                 kind: "input",
                 stage: stage)
@@ -692,6 +696,9 @@ public struct DistributedStageIOContract: Codable, Hashable, Sendable {
                 in: inputByName,
                 kind: "input",
                 stageID: stage.id)
+            if let inputIDs = inputByName[DistributedStageIOTensorName.inputIDs.rawValue] {
+                try Self.validateInputIDsTensor(inputIDs, kind: "input", stageID: stage.id)
+            }
             let logits = try Self.requireTensor(
                 .logits,
                 in: outputByName,
@@ -734,6 +741,23 @@ public struct DistributedStageIOContract: Codable, Hashable, Sendable {
             throw error(
                 stageID: stageID,
                 "\(kind) hidden_states shape \(tensor.shape) does not match \(expectedShape)")
+        }
+    }
+
+    private static func validateInputIDsTensor(
+        _ tensor: DistributedStageIOTensor,
+        kind: String,
+        stageID: String
+    ) throws {
+        guard tensor.scalarType == .int32 else {
+            throw error(
+                stageID: stageID,
+                "\(kind) input_ids scalar_type \(tensor.scalarType.rawValue) does not match int32")
+        }
+        guard shape(tensor.shape, matches: [1, -1]) else {
+            throw error(
+                stageID: stageID,
+                "\(kind) input_ids shape \(tensor.shape) does not match [1, -1]")
         }
     }
 
@@ -1796,6 +1820,7 @@ public struct DistributedWorkerHello: Codable, Hashable, Sendable {
     public let hiddenSize: Int?
     public let boundaryScalarType: DistributedTensorScalarType?
     public let cacheContract: String?
+    public let acceptsTokenIDs: Bool?
     public let planIntegrityHash: String
     public let freeMemoryBytes: UInt64?
     public let computeUnit: String?
@@ -1806,6 +1831,7 @@ public struct DistributedWorkerHello: Codable, Hashable, Sendable {
         case hiddenSize = "hidden_size"
         case boundaryScalarType = "boundary_scalar_type"
         case cacheContract = "cache_contract"
+        case acceptsTokenIDs = "accepts_token_ids"
         case planIntegrityHash = "plan_integrity_hash"
         case freeMemoryBytes = "free_memory_bytes"
         case computeUnit = "compute_unit"
@@ -1817,6 +1843,7 @@ public struct DistributedWorkerHello: Codable, Hashable, Sendable {
         hiddenSize: Int? = nil,
         boundaryScalarType: DistributedTensorScalarType? = nil,
         cacheContract: String? = nil,
+        acceptsTokenIDs: Bool? = nil,
         planIntegrityHash: String,
         freeMemoryBytes: UInt64? = nil,
         computeUnit: String? = nil,
@@ -1826,6 +1853,7 @@ public struct DistributedWorkerHello: Codable, Hashable, Sendable {
         self.hiddenSize = hiddenSize
         self.boundaryScalarType = boundaryScalarType
         self.cacheContract = cacheContract
+        self.acceptsTokenIDs = acceptsTokenIDs
         self.planIntegrityHash = planIntegrityHash
         self.freeMemoryBytes = freeMemoryBytes
         self.computeUnit = computeUnit
@@ -2086,9 +2114,9 @@ public struct DistributedStageForwardFrame: Codable, Hashable, Sendable {
                     "embeddings stage must not receive a hidden state")
             }
         case .transformerLayers, .finalNormHead:
-            guard tokenIDs.isEmpty else {
+            guard tokenIDs.isEmpty || tokenIDs.count == positionRange.count else {
                 throw DistributedStageExecutionError.invalidForwardInput(
-                    "\(descriptor.role.rawValue) stage must not receive token_ids")
+                    "token_ids count must match position_range")
             }
             guard let hiddenState else {
                 throw DistributedStageExecutionError.invalidForwardInput(
@@ -2653,6 +2681,7 @@ public final class DistributedWorkerFrameExecutor {
             hiddenSize: plan.boundaryTensor?.shape.last,
             boundaryScalarType: plan.boundaryTensor?.scalarType,
             cacheContract: cacheContract,
+            acceptsTokenIDs: handle.acceptsTokenIDs,
             planIntegrityHash: planIntegrityHash,
             freeMemoryBytes: freeMemoryBytes,
             computeUnit: computeUnit,
@@ -2962,12 +2991,14 @@ public typealias DistributedWorkerFrameRoundTrip =
 
 public final class DistributedRemoteStageHandle: DistributedStageHandle {
     public let descriptor: DistributedStageDescriptor
+    public let acceptsTokenIDs: Bool
     public let plan: DistributedStagePlan
     private let roundTrip: DistributedWorkerFrameRoundTrip
 
     public init(
         plan: DistributedStagePlan,
         descriptor: DistributedStageDescriptor,
+        acceptsTokenIDs: Bool? = nil,
         roundTrip: @escaping DistributedWorkerFrameRoundTrip
     ) throws {
         try plan.validate()
@@ -2980,6 +3011,7 @@ public final class DistributedRemoteStageHandle: DistributedStageHandle {
         }
         self.plan = plan
         self.descriptor = descriptor
+        self.acceptsTokenIDs = acceptsTokenIDs ?? (descriptor.role == .embeddings)
         self.roundTrip = roundTrip
     }
 
@@ -3104,11 +3136,18 @@ public struct DistributedStageForwardOutput: Hashable, Sendable {
 
 public protocol DistributedStageHandle: AnyObject {
     var descriptor: DistributedStageDescriptor { get }
+    var acceptsTokenIDs: Bool { get }
 
     func allocate(_ allocation: DistributedStageAllocation) async throws
     func forward(_ input: DistributedStageForwardInput) async throws -> DistributedStageForwardOutput
     func reset(requestID: String) async throws
     func free(requestID: String) async
+}
+
+public extension DistributedStageHandle {
+    var acceptsTokenIDs: Bool {
+        descriptor.role == .embeddings
+    }
 }
 
 public struct DistributedStageHandleFactoryContext: Hashable, Sendable {
@@ -3357,7 +3396,7 @@ public final class DistributedSameMachinePipeline {
                 stepIndex: stepIndex,
                 positionRange: positionRange,
                 positionIDs: positionIDs,
-                tokenIDs: index == 0 ? tokenIDs : [],
+                tokenIDs: stage.acceptsTokenIDs ? tokenIDs : [],
                 hiddenState: hiddenState)
             let output = try await stage.forward(input)
             try validate(output: output, from: stage, at: index, stepIndex: stepIndex)
