@@ -592,8 +592,8 @@ private func deployVerifySameMachine(_ remoteName: String?, _ localName: String)
     return remote.lowercased() == localName.lowercased()
 }
 
-private func deployVerifyWarningIsBlocking(_ warning: String) -> Bool {
-    !warning.contains("local machine endpoint;")
+private func deployVerifyWarningIsBlocking(_: String) -> Bool {
+    return true
 }
 
 private func deployVerifyBool(_ object: [String: Any], keys: [String]) -> Bool? {

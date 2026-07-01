@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.2.7-beta
+
+- Made `caix deploy verify --fail-on-warn` fail on local-machine warnings.
+
 ## 0.2.6-beta
 
 - Removed stale Hugging Face local-dir locks before catalog installs.
