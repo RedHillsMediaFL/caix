@@ -4,7 +4,7 @@
 # (on a Mac with a matching Core AI runtime). Usage: scripts/package.sh [version]
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${1:-0.2.9-beta}"
+VERSION="${1:-0.2.10-beta}"
 ARCH="$(uname -m)"
 NAME="caix-${VERSION}-macos-${ARCH}"
 
@@ -31,6 +31,8 @@ cp .build/release/caix          "$STAGE/bin/caix"
 cp caix README.md LICENSE       "$STAGE/" 2>/dev/null || true
 cp Formula/caix.rb              "$STAGE/Formula/"
 cp -R web python                "$STAGE/"
+find "$STAGE/python" -type d -name __pycache__ -prune -exec rm -rf {} +
+find "$STAGE/python" -type f -name '*.py[co]' -delete
 cp models/registry.json         "$STAGE/models/"
 cp docs/examples/cluster-stage-manifest.json "$STAGE/docs/examples/"
 cp scripts/install.sh scripts/check-coreai-runtime.sh scripts/check-brew-distributed.sh \
