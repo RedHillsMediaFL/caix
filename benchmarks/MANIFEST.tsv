@@ -17,8 +17,11 @@ redhillsmediafl/rhm-mistral-nemo-instruct-2407-caix	mistral-nemo-instruct-2407-c
 redhillsmediafl/rhm-mistral-small-instruct-2409-caix	mistral-small-instruct-2409-coreai	standalone	decode	eligible	verified; Mistral Research License
 redhillsmediafl/rhm-mixtral-8x7b-instruct-caix	mixtral-8x7b-instruct-coreai	standalone	decode	eligible	cataloged
 redhillsmediafl/rhm-qwen3.6-27b-caix	qwen3.6-27b-coreai	standalone	decode	eligible	cataloged
+redhillsmediafl/rhm-gemma-4-12b-it-unified-caix	gemma4-12b-it-unified-staged-4bit-ctx128-6x8	staged	manual	component_only	staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook
 redhillsmediafl/rhm-gemma-4-26b-a4b-caix	gemma-4-26b-a4b-coreai	standalone	decode	eligible	cataloged
+redhillsmediafl/rhm-gemma-4-26b-a4b-it-staged-caix	gemma4-26b-a4b-it-staged-4bit-ctx128-5x6	staged	manual	component_only	staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook
 redhillsmediafl/rhm-gemma-4-31b-it-caix	gemma-4-31b-it-coreai	standalone	decode	eligible	cataloged
+redhillsmediafl/rhm-gemma-4-31b-it-staged-caix	gemma4-31b-it-staged-4bit-ctx128-6x10	staged	manual	component_only	staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook
 redhillsmediafl/rhm-gemma-4-26b-a4b-mtp-caix	gemma-4-26b-a4b-mtp-coreai	mtp	eagle-mtp	eligible	benchmark MTP package; compare against standalone target row
 redhillsmediafl/rhm-gemma-4-31b-it-mtp-caix	gemma-4-31b-it-mtp-coreai	mtp	eagle-mtp	blocked_runtime	draft graph is standard two-input assistant; rebuild package with dependent EAGLE draft
 redhillsmediafl/rhm-qwen3-4b-mtp-caix	qwen3-4b-mtp-coreai	mtp	speculative	eligible	benchmark classic target+draft package; compare against standalone target row
