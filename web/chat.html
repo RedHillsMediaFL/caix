@@ -6,9 +6,10 @@
 <title>caix chat</title>
 <style>
   :root{
-    --bg:#0f1115;--surface:#15181e;--raised:#1c212b;--line:#2a2f3a;--line-soft:#20252e;
-    --text:#eaecef;--muted:#929aa6;--faint:#5b6470;
-    --signal:#7c6cf0;--signal-dim:rgba(124,108,240,.16);--signal-line:rgba(124,108,240,.42);
+    color-scheme:dark;
+    --bg:#101114;--surface:#17181d;--raised:#202127;--line:#2d3038;--line-soft:#242730;
+    --text:#f1f2f5;--muted:#a3a7b1;--faint:#707580;
+    --signal:#0a84ff;--signal-dim:rgba(10,132,255,.16);--signal-line:rgba(10,132,255,.46);
     --ok:#46d39a;--work:#e0a64e;--bad:#f0625d;
     --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;
     --mono:ui-monospace,"SF Mono",Menlo,monospace;
@@ -18,11 +19,11 @@
   a{color:var(--signal);text-decoration:none}a:hover{text-decoration:underline}
   .app{display:grid;grid-template-columns:300px 1fr;height:100vh}
   /* ---- sidebar ---- */
-  .side{border-right:1px solid var(--line);background:var(--surface);overflow-y:auto;padding:16px 14px;display:flex;flex-direction:column;gap:20px}
-  .logo{font-size:16px;font-weight:600;letter-spacing:-.01em;display:flex;align-items:center;gap:8px}
+  .side{border-right:1px solid var(--line);background:rgba(23,24,29,.86);backdrop-filter:saturate(160%) blur(18px);overflow-y:auto;padding:16px 14px;display:flex;flex-direction:column;gap:20px}
+  .logo{font-size:16px;font-weight:600;letter-spacing:0;display:flex;align-items:center;gap:8px}
   .logo img{width:30px;height:30px;border-radius:7px;border:1px solid var(--line);object-fit:cover}
   .logo b{color:var(--signal)}.logo .sub{color:var(--faint);font-size:12px;font-weight:400}
-  .side h3{font-size:11px;text-transform:uppercase;letter-spacing:.13em;color:var(--muted);margin:0 0 9px;font-weight:600}
+  .side h3{font-size:11px;text-transform:uppercase;letter-spacing:0;color:var(--muted);margin:0 0 9px;font-weight:600}
   .mrow{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:8px;border:1px solid transparent}
   .mrow:hover{background:var(--raised);border-color:var(--line-soft)}
   .mrow .nm{font-family:var(--mono);font-size:11.5px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -50,7 +51,7 @@
   .logrow{display:block;margin-bottom:4px}.logrow b{color:var(--text);font-weight:500}
   /* ---- chat main ---- */
   .main{display:flex;flex-direction:column;height:100vh;min-width:0}
-  .top{display:flex;align-items:center;gap:12px;padding:11px 18px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .top{display:flex;align-items:center;gap:12px;padding:11px 18px;border-bottom:1px solid var(--line);background:rgba(16,17,20,.72);backdrop-filter:saturate(160%) blur(18px);flex-wrap:wrap}
   .top select{width:auto;min-width:210px;font-family:var(--mono);font-size:12px}
   .badge{font-family:var(--mono);font-size:10px;color:#cfc8ff;background:var(--signal-dim);border:1px solid var(--signal-line);
          border-radius:20px;padding:3px 9px}
@@ -59,11 +60,11 @@
   .scroll{flex:1;overflow-y:auto;padding:8px 0}
   .wrap{max-width:820px;margin:0 auto;padding:0 22px}
   .turn{padding:16px 0;border-top:1px solid var(--line-soft)}.turn:first-child{border-top:0}
-  .role{font-family:var(--mono);font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--faint);margin-bottom:8px}
+  .role{font-family:var(--mono);font-size:10.5px;text-transform:uppercase;letter-spacing:0;color:var(--faint);margin-bottom:8px}
   .turn.user .role{color:var(--signal)}
   .turn.user .md{color:#dfe2e8}
   .think{border-left:2px solid var(--line);margin:0 0 12px}
-  .think summary{color:var(--muted);font-family:var(--mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;padding:0 0 6px 10px}
+  .think summary{color:var(--muted);font-family:var(--mono);font-size:10px;letter-spacing:0;text-transform:uppercase;padding:0 0 6px 10px}
   .think .md{padding-left:12px;color:var(--faint);font-size:13px}
   .tool{font-family:var(--mono);font-size:11.5px;border:1px solid var(--line);border-radius:8px;padding:8px 11px;margin:8px 0;background:var(--surface)}
   .tool .tn{color:var(--work)}.tool .tr{color:var(--muted);white-space:pre-wrap;margin-top:5px;max-height:140px;overflow:auto}
@@ -94,6 +95,9 @@
        border-radius:9px;padding:11px 18px;cursor:pointer;font-weight:600;white-space:nowrap}
   .btn:hover{filter:brightness(1.08)}.btn[disabled]{opacity:.45;cursor:default}
   .btn.ghost{background:transparent;color:var(--text);border-color:var(--line)}
+  .activityline{display:block;margin-bottom:5px}
+  .activityline b{color:var(--text);font-weight:600}
+  .activityline .ok{color:var(--ok)}.activityline .bad{color:var(--bad)}.activityline .work{color:var(--work)}
   @media(max-width:760px){.app{grid-template-columns:1fr}.side{display:none}}
 </style>
 </head>
@@ -161,6 +165,11 @@
       </div>
       <div id="chatlog" class="logbox"></div>
     </section>
+
+    <section>
+      <h3>Server Activity</h3>
+      <div id="serveractivity" class="logbox"><span class="logrow">waiting for requests</span></div>
+    </section>
   </aside>
 
   <main class="main">
@@ -193,7 +202,6 @@ const isChatTuned=n=>/instruct|-it-|chat|qwythos/i.test(n||'');
 const chatScore=n=>(isComponent(n)?900:500)+(isChatTuned(n)?-300:0)+(/qwen/i.test(n||'')?-50:0)+(/gemma/i.test(n||'')&&!isChatTuned(n)?120:0)+(isMTP(n)?80:0);
 const modelWarn=n=>isComponent(n)?'component bundle':(!isChatTuned(n)?'not chat-tuned':'');
 const esc=s=>(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-const fixInitialRepeat=s=>(s||'').replace(/^([A-Z][A-Za-z]{2,23})\1(?![A-Za-z0-9_])/,'$1');
 const redactLog=s=>(s||'').replace(/\b((?:[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|AUTHORIZATION|CREDENTIAL)[A-Z0-9_]*)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s]+)/gi,'$1[redacted]')
   .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/\-]+=*/gi,'$1[redacted]')
   .replace(/([?&](?:access_token|token|signature|x-amz-signature)=)[^&\s"]+/gi,'$1[redacted]');
@@ -208,6 +216,21 @@ function renderLog(){
   const el=$('chatlog'); if(!el)return;
   el.innerHTML=LOG.map(x=>`<span class="logrow">${esc(x.t.slice(11,19))} <b>${esc(x.type)}</b> ${esc(x.detail)}</span>`).join('');
   el.scrollTop=el.scrollHeight;
+}
+async function renderServerActivity(){
+  const el=$('serveractivity'); if(!el)return;
+  try{
+    const rows=await api('/api/activity');
+    el.innerHTML=(rows||[]).slice(0,18).map(a=>{
+      const cls=(a.status||0)<400?'ok':((a.status||0)<500?'work':'bad');
+      const when=a.at?new Date(a.at*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}):'';
+      const tokens=(a.inputTokens||a.outputTokens)?` · ${a.inputTokens||0}/${a.outputTokens||0} tok`:'';
+      const model=a.model?` · ${a.model}`:'';
+      return `<span class="activityline"><span class="${cls}">${esc(String(a.status||'-'))}</span> <b>${esc(a.method||'-')}</b> ${esc(a.path||'-')} <span style="color:var(--faint)">${esc(when)} · ${esc(String(a.latencyMs||0))} ms${esc(model)}${esc(tokens)}</span><br>${esc(a.summary||'')}</span>`;
+    }).join('')||'<span class="logrow">no recent activity</span>';
+  }catch(e){
+    el.innerHTML='<span class="logrow">activity unavailable</span>';
+  }
 }
 function downloadText(name,text){
   const blob=new Blob([text],{type:'text/plain'}),url=URL.createObjectURL(blob),a=document.createElement('a');
@@ -381,7 +404,7 @@ async function streamTurn(a){
       const dl=blk.split('\n').find(l=>l.startsWith('data:'));if(!dl)continue;const p=dl.slice(5).trim();if(p==='[DONE]')continue;
       try{const d=JSON.parse(p);const del=(d.choices&&d.choices[0]&&d.choices[0].delta)||{};
         if(del.reasoning_content){if(!firstByte)addLog('chat',`first byte ${Math.round(performance.now()-t0)}ms`);firstByte=true;a.wait='';a.reasoning=(a.reasoning||'')+del.reasoning_content;}
-        if(del.content){if(!firstByte)addLog('chat',`first byte ${Math.round(performance.now()-t0)}ms`);firstByte=true;a.wait='';if(!firstAt)firstAt=performance.now();a.content=fixInitialRepeat((a.content||'')+del.content);nTok++;}
+        if(del.content){if(!firstByte)addLog('chat',`first byte ${Math.round(performance.now()-t0)}ms`);firstByte=true;a.wait='';if(!firstAt)firstAt=performance.now();a.content=(a.content||'')+del.content;nTok++;}
         if(del.tool_calls)for(const tc of del.tool_calls){const ix=tc.index||0;tcs[ix]=tcs[ix]||{id:tc.id,name:'',args:''};
           if(tc.id)tcs[ix].id=tc.id;if(tc.function&&tc.function.name)tcs[ix].name+=tc.function.name;if(tc.function&&tc.function.arguments)tcs[ix].args+=tc.function.arguments;}
         const el=(performance.now()-(firstAt||t0))/1000;if(nTok)$('live').innerHTML=`<b>${(nTok/Math.max(el,.001)).toFixed(1)}</b> tok/s · ${nTok} tok`;
@@ -430,6 +453,7 @@ const ta=$('prompt');
 ta.addEventListener('input',()=>{ta.style.height='auto';ta.style.height=Math.min(200,ta.scrollHeight)+'px';});
 ta.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
 addLog('ui','chat opened');
+renderServerActivity();setInterval(renderServerActivity,1800);
 loadModels();setInterval(loadModels,4000);
 </script>
 </body>

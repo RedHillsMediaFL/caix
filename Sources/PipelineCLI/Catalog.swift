@@ -405,8 +405,27 @@ enum Catalog {
             throw CatalogError("no installable bundles found for \(family.name)")
         }
         print("")
+        let query = prompt("filter models [all]", defaultValue: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let visible = query.isEmpty ? installable : installable.filter { entry in
+            [
+                entry.localDir,
+                entry.bundleName,
+                entry.repo,
+                entry.base,
+                entry.package,
+                entry.verification,
+            ]
+            .compactMap { $0?.lowercased() }
+            .contains { $0.contains(query) }
+        }
+        guard !visible.isEmpty else {
+            throw CatalogError("no installable bundles matched '\(query)'")
+        }
+        print("")
         print("models")
-        for (index, entry) in installable.enumerated() {
+        for (index, entry) in visible.enumerated() {
             let name = entry.localDir ?? entry.bundleName ?? entry.repo
             print(String(format: "%2d. %@", index + 1, name))
             print("    \(entry.repo)")
@@ -414,14 +433,14 @@ enum Catalog {
         }
         let modelIndex = try promptIndex(
             prompt: "model",
-            count: installable.count,
+            count: visible.count,
             defaultIndex: 0)
         let root = prompt(
             "exports root [\(exportsDir)]",
             defaultValue: exportsDir)
         print("")
         try install(
-            entry: installable[modelIndex],
+            entry: visible[modelIndex],
             exportsDir: root,
             name: nil,
             revision: nil,

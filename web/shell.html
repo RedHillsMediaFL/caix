@@ -6,9 +6,10 @@
 <title>caix shell</title>
 <style>
   :root{
-    --bg:#0b0d0f;--surface:#11151a;--raised:#171d23;--line:#28313a;--line-soft:#1d242b;
-    --text:#e8ecef;--muted:#9aa4ad;--faint:#68727d;--accent:#38c7b4;--accent-dim:rgba(56,199,180,.14);
-    --warn:#d99a3e;--bad:#ec635c;--ok:#46d386;--blue:#6aa6ff;
+    color-scheme:dark;
+    --bg:#101114;--surface:#17181d;--raised:#202127;--line:#2d3038;--line-soft:#242730;
+    --text:#f1f2f5;--muted:#a3a7b1;--faint:#707580;--accent:#0a84ff;--accent-dim:rgba(10,132,255,.16);
+    --warn:#e0a64e;--bad:#f0625d;--ok:#46d39a;--blue:#64a8ff;
     --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;
     --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
   }
@@ -22,11 +23,12 @@
   .app{height:100dvh;display:grid;grid-template-rows:auto 1fr auto;min-width:0}
   .top{
     min-height:54px;display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);
-    background:var(--surface);min-width:0;
+    background:rgba(23,24,29,.86);backdrop-filter:saturate(160%) blur(18px);min-width:0;
   }
   .brand{display:flex;align-items:center;gap:9px;min-width:0}
   .mark{width:30px;height:30px;border:1px solid var(--line);border-radius:7px;display:grid;place-items:center;
-    background:var(--raised);color:var(--accent);font:700 12px var(--mono)}
+    background:var(--raised);color:var(--accent);font:700 12px var(--mono);overflow:hidden}
+  .mark img{width:100%;height:100%;object-fit:cover;display:block}
   .brand b{display:block;font-size:15px;line-height:1}
   .brand span span{display:block;color:var(--muted);font:11px var(--mono);margin-top:2px}
   .controls{display:flex;align-items:center;gap:8px;margin-left:auto;min-width:0;flex-wrap:wrap;justify-content:flex-end}
@@ -57,7 +59,7 @@
   .wrap{max-width:980px;margin:0 auto;padding:0 18px}
   .turn{border-top:1px solid var(--line-soft);padding:16px 0}
   .turn:first-child{border-top:0}
-  .role{color:var(--faint);font:700 11px var(--mono);letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px}
+  .role{color:var(--faint);font:700 11px var(--mono);letter-spacing:0;text-transform:uppercase;margin-bottom:8px}
   .turn.user .role{color:var(--accent)}
   .turn.shell .role{color:var(--warn)}
   .turn.error .role{color:var(--bad)}
@@ -97,7 +99,7 @@
 <div class="app">
   <header class="top">
     <a class="brand" href="/">
-      <span class="mark">CX</span>
+      <span class="mark"><img src="/assets/caix-cakebot.png" alt="" aria-hidden="true"/></span>
       <span><b>caix shell</b><span>local agent terminal</span></span>
     </a>
     <div class="controls">

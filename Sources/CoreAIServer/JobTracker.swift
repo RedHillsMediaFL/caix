@@ -289,7 +289,7 @@ actor JobTracker {
         if let revision = revision?.trimmingCharacters(in: .whitespacesAndNewlines), !revision.isEmpty {
             argv += ["--revision", revision]
         }
-        argv += ["--max-workers", "1", "--local-dir", destination.path]
+        argv += ["--local-dir", destination.path, "--max-workers", "1"]
         let (logURL, logHandle) = Self.openLog(kind: "download-rhm", name: name, argv: argv)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")

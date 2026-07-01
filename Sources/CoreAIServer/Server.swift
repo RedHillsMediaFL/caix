@@ -83,6 +83,7 @@ public enum CoreAIServer {
 final class ServerRuntime: Sendable {
     let manager: ModelManager
     let jobs: JobTracker
+    let activity: ActivityLog
     let host: String
     let port: Int
     let exportsDir: URL
@@ -108,6 +109,7 @@ final class ServerRuntime: Sendable {
             exportsDir: exportsDir, registryPath: registryPath, verbose: verbose,
             eagleConfig: eagleConfig)
         self.jobs = JobTracker()
+        self.activity = ActivityLog()
         self.webDir = webDir
         self.registryPath = registryPath
         self.convertScript = convertScript
@@ -209,6 +211,7 @@ final class ServerRuntime: Sendable {
         router.get("/api/models") { _, _ in JSONResponder.encode(await self.manager.listModels()) }
         router.get("/api/jobs") { _, _ in JSONResponder.encode(await self.jobs.snapshot()) }
         router.get("/api/server") { _, _ in await self.serverInfoHandler() }
+        router.get("/api/activity") { _, _ in JSONResponder.encode(await self.activity.snapshot()) }
         router.get("/api/network-test/:bytes") { _, ctx in self.networkTestHandler(ctx) }
         router.post("/api/load") { req, ctx in try await self.loadHandler(req, ctx) }
         router.post("/api/offload") { req, ctx in try await self.offloadHandler(req, ctx) }
@@ -239,42 +242,77 @@ final class ServerRuntime: Sendable {
     // MARK: - Dashboard API handlers
 
     private func loadHandler(_ request: Request, _ context: BasicRequestContext) async throws -> Response {
+        let started = Date()
         guard let body = try? await Self.decode(ModelActionRequest.self, request) else {
+            await activity.record(
+                method: "POST", path: "/api/load", status: 400, startedAt: started,
+                summary: "invalid load request")
             return JSONResponder.error("invalid request body (expected {\"model\": ...})", status: .badRequest)
         }
         do {
             _ = try await manager.load(body.model)
+            await activity.record(
+                method: "POST", path: "/api/load", status: 200, startedAt: started,
+                model: body.model, summary: "loaded model")
             return JSONResponder.encode(["ok": true, "model": .string(body.model)] as [String: JSONValue])
         } catch {
+            await activity.record(
+                method: "POST", path: "/api/load", status: 500, startedAt: started,
+                model: body.model, summary: "load failed: \(error)")
             return JSONResponder.error("load failed: \(error)", status: .internalServerError)
         }
     }
 
     private func offloadHandler(_ request: Request, _ context: BasicRequestContext) async throws -> Response {
+        let started = Date()
         guard let body = try? await Self.decode(ModelActionRequest.self, request) else {
+            await activity.record(
+                method: "POST", path: "/api/offload", status: 400, startedAt: started,
+                summary: "invalid offload request")
             return JSONResponder.error("invalid request body (expected {\"model\": ...})", status: .badRequest)
         }
         let was = await manager.offload(body.model)
+        await activity.record(
+            method: "POST", path: "/api/offload", status: 200, startedAt: started,
+            model: body.model, summary: was ? "offloaded model" : "model was not loaded")
         return JSONResponder.encode(["ok": .bool(true), "offloaded": .bool(was)] as [String: JSONValue])
     }
 
     private func offloadAllHandler() async -> Response {
+        let started = Date()
         let names = await manager.offloadAll()
+        await activity.record(
+            method: "POST", path: "/api/offload-all", status: 200, startedAt: started,
+            summary: "offloaded \(names.count) models")
         return JSONResponder.encode(OffloadAllResponse(ok: true, offloaded: names))
     }
 
     private func deleteHandler(_ request: Request, _ context: BasicRequestContext) async throws -> Response {
+        let started = Date()
         guard let body = try? await Self.decode(ModelActionRequest.self, request) else {
+            await activity.record(
+                method: "POST", path: "/api/delete", status: 400, startedAt: started,
+                summary: "invalid delete request")
             return JSONResponder.error("invalid request body (expected {\"model\": ...})", status: .badRequest)
         }
         if let err = await manager.deleteBundle(body.model) {
+            await activity.record(
+                method: "POST", path: "/api/delete", status: 400, startedAt: started,
+                model: body.model, summary: "delete failed: \(err)")
             return JSONResponder.error(err, status: .badRequest)
         }
+        await activity.record(
+            method: "POST", path: "/api/delete", status: 200, startedAt: started,
+            model: body.model, summary: "deleted bundle")
         return JSONResponder.encode(["ok": .bool(true), "deleted": .string(body.model)] as [String: JSONValue])
     }
 
     private func convertHandler(_ request: Request, _ context: BasicRequestContext) async throws -> Response {
+        let started = Date()
         guard let body = try? await Self.decode(ModelActionRequest.self, request) else {
+            await activity.record(
+                method: "POST", path: "/api/convert", status: 400, startedAt: started,
+                summary: "invalid convert request")
             return JSONResponder.error("invalid request body (expected {\"model\": ...})", status: .badRequest)
         }
         let err = await jobs.startConvert(
@@ -283,8 +321,14 @@ final class ServerRuntime: Sendable {
             workingDir: registryPath.deletingLastPathComponent().deletingLastPathComponent(),
             pythonExecutable: pythonExecutable)
         if let err {
+            await activity.record(
+                method: "POST", path: "/api/convert", status: 400, startedAt: started,
+                model: body.model, summary: "convert not started: \(err)")
             return JSONResponder.error(err, status: .badRequest)
         }
+        await activity.record(
+            method: "POST", path: "/api/convert", status: 200, startedAt: started,
+            model: body.model, summary: "conversion started")
         return JSONResponder.encode(["ok": .bool(true), "started": .string(body.model)] as [String: JSONValue])
     }
 
@@ -330,14 +374,21 @@ final class ServerRuntime: Sendable {
 
     /// `POST /api/rhm-download` {repo, name?} — install an already-converted RHM caix repo.
     private func rhmDownloadHandler(_ request: Request, _ context: BasicRequestContext) async throws -> Response {
+        let started = Date()
         guard let body = try? await Self.decode(RHMDownloadRequest.self, request),
               Self.isAllowedRHMRepo(body.repo) else {
+            await activity.record(
+                method: "POST", path: "/api/rhm-download", status: 400, startedAt: started,
+                summary: "invalid catalog install request")
             return JSONResponder.error("expected {\"repo\":\"redhillsmediafl/<name>-caix\"}", status: .badRequest)
         }
         let layout = try? await fetchRHMRepoLayout(repo: body.repo)
         let meta = try? await fetchRHMBundleMetadata(repo: body.repo, revision: layout?.revision)
         let directBundle = ((meta?.kind ?? "llm") == "llm") && meta != nil
         guard directBundle || (layout?.hasEaglePackage == true) else {
+            await activity.record(
+                method: "POST", path: "/api/rhm-download", status: 400, startedAt: started,
+                summary: "repo is not installable")
             return JSONResponder.error("repo is not an installable caix bundle", status: .badRequest)
         }
         let defaultName = Self.defaultRHMInstallName(
@@ -355,8 +406,14 @@ final class ServerRuntime: Sendable {
             exportsDir: exportsDir,
             estimatedBytes: layout?.usedStorageBytes)
         {
+            await activity.record(
+                method: "POST", path: "/api/rhm-download", status: 400, startedAt: started,
+                model: name, summary: "install not started: \(err)")
             return JSONResponder.error(err, status: .badRequest)
         }
+        await activity.record(
+            method: "POST", path: "/api/rhm-download", status: 200, startedAt: started,
+            model: name, summary: "catalog install started")
         return JSONResponder.encode([
             "ok": .bool(true),
             "started": .bool(true),
@@ -566,8 +623,12 @@ final class ServerRuntime: Sendable {
     /// `POST /api/convert-hf` {hf_repo, name?, compression?, compute_precision?, context?} —
     /// gate on support, then launch the settings-aware conversion.
     private func convertHFHandler(_ request: Request, _ context: BasicRequestContext) async throws -> Response {
+        let started = Date()
         guard let body = try? await Self.decode(HFConvertRequest.self, request),
               !body.hf_repo.trimmingCharacters(in: .whitespaces).isEmpty else {
+            await activity.record(
+                method: "POST", path: "/api/convert-hf", status: 400, startedAt: started,
+                summary: "invalid HF convert request")
             return JSONResponder.error("expected {\"hf_repo\": \"org/model\", ...settings}", status: .badRequest)
         }
         // Support gate (so we can return a clean flagged status before launching).
@@ -576,6 +637,9 @@ final class ServerRuntime: Sendable {
         let supported = (checkObject?["supported"] as? Bool) ?? false
         let ggufOnly = (checkObject?["gguf_only"] as? Bool) ?? false
         if !supported && !ggufOnly {
+            await activity.record(
+                method: "POST", path: "/api/convert-hf", status: 200, startedAt: started,
+                summary: "HF repo needs authoring")
             var headers = HTTPFields(); headers[.contentType] = "application/json"
             // Pass the check JSON straight through (carries model_type, requirements, next_step, reason).
             return Response(status: .ok, headers: headers,
@@ -600,8 +664,14 @@ final class ServerRuntime: Sendable {
                 pythonExecutable: pythonExecutable)
         }
         if let err {
+            await activity.record(
+                method: "POST", path: "/api/convert-hf", status: 400, startedAt: started,
+                model: name, summary: "HF convert not started: \(err)")
             return JSONResponder.error(err, status: .badRequest)
         }
+        await activity.record(
+            method: "POST", path: "/api/convert-hf", status: 200, startedAt: started,
+            model: name, summary: ggufOnly ? "GGUF conversion started" : "HF conversion started")
         return JSONResponder.encode([
             "ok": .bool(true), "supported": .bool(true), "started": .bool(true),
             "gguf": .bool(ggufOnly),
@@ -842,28 +912,47 @@ final class ServerRuntime: Sendable {
     /// local shell-agent page. Disabled when caix is bound to a non-loopback host unless
     /// CAIX_SHELL_AGENT=1 is set by the user.
     private func shellRunHandler(_ request: Request, _ context: BasicRequestContext) async throws -> Response {
+        let started = Date()
         guard shellAgentAllowed else {
+            await activity.record(
+                method: "POST", path: "/api/shell/run", status: 403, startedAt: started,
+                summary: "shell agent disabled")
             return JSONResponder.error(
                 "shell agent is disabled when caix is not bound to loopback; restart with CAIX_SHELL_AGENT=1 only on a trusted machine",
                 status: .forbidden)
         }
         guard let body = try? await Self.decode(ShellRunRequest.self, request) else {
+            await activity.record(
+                method: "POST", path: "/api/shell/run", status: 400, startedAt: started,
+                summary: "invalid shell request")
             return JSONResponder.error(
                 "invalid request body (expected {\"command\":\"...\",\"cwd\":\"...\",\"timeout\":20})",
                 status: .badRequest)
         }
         let command = body.command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !command.isEmpty else {
+            await activity.record(
+                method: "POST", path: "/api/shell/run", status: 400, startedAt: started,
+                summary: "empty shell command")
             return JSONResponder.error("command is empty", status: .badRequest)
         }
         guard command.count <= 8_000 else {
+            await activity.record(
+                method: "POST", path: "/api/shell/run", status: 400, startedAt: started,
+                summary: "shell command too long")
             return JSONResponder.error("command is too long", status: .badRequest)
         }
         guard let cwd = Self.normalizedShellCWD(body.cwd) else {
+            await activity.record(
+                method: "POST", path: "/api/shell/run", status: 400, startedAt: started,
+                summary: "shell cwd invalid")
             return JSONResponder.error("cwd is not a readable directory", status: .badRequest)
         }
         let timeout = min(max(body.timeout ?? 20, 1), 60)
         let result = await Self.runShellCommand(command: command, cwd: cwd, timeoutSeconds: timeout)
+        await activity.record(
+            method: "POST", path: "/api/shell/run", status: 200, startedAt: started,
+            summary: "shell command completed with exit \(result.exitCode)")
         return JSONResponder.encode(result)
     }
 
@@ -1050,6 +1139,7 @@ final class ServerRuntime: Sendable {
     }
 
     private func openAIChatHandler(_ request: Request, _ context: BasicRequestContext) async throws -> Response {
+        let started = Date()
         func log(_ message: @autoclosure () -> String) {
             if verbose {
                 FileHandle.standardError.write(Data("[openai] \(message())\n".utf8))
@@ -1059,10 +1149,16 @@ final class ServerRuntime: Sendable {
         do {
             req = try await Self.decode(OpenAIChatRequest.self, request)
         } catch {
+            await activity.record(
+                method: "POST", path: "/v1/chat/completions", status: 400, startedAt: started,
+                summary: "invalid OpenAI chat request")
             return JSONResponder.error("invalid OpenAI chat request: \(error)", status: .badRequest)
         }
         let gen = req.toGeneration()
         if let response = Self.rejectMultimodalIfNeeded(gen) {
+            await activity.record(
+                method: "POST", path: "/v1/chat/completions", status: 400, startedAt: started,
+                model: gen.model, summary: "multimodal request rejected")
             return response
         }
         let modelName = await resolveModelName(gen.model)
@@ -1072,6 +1168,9 @@ final class ServerRuntime: Sendable {
             handle = try await manager.handle(for: modelName)
             log("handle ready for \(modelName)")
         } catch {
+            await activity.record(
+                method: "POST", path: "/v1/chat/completions", status: 503, startedAt: started,
+                model: modelName, summary: "model load failed: \(error)")
             return JSONResponder.error("could not load model '\(modelName)': \(error)", status: .serviceUnavailable)
         }
 
@@ -1087,7 +1186,7 @@ final class ServerRuntime: Sendable {
         if gen.stream {
             return Self.openAIStream(
                 handle: handle, messages: messages, options: options, tools: tools, format: format,
-                model: modelName, id: id, created: created)
+                model: modelName, id: id, created: created, activity: activity, startedAt: started)
         }
 
         do {
@@ -1106,8 +1205,15 @@ final class ServerRuntime: Sendable {
             let response = OpenAIChatResponse(
                 id: id, model: modelName, created: created, message: message, finish: finish,
                 promptTokens: result.promptTokenCount, completionTokens: result.generatedTokenCount)
+            await activity.record(
+                method: "POST", path: "/v1/chat/completions", status: 200, startedAt: started,
+                model: modelName, summary: "completed (\(finish))",
+                inputTokens: result.promptTokenCount, outputTokens: result.generatedTokenCount)
             return JSONResponder.encode(response)
         } catch {
+            await activity.record(
+                method: "POST", path: "/v1/chat/completions", status: 500, startedAt: started,
+                model: modelName, summary: "generation failed: \(error)")
             return JSONResponder.error("generation failed: \(error)", status: .internalServerError)
         }
     }
@@ -1115,14 +1221,21 @@ final class ServerRuntime: Sendable {
     // MARK: - Anthropic handler
 
     private func anthropicMessagesHandler(_ request: Request, _ context: BasicRequestContext) async throws -> Response {
+        let started = Date()
         let req: AnthropicMessagesRequest
         do {
             req = try await Self.decode(AnthropicMessagesRequest.self, request)
         } catch {
+            await activity.record(
+                method: "POST", path: "/v1/messages", status: 400, startedAt: started,
+                summary: "invalid Anthropic messages request")
             return JSONResponder.error("invalid Anthropic messages request: \(error)", status: .badRequest)
         }
         let gen = req.toGeneration()
         if let response = Self.rejectMultimodalIfNeeded(gen) {
+            await activity.record(
+                method: "POST", path: "/v1/messages", status: 400, startedAt: started,
+                model: gen.model, summary: "multimodal request rejected")
             return response
         }
         let modelName = await resolveModelName(gen.model)
@@ -1130,6 +1243,9 @@ final class ServerRuntime: Sendable {
         do {
             handle = try await manager.handle(for: modelName)
         } catch {
+            await activity.record(
+                method: "POST", path: "/v1/messages", status: 503, startedAt: started,
+                model: modelName, summary: "model load failed: \(error)")
             return JSONResponder.error("could not load model '\(modelName)': \(error)", status: .serviceUnavailable)
         }
 
@@ -1142,7 +1258,7 @@ final class ServerRuntime: Sendable {
         if gen.stream {
             return Self.anthropicStream(
                 handle: handle, messages: messages, options: options, tools: tools, format: format,
-                model: modelName, id: id)
+                model: modelName, id: id, activity: activity, startedAt: started)
         }
 
         do {
@@ -1160,8 +1276,15 @@ final class ServerRuntime: Sendable {
             let response = AnthropicMessagesResponse(
                 id: id, model: modelName, blocks: blocks, stopReason: stop,
                 inputTokens: result.promptTokenCount, outputTokens: result.generatedTokenCount)
+            await activity.record(
+                method: "POST", path: "/v1/messages", status: 200, startedAt: started,
+                model: modelName, summary: "completed (\(stop))",
+                inputTokens: result.promptTokenCount, outputTokens: result.generatedTokenCount)
             return JSONResponder.encode(response)
         } catch {
+            await activity.record(
+                method: "POST", path: "/v1/messages", status: 500, startedAt: started,
+                model: modelName, summary: "generation failed: \(error)")
             return JSONResponder.error("generation failed: \(error)", status: .internalServerError)
         }
     }

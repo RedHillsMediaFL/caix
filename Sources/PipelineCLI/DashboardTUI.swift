@@ -104,6 +104,7 @@ struct DashboardTUI {
         let jobs = fetchArray("api/jobs")
         let genstats = fetchObject("api/genstats")
         let models = fetchArray("api/models")
+        let activity = fetchArray("api/activity")
 
         lines.append(section("server", [
             field("status", server.ok ? "online" : (server.error ?? "offline")),
@@ -151,6 +152,7 @@ struct DashboardTUI {
 
         let jobLines = summarizeJobs(jobs.value)
         lines.append(section("jobs", jobLines.isEmpty ? [field("active", "none")] : jobLines))
+        lines.append(section("activity", summarizeActivity(activity.value)))
 
         return lines.joined(separator: "\n")
     }
@@ -257,7 +259,9 @@ private struct DashboardError: Error, CustomStringConvertible {
 }
 
 private func section(_ title: String, _ rows: [String]) -> String {
-    ([title] + rows.map { "  \($0)" }).joined(separator: "\n")
+    let heading = "╭─ \(title)"
+    let body = rows.map { "│  \($0)" }
+    return ([heading] + body + ["╰"]).joined(separator: "\n")
 }
 
 private func field(_ key: String, _ value: String) -> String {
@@ -327,10 +331,32 @@ private func summarizeJobs(_ rows: [[String: Any]]) -> [String] {
     }
 }
 
+private func summarizeActivity(_ rows: [[String: Any]]) -> [String] {
+    let recent = rows.prefix(7).map { row -> String in
+        let status = row["status"].map { "\($0)" } ?? "-"
+        let method = (row["method"] as? String) ?? "-"
+        let path = (row["path"] as? String) ?? "-"
+        let latency = row.numberValue("latencyMs", "latency_ms").map { "\(Int($0.rounded()))ms" } ?? "-"
+        let model = (row["model"] as? String).map { " \($0)" } ?? ""
+        let summary = (row["summary"] as? String) ?? "-"
+        return "\(status) \(method) \(path) \(latency)\(model) - \(summary)"
+    }
+    return recent.isEmpty ? [field("recent", "none")] : recent
+}
+
 private extension Dictionary where Key == String, Value == Any {
     func boolValue(_ key: String) -> Bool? {
         if let value = self[key] as? Bool { return value }
         if let value = self[key] as? NSNumber { return value.boolValue }
+        return nil
+    }
+
+    func numberValue(_ keys: String...) -> Double? {
+        for key in keys {
+            if let value = self[key] as? Double { return value }
+            if let value = self[key] as? Int { return Double(value) }
+            if let value = self[key] as? NSNumber { return value.doubleValue }
+        }
         return nil
     }
 }

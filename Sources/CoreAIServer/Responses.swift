@@ -93,8 +93,10 @@ extension ServerRuntime {
     static func openAIStream(
         handle: ModelHandle, messages: [[String: String]], options: CoreAIPipeline.Options,
         tools: [[String: any Sendable]]?, format: OutputFormat,
-        model: String, id: String, created: Int
+        model: String, id: String, created: Int,
+        activity: ActivityLog? = nil, startedAt: Date? = nil
     ) -> Response {
+        let requestStart = startedAt ?? Date()
         let (stream, continuation) = AsyncStream<String>.makeStream()
         let genTask = Task<CoreAIPipeline.Result, Error> {
             defer { continuation.finish() }
@@ -136,8 +138,18 @@ extension ServerRuntime {
             try await emit(parser.finish())
 
             var finish = "stop"
-            if let result = try? await genTask.value { finish = openAIFinish(result.stopReason) }
+            let result = try? await genTask.value
+            if let result { finish = openAIFinish(result.stopReason) }
             if sawToolCall { finish = "tool_calls" }
+            await activity?.record(
+                method: "POST",
+                path: "/v1/chat/completions",
+                status: result == nil ? 500 : 200,
+                startedAt: requestStart,
+                model: model,
+                summary: result == nil ? "stream failed" : "stream completed (\(finish))",
+                inputTokens: result?.promptTokenCount,
+                outputTokens: result?.generatedTokenCount)
             try await writer.write(
                 sseData(OpenAIChatChunk(id: id, model: model, created: created, finish: finish)))
             try await writer.write(ByteBuffer(string: "data: [DONE]\n\n"))
@@ -152,8 +164,10 @@ extension ServerRuntime {
     static func anthropicStream(
         handle: ModelHandle, messages: [[String: String]], options: CoreAIPipeline.Options,
         tools: [[String: any Sendable]]?, format: OutputFormat,
-        model: String, id: String
+        model: String, id: String,
+        activity: ActivityLog? = nil, startedAt: Date? = nil
     ) -> Response {
+        let requestStart = startedAt ?? Date()
         let (stream, continuation) = AsyncStream<String>.makeStream()
         let genTask = Task<CoreAIPipeline.Result, Error> {
             defer { continuation.finish() }
@@ -241,11 +255,21 @@ extension ServerRuntime {
 
             var stop = "end_turn"
             var outTokens = 0
-            if let result = try? await genTask.value {
+            let result = try? await genTask.value
+            if let result {
                 stop = anthropicStop(result.stopReason)
                 outTokens = result.generatedTokenCount
             }
             if sawToolCall { stop = "tool_use" }
+            await activity?.record(
+                method: "POST",
+                path: "/v1/messages",
+                status: result == nil ? 500 : 200,
+                startedAt: requestStart,
+                model: model,
+                summary: result == nil ? "stream failed" : "stream completed (\(stop))",
+                inputTokens: result?.promptTokenCount,
+                outputTokens: result?.generatedTokenCount)
             try await writer.write(
                 sseEvent(
                     "message_delta",

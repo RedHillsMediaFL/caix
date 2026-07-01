@@ -49,11 +49,12 @@ func chatTUICommand(_ argv: [String]) {
                 Terminal commands:
                   /help                 Show commands
                   /models               List served models
-                  /model <name>         Switch model
+                  /model [name]         Switch model or open picker
                   /install              Select and install a catalog model
                   /shell ask|on|off     Control model-initiated shell tool access
                   /run <command>        Run a shell command now
                   /cwd <dir>            Change shell working directory
+                  /activity             Show recent server requests
                   /dashboard            Show native dashboard command
                   /system <text>        Set system prompt for future turns
                   /clear                Clear chat history
@@ -168,14 +169,17 @@ struct ChatTUI {
 
     private mutating func printHeader() {
         log("session start endpoint=\(endpoint.absoluteString) model=\(model) shell=\(shellMode.rawValue) cwd=\(cwd)")
+        let width = max(52, min(100, terminalWidth()))
+        print(rule(width: width))
         print("caix tui (cakes)")
-        print("endpoint: \(endpoint.absoluteString)")
-        print("model: \(model)")
-        print("shell: \(shellMode.rawValue)   cwd: \(cwd)")
+        print("server   \(endpoint.absoluteString)")
+        print("model    \(model)")
+        print("shell    \(shellMode.rawValue)   cwd \(cwd)")
         if let warning = ModelSuitability.chatWarning(for: model) {
             print("warning: \(warning)")
         }
-        print("type /help for commands, /install for catalog, /quit to exit")
+        print("type /help for commands, /model for picker, /activity for requests, /quit to exit")
+        print(rule(width: width))
     }
 
     private mutating func handleCommand(_ input: String) throws -> Bool {
@@ -188,11 +192,12 @@ struct ChatTUI {
                 """
                 commands:
                   /models               list served models
-                  /model <name>         switch model
+                  /model [name]         switch model or open picker
                   /install              select and install a catalog model
                   /shell ask|on|off     ask before shell, run directly, or disable
                   /run <command>        run a shell command now
                   /cwd <dir>            change shell working directory
+                  /activity             show recent server requests
                   /dashboard            show native dashboard command
                   /system <text>        set system prompt for future turns
                   /clear                clear chat history
@@ -202,12 +207,10 @@ struct ChatTUI {
             )
         case "/models":
             models = try fetchModels()
-            for name in models {
-                print(name == model ? "* \(name)" : "  \(name)")
-            }
+            printModels()
         case "/model":
-            guard !rest.isEmpty else {
-                print("usage: /model <name>")
+            if rest.isEmpty {
+                try selectModel()
                 return false
             }
             models = try fetchModels()
@@ -229,6 +232,8 @@ struct ChatTUI {
             print("models refreshed: \(models.count)")
         case "/dashboard":
             print("run: caix dashboard --endpoint \(endpoint.absoluteString)")
+        case "/activity":
+            try printActivity()
         case "/shell":
             guard let mode = ShellMode(rawValue: rest.lowercased()) else {
                 print("usage: /shell ask|on|off")
@@ -283,6 +288,61 @@ struct ChatTUI {
             print("unknown command: \(command)")
         }
         return false
+    }
+
+    private func printModels() {
+        guard !models.isEmpty else {
+            print("no served models")
+            return
+        }
+        for (index, name) in models.enumerated() {
+            let marker = name == model ? "*" : " "
+            let warning = ModelSuitability.chatWarning(for: name).map { "  warning: \($0)" } ?? ""
+            print(String(format: "%@ %2d  %@%@", marker, index + 1, name, warning))
+        }
+    }
+
+    private mutating func selectModel() throws {
+        models = try fetchModels()
+        printModels()
+        print("model [\(model)]: ", terminator: "")
+        fflush(stdout)
+        let raw = readLine()?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !raw.isEmpty else { return }
+        let selected: String?
+        if let index = Int(raw), index >= 1, index <= models.count {
+            selected = models[index - 1]
+        } else {
+            selected = models.first { $0.caseInsensitiveCompare(raw) == .orderedSame }
+                ?? models.first { $0.localizedCaseInsensitiveContains(raw) }
+        }
+        guard let selected else {
+            print("model not served: \(raw)")
+            return
+        }
+        model = selected
+        log("model switched to \(model)")
+        print("model: \(model)")
+        if let warning = ModelSuitability.chatWarning(for: model) {
+            print("warning: \(warning)")
+        }
+    }
+
+    private func printActivity() throws {
+        let rows = try fetchActivity()
+        guard !rows.isEmpty else {
+            print("no recent activity")
+            return
+        }
+        for row in rows.prefix(12) {
+            let status = row["status"].map { "\($0)" } ?? "-"
+            let method = row["method"] as? String ?? "-"
+            let path = row["path"] as? String ?? "-"
+            let ms = intFromNumber(row["latencyMs"]) ?? intFromNumber(row["latency_ms"]) ?? 0
+            let model = (row["model"] as? String).map { "  \($0)" } ?? ""
+            let summary = row["summary"] as? String ?? "-"
+            print("\(status) \(method) \(path) \(ms)ms\(model) - \(summary)")
+        }
     }
 
     private mutating func runAgentTurn() throws {
@@ -447,6 +507,16 @@ struct ChatTUI {
         return names
     }
 
+    private func fetchActivity() throws -> [[String: Any]] {
+        var request = URLRequest(url: endpoint.appendingPathComponent("api/activity"), timeoutInterval: 5)
+        request.setValue("caix/\(CaixBuildInfo.version)", forHTTPHeaderField: "User-Agent")
+        let (data, response) = try synchronousData(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw ChatTUIError("could not reach \(endpoint.absoluteString)/api/activity")
+        }
+        return (try JSONSerialization.jsonObject(with: data) as? [[String: Any]]) ?? []
+    }
+
     private func fetchServerExportsDir() throws -> String? {
         var request = URLRequest(url: endpoint.appendingPathComponent("api/server"), timeoutInterval: 5)
         request.setValue("caix/\(CaixBuildInfo.version)", forHTTPHeaderField: "User-Agent")
@@ -561,6 +631,18 @@ private func readLine(prompt: String) -> String? {
     print(prompt, terminator: "")
     fflush(stdout)
     return Swift.readLine()
+}
+
+private func terminalWidth() -> Int {
+    var size = winsize()
+    guard ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == 0, size.ws_col > 0 else {
+        return 80
+    }
+    return Int(size.ws_col)
+}
+
+private func rule(width: Int) -> String {
+    String(repeating: "-", count: max(24, width))
 }
 
 private func parseJSONObject(_ text: String) -> [String: Any] {
