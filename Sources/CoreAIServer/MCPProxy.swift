@@ -15,7 +15,7 @@ enum MCPProxy {
         let initParams: [String: Any] = [
             "protocolVersion": "2025-06-18",
             "capabilities": [:],
-            "clientInfo": ["name": "caix", "version": "0.2.10-beta"],
+            "clientInfo": ["name": "caix", "version": "0.2.11-beta"],
         ]
         let (_, session) = try await rpc(url: url, method: "initialize", params: initParams, id: 1, session: nil)
         // 2. initialized notification (best-effort, no response)

@@ -4,7 +4,7 @@
 # (on a Mac with a matching Core AI runtime). Usage: scripts/package.sh [version]
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${1:-0.2.10-beta}"
+VERSION="${1:-0.2.11-beta}"
 ARCH="$(uname -m)"
 NAME="caix-${VERSION}-macos-${ARCH}"
 
