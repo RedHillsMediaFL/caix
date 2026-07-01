@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.2.6-beta
+
+- Removed stale Hugging Face local-dir locks before catalog installs.
+- Failed catalog installs fast when another downloader still owns a local-dir lock.
+
 ## 0.2.5-beta
 
 - Recovered stale caix heavy-task locks left by interrupted catalog installs.

@@ -325,8 +325,12 @@ enum Catalog {
         }
 
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
         let lock = try acquireHeavyTaskLock(exportsRoot: root, label: "catalog download \(entry.repo)")
         defer { releaseHeavyTaskLock(lock) }
+        let destinationLock = try acquireDestinationInstallLock(destination: destination, label: entry.repo)
+        defer { releaseDestinationInstallLock(destinationLock) }
+        try cleanStaleHFLocalLocks(destination: destination)
         try runHFDownload(command)
         print("installed: \(destination.path)")
         if root.path == caixDefaultExportsPath() {
@@ -778,6 +782,94 @@ enum Catalog {
 
     private static func releaseHeavyTaskLock(_ lock: URL) {
         try? FileManager.default.removeItem(at: lock)
+    }
+
+    private static func acquireDestinationInstallLock(destination: URL, label: String) throws -> URL {
+        let lock = destination.appendingPathComponent(".caix-install.lock")
+        for _ in 0..<2 {
+            let fd = open(lock.path, O_CREAT | O_EXCL | O_WRONLY, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)
+            guard fd >= 0 else {
+                if errno == EEXIST {
+                    if removeStaleHeavyTaskLock(lock) {
+                        FileHandle.standardError.write(Data("removed stale catalog install lock: \(lock.path)\n".utf8))
+                        continue
+                    }
+                    throw CatalogError("catalog install already active for \(destination.path)")
+                }
+                throw CatalogError("could not create catalog install lock \(lock.path): errno \(errno)")
+            }
+            let text = "pid=\(ProcessInfo.processInfo.processIdentifier)\n"
+                + "label=catalog install \(label)\n"
+                + "started=\(ISO8601DateFormatter().string(from: Date()))\n"
+            let data = Array(text.utf8)
+            _ = data.withUnsafeBytes { raw in
+                Darwin.write(fd, raw.baseAddress, raw.count)
+            }
+            close(fd)
+            return lock
+        }
+        throw CatalogError("catalog install already active for \(destination.path)")
+    }
+
+    private static func releaseDestinationInstallLock(_ lock: URL) {
+        try? FileManager.default.removeItem(at: lock)
+    }
+
+    private static func cleanStaleHFLocalLocks(destination: URL) throws {
+        let cache = destination
+            .appendingPathComponent(".cache", isDirectory: true)
+            .appendingPathComponent("huggingface", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: cache.path) else { return }
+        guard let enumerator = FileManager.default.enumerator(
+            at: cache,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [],
+            errorHandler: nil)
+        else { return }
+
+        for case let url as URL in enumerator where url.lastPathComponent.hasSuffix(".lock") {
+            try cleanHFLocalLock(url)
+        }
+    }
+
+    private static func cleanHFLocalLock(_ url: URL) throws {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        if try lockFileHasOpenOwner(url) {
+            throw CatalogError(
+                "another Hugging Face download is using \(url.path); stop that install or wait, then retry")
+        }
+        do {
+            try FileManager.default.removeItem(at: url)
+            FileHandle.standardError.write(
+                Data("removed stale Hugging Face local-dir lock: \(url.path)\n".utf8))
+        } catch CocoaError.fileNoSuchFile {
+            return
+        } catch {
+            throw CatalogError("could not remove stale Hugging Face local-dir lock \(url.path): \(error)")
+        }
+    }
+
+    private static func lockFileHasOpenOwner(_ url: URL) throws -> Bool {
+        let systemLSOF = FileManager.default.isExecutableFile(atPath: "/usr/sbin/lsof")
+            ? "/usr/sbin/lsof"
+            : nil
+        guard let lsof = findExecutable("lsof") ?? systemLSOF
+        else { return false }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: lsof)
+        process.arguments = ["-F", "p", "--", url.path]
+        let stdout = Pipe()
+        process.standardOutput = stdout
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        process.waitUntilExit()
+        let data = stdout.fileHandleForReading.readDataToEndOfFile()
+        if process.terminationStatus == 0 {
+            return String(data: data, encoding: .utf8)?
+                .split(separator: "\n")
+                .contains(where: { $0.hasPrefix("p") }) == true
+        }
+        return false
     }
 
     private static func int64Value(_ value: Any?) -> Int64? {
