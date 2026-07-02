@@ -478,6 +478,7 @@ public struct DistributedBoundaryTensorSpec: Codable, Hashable, Sendable {
 public enum DistributedStageIOScalarType: String, Codable, CaseIterable, Sendable {
     case int32
     case float16
+    case bfloat16
     case float32
 
     public init(boundaryScalarType: DistributedTensorScalarType) {
@@ -491,9 +492,18 @@ public enum DistributedStageIOScalarType: String, Codable, CaseIterable, Sendabl
 
     public var isFloatingPoint: Bool {
         switch self {
-        case .float16, .float32:
+        case .float16, .bfloat16, .float32:
             return true
         case .int32:
+            return false
+        }
+    }
+
+    public func isCompatible(withBoundaryScalarType boundaryScalarType: DistributedTensorScalarType) -> Bool {
+        switch (boundaryScalarType, self) {
+        case (.float16, .float16), (.float16, .bfloat16), (.float32, .float32):
+            return true
+        default:
             return false
         }
     }
@@ -719,11 +729,10 @@ public struct DistributedStageIOContract: Codable, Hashable, Sendable {
         stageID: String,
         boundaryTensor: DistributedBoundaryTensorSpec?
     ) throws {
-        let expectedScalar = boundaryTensor.map {
-            DistributedStageIOScalarType(boundaryScalarType: $0.scalarType)
-        }
-        if let expectedScalar {
-            guard tensor.scalarType == expectedScalar else {
+        if let boundaryTensor {
+            let expectedScalar = DistributedStageIOScalarType(
+                boundaryScalarType: boundaryTensor.scalarType)
+            guard tensor.scalarType.isCompatible(withBoundaryScalarType: boundaryTensor.scalarType) else {
                 throw error(
                     stageID: stageID,
                     "\(kind) hidden_states scalar_type \(tensor.scalarType.rawValue) does not match \(expectedScalar.rawValue)")

@@ -92,12 +92,14 @@ extension DistributedStageIOContract {
             return .int32
         case .float16:
             return .float16
+        case .bfloat16:
+            return .bfloat16
         case .float32:
             return .float32
         default:
             throw CoreAIPipeline.RuntimeError.modelContract(
                 "distributed stage \(kind) '\(tensorName)' scalar type \(scalarType) "
-                    + "is unsupported (expected int32/float16/float32)")
+                    + "is unsupported (expected int32/float16/bfloat16/float32)")
         }
     }
 }
@@ -1214,26 +1216,40 @@ enum DistributedCoreAIStageNDArrayIO {
         return array
     }
 
-    static func makeHiddenStates(
+    fileprivate static func makeHiddenStates(
         packet: DistributedHiddenStatePacket,
         descriptor: NDArrayDescriptor
     ) throws -> NDArray {
         let shape = try DistributedCoreAIStageNDArrayShape.resolvedHiddenStates(
             descriptor.shape,
             packetShape: packet.metadata.shape)
-        var array = NDArray(descriptor: descriptor.resolvingDynamicDimensions(shape))
         switch (descriptor.scalarType, packet.metadata.scalarType) {
         case (.float16, .float16):
+            var array = NDArray(descriptor: descriptor.resolvingDynamicDimensions(shape))
             var view = array.mutableView(as: Float16.self)
             view.copyElements(fromContentsOf: try packet.float16Values())
+            return array
+        case (.bfloat16, .float16):
+            var array = NDArray(descriptor: descriptor.resolvingDynamicDimensions(shape))
+            try fillBFloat16(
+                &array,
+                bitPatterns: try packet.float16Values().map { bfloat16BitPattern(from: Float($0)) })
+            return array
+        case (.bfloat16, .float32):
+            var array = NDArray(descriptor: descriptor.resolvingDynamicDimensions(shape))
+            try fillBFloat16(
+                &array,
+                bitPatterns: try packet.float32Values().map(bfloat16BitPattern))
+            return array
         case (.float32, .float32):
+            var array = NDArray(descriptor: descriptor.resolvingDynamicDimensions(shape))
             var view = array.mutableView(as: Float.self)
             view.copyElements(fromContentsOf: try packet.float32Values())
+            return array
         default:
             throw CoreAIPipeline.RuntimeError.modelContract(
                 "hidden_states scalar type \(descriptor.scalarType) does not match packet \(packet.metadata.scalarType.rawValue)")
         }
-        return array
     }
 
     static func makeHiddenStatesOutput(
@@ -1291,6 +1307,18 @@ enum DistributedCoreAIStageNDArrayIO {
                 byteCount: readback.values.count * DistributedTensorScalarType.float16.byteWidth,
                 stepIndex: stepIndex)
             return try DistributedHiddenStatePacket(metadata: metadata, float16Values: readback.values)
+        case .bfloat16:
+            let readback = try readRank3BFloat16AsFloat16(output, tensorName: "hidden_states")
+            let metadata = DistributedHiddenStatePacketMetadata(
+                requestID: requestID,
+                sourceStageID: sourceStageID,
+                destinationStageID: destinationStageID,
+                positionRange: positionRange,
+                shape: readback.shape,
+                scalarType: .float16,
+                byteCount: readback.values.count * DistributedTensorScalarType.float16.byteWidth,
+                stepIndex: stepIndex)
+            return try DistributedHiddenStatePacket(metadata: metadata, float16Values: readback.values)
         case .float32:
             let readback = try readRank3(output, as: Float.self, tensorName: "hidden_states")
             let metadata = DistributedHiddenStatePacketMetadata(
@@ -1324,6 +1352,8 @@ enum DistributedCoreAIStageNDArrayIO {
                     vocabSize: vocabSize)
                 return offsets.map { Float(pointer[$0]) }
             }
+        case .bfloat16:
+            return try readLastBFloat16LogitsRow(logits, vocabSize: vocabSize)
         case .float32:
             return try logits.view(as: Float.self).withUnsafePointer { pointer, shape, strides in
                 let viewShape = copySpan(shape)
@@ -1346,6 +1376,8 @@ enum DistributedCoreAIStageNDArrayIO {
         switch array.scalarType {
         case .float16:
             return try rank3Summary(array, as: Float16.self, tensorName: "hidden_states")
+        case .bfloat16:
+            return try rank3BFloat16Summary(array, tensorName: "hidden_states")
         case .float32:
             return try rank3Summary(array, as: Float.self, tensorName: "hidden_states")
         default:
@@ -1420,6 +1452,106 @@ enum DistributedCoreAIStageNDArrayIO {
         }
     }
 
+    private static func fillBFloat16(_ array: inout NDArray, bitPatterns: [UInt16]) throws {
+        let count = array.shape.reduce(1, *)
+        guard count == bitPatterns.count else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "bfloat16 hidden_states element count \(bitPatterns.count) does not match array count \(count)")
+        }
+        var rawView = array.mutableRawView()
+        var bytes = rawView.mutableBytes
+        for (index, bitPattern) in bitPatterns.enumerated() {
+            bytes.storeBytes(
+                of: bitPattern,
+                toByteOffset: index * MemoryLayout<UInt16>.size,
+                as: UInt16.self)
+        }
+    }
+
+    private static func readRank3BFloat16AsFloat16(
+        _ array: NDArray,
+        tensorName: String
+    ) throws -> (shape: [Int], values: [Float16]) {
+        let shape = array.shape
+        let offsets = try contiguousRank3Offsets(shape: shape, tensorName: tensorName)
+        let values = try readBFloat16Values(array, offsets: offsets).map(Float16.init)
+        return (shape, values)
+    }
+
+    private static func rank3BFloat16Summary(
+        _ array: NDArray,
+        tensorName: String
+    ) throws -> DistributedCoreAIStageTensorSummary {
+        let shape = array.shape
+        let offsets = try contiguousRank3Offsets(shape: shape, tensorName: tensorName)
+        return DistributedCoreAIStageTensorSummary(
+            scalarType: String(describing: array.scalarType),
+            shape: shape,
+            strides: nil,
+            values: try readBFloat16Values(array, offsets: offsets).map(Double.init))
+    }
+
+    private static func readLastBFloat16LogitsRow(
+        _ array: NDArray,
+        vocabSize: Int
+    ) throws -> [Float] {
+        let shape = array.shape
+        let offsets: [Int]
+        if shape.count == 3 {
+            guard shape[0] == 1, shape[1] > 0, shape[2] == vocabSize else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "bfloat16 logits shape \(shape) does not match [1, -1, \(vocabSize)]")
+            }
+            let row = shape[1] - 1
+            offsets = (0..<vocabSize).map { row * vocabSize + $0 }
+        } else if shape.count == 2 {
+            guard shape[0] > 0, shape[1] == vocabSize else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "bfloat16 logits shape \(shape) does not match [-1, \(vocabSize)]")
+            }
+            let row = shape[0] - 1
+            offsets = (0..<vocabSize).map { row * vocabSize + $0 }
+        } else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "bfloat16 logits rank \(shape.count) is unsupported")
+        }
+        return try readBFloat16Values(array, offsets: offsets)
+    }
+
+    private static func readBFloat16Values(_ array: NDArray, offsets: [Int]) throws -> [Float] {
+        let raw = array.rawView().bytes
+        let elementCount = raw.byteCount / MemoryLayout<UInt16>.size
+        return try offsets.map { offset in
+            guard offset >= 0 && offset < elementCount else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "bfloat16 read offset \(offset) is outside element count \(elementCount)")
+            }
+            let bits = raw.unsafeLoadUnaligned(
+                fromByteOffset: offset * MemoryLayout<UInt16>.size,
+                as: UInt16.self)
+            return Float(bitPattern: UInt32(bits) << 16)
+        }
+    }
+
+    private static func contiguousRank3Offsets(shape: [Int], tensorName: String) throws -> [Int] {
+        guard shape.count == 3 else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "\(tensorName) rank \(shape.count) does not match 3")
+        }
+        guard shape.allSatisfy({ $0 > 0 }) else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "\(tensorName) shape \(shape) has non-positive dimensions")
+        }
+        let count = shape.reduce(1, *)
+        return Array(0..<count)
+    }
+
+    private static func bfloat16BitPattern(from value: Float) -> UInt16 {
+        let bits = value.bitPattern
+        let roundToNearestEven = UInt32(0x7fff) + ((bits >> 16) & 1)
+        return UInt16((bits &+ roundToNearestEven) >> 16)
+    }
+
     private static func copySpan(_ span: Span<Int>) -> [Int] {
         (0..<span.count).map { span[$0] }
     }
@@ -1440,7 +1572,7 @@ enum DistributedCoreAIStageNDArrayIO {
         tensorName: String
     ) throws {
         switch descriptor.scalarType {
-        case .float16, .float32:
+        case .float16, .bfloat16, .float32:
             return
         default:
             throw CoreAIPipeline.RuntimeError.modelContract(
@@ -1454,7 +1586,7 @@ enum DistributedCoreAIStageNDArrayIO {
         tensorName: String
     ) throws {
         switch (expected, descriptor.scalarType) {
-        case (.float16, .float16), (.float32, .float32):
+        case (.float16, .float16), (.float16, .bfloat16), (.float32, .float32):
             return
         default:
             throw CoreAIPipeline.RuntimeError.modelContract(
