@@ -170,7 +170,7 @@ run_one() {
   local idx="$2"
   local stdout_file="$OUT_DIR/${phase}-${idx}.stdout.txt"
   local stderr_file="$OUT_DIR/${phase}-${idx}.stderr.txt"
-  local args=(run --model "$MODEL" --prompt "$PROMPT" --max-tokens "$MAX_TOKENS" --temperature "$TEMPERATURE" --verbose)
+  local args=(run --model "$MODEL" --prompt "$PROMPT" --max-tokens "$MAX_TOKENS" --temperature "$TEMPERATURE" --no-stream --verbose)
   [[ -n "$SEED" ]] && args+=(--seed "$SEED")
   [[ -n "$DRAFT" ]] && args+=(--draft "$DRAFT" --draft-tokens "$DRAFT_TOKENS")
   [[ "$RAW" == "1" ]] && args+=(--raw)

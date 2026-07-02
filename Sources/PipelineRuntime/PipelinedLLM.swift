@@ -65,6 +65,7 @@ enum PipelinedLLM {
         dbg("creating persistent engine (auto->pipelined) ...")
         let engine = try await engineResult
         let tokenizer = try await tokenizerResult
+        dbg("engine type: \(String(reflecting: type(of: engine)))")
         dbg("warming persistent engine ...")
         try await engine.warmup(queryLength: 0, sampling: .greedy)
         let loadSeconds = Date().timeIntervalSince(loadStart)
@@ -200,6 +201,7 @@ enum PipelinedLLM {
         dbg("creating engine (auto→pipelined) …")
         let engine = try await engineResult
         let tokenizer = try await tokenizerResult
+        dbg("engine type: \(String(reflecting: type(of: engine)))")
         dbg("engine + tokenizer ready")
 
         // The pipelined GPU sampler supports greedy + temperature + topK, but NOT topP — drop topP
@@ -243,6 +245,17 @@ enum PipelinedLLM {
         modelLoadSeconds: Double,
         onToken: ((String) -> Void)?
     ) async throws -> CoreAIPipeline.Result {
+        if onToken == nil {
+            return try await decodeTokenAccurate(
+                input: input,
+                tokenizer: tokenizer,
+                inferenceEngine: inferenceEngine,
+                samplingConfiguration: samplingConfiguration,
+                options: options,
+                promptTokenCount: promptTokenCount,
+                modelLoadSeconds: modelLoadSeconds)
+        }
+
         let maxTokens = max(0, options.maxTokens)
         let stopSequences = options.stopSequences.filter { !$0.isEmpty }
         let stream = try VanillaDecodingStrategy().decode(
@@ -306,6 +319,82 @@ enum PipelinedLLM {
             modelLoadSeconds: modelLoadSeconds,
             prefillSeconds: 0,
             decodeSeconds: Date().timeIntervalSince(decodeStart))
+    }
+
+    private static func decodeTokenAccurate(
+        input: Input,
+        tokenizer: any Tokenizer,
+        inferenceEngine: any InferenceEngine,
+        samplingConfiguration: SamplingConfiguration,
+        options: CoreAIPipeline.Options,
+        promptTokenCount: Int,
+        modelLoadSeconds: Double
+    ) async throws -> CoreAIPipeline.Result {
+        let maxTokens = max(0, options.maxTokens)
+        let inputTokens =
+            try PromptUtils
+            .maybeApplyTokenizerChatTemplate(input, tokenizer: tokenizer)
+            .map(Int32.init)
+        let customStops = options.stopSequences
+            .filter { !$0.isEmpty }
+            .map { tokenizer.encode(text: $0).map(Int32.init) }
+            .filter { !$0.isEmpty }
+        let stopSequences = StopSequences(
+            for: tokenizer,
+            additionalSequences: customStops)
+        let stream = try inferenceEngine.generate(
+            with: inputTokens,
+            samplingConfiguration: samplingConfiguration,
+            inferenceOptions: InferenceOptions(maxTokens: maxTokens))
+
+        let startedAt = Date()
+        var firstTokenAt: Date?
+        var lastTokenAt: Date?
+        var generated: [Int32] = []
+        var recent: [Int32] = []
+        var stopReason: CoreAIPipeline.StopReason = .maxTokens
+        var iterator = stream.makeAsyncIterator()
+
+        while let output = try await iterator.next() {
+            let now = Date()
+            if firstTokenAt == nil { firstTokenAt = now }
+            lastTokenAt = now
+
+            generated.append(output.tokenId)
+            if stopSequences.maxLength > 0 {
+                recent.append(output.tokenId)
+                if recent.count > stopSequences.maxLength {
+                    recent.removeFirst(recent.count - stopSequences.maxLength)
+                }
+                if let matched = stopSequences.matchedSequence(recentTokens: recent) {
+                    if generated.count >= matched.count {
+                        generated.removeLast(matched.count)
+                    }
+                    let stopText = tokenizer.decode(tokens: matched.map(Int.init))
+                    stopReason = stopText.isEmpty ? .eos : .stopSequence
+                    try? await inferenceEngine.cancel()
+                    break
+                }
+            }
+        }
+
+        let text = tokenizer.decode(tokens: generated.map(Int.init))
+        let prefillSeconds = firstTokenAt.map { max(0, $0.timeIntervalSince(startedAt)) } ?? 0
+        let decodeSeconds: Double
+        if let firstTokenAt, let lastTokenAt {
+            decodeSeconds = max(0, lastTokenAt.timeIntervalSince(firstTokenAt))
+        } else {
+            decodeSeconds = 0
+        }
+
+        return CoreAIPipeline.Result(
+            text: text,
+            promptTokenCount: promptTokenCount,
+            generatedTokenCount: generated.count,
+            stopReason: stopReason,
+            modelLoadSeconds: modelLoadSeconds,
+            prefillSeconds: prefillSeconds,
+            decodeSeconds: decodeSeconds)
     }
 }
 

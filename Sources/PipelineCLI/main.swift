@@ -136,6 +136,7 @@ func printUsage() {
           --top-p <P>            Top-P / nucleus filter (temperature > 0)
           --seed <S>             RNG seed for reproducible sampling
           --raw                  Skip the chat template (raw completion)
+          --no-stream            Print the completed response after generation; used for token-accurate benchmarks
           --kv-capacity <N>      Fixed KV cache capacity override (auto-floored per model)
           --verbose              Emit timing/diagnostics to stderr
 
@@ -370,6 +371,7 @@ func runCommand(_ argv: [String]) {
     var topP: Double?
     var seed: UInt64?
     var applyChatTemplate = true
+    var streamOutput = true
     var kvCapacity: Int?
     var verbose = false
 
@@ -409,6 +411,7 @@ func runCommand(_ argv: [String]) {
             seed = s
         case "--kv-capacity": kvCapacity = intValue(arg)
         case "--raw", "--no-chat-template": applyChatTemplate = false
+        case "--no-stream": streamOutput = false
         case "--verbose", "-v": verbose = true
         case "-h", "--help": printUsage(); exit(0)
         default: fail("unknown option: \(arg)")
@@ -443,9 +446,9 @@ func runCommand(_ argv: [String]) {
     Task {
         defer { semaphore.signal() }
         do {
-            let onToken: (String) -> Void = { delta in
+            let onToken: ((String) -> Void)? = streamOutput ? { delta in
                 FileHandle.standardOutput.write(Data(delta.utf8))
-            }
+            } : nil
             if CoreAIPipeline.isDiffusionBundle(modelPath: modelPath) {
                 // Block-diffusion bundle (stateless bidirectional forward + host denoise loop).
                 let result = try await CoreAIPipeline.runDiffusion(
@@ -453,6 +456,7 @@ func runCommand(_ argv: [String]) {
                     prompt: promptText,
                     options: options,
                     onToken: onToken)
+                if !streamOutput { FileHandle.standardOutput.write(Data(result.text.utf8)) }
                 FileHandle.standardOutput.write(Data("\n".utf8))
                 // The denoise mechanics are the headline — always report them.
                 let summary = String(
@@ -480,6 +484,7 @@ func runCommand(_ argv: [String]) {
                     options: options,
                     draftTokens: draftTokens,
                     onToken: onToken)
+                if !streamOutput { FileHandle.standardOutput.write(Data(result.text.utf8)) }
                 FileHandle.standardOutput.write(Data("\n".utf8))
                 // The acceptance rate + speedup is the headline metric — always report it.
                 let summary = String(
@@ -500,6 +505,7 @@ func runCommand(_ argv: [String]) {
                     options: options,
                     onToken: onToken)
                 // Newline after the streamed text, then a short summary to stderr.
+                if !streamOutput { FileHandle.standardOutput.write(Data(result.text.utf8)) }
                 FileHandle.standardOutput.write(Data("\n".utf8))
                 if verbose {
                     let summary = String(
