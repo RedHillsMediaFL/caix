@@ -10,6 +10,10 @@ public struct BundleManifest: Codable, Sendable {
     public struct Assets: Codable, Sendable {
         public let byName: [String: String]
 
+        public init(byName: [String: String]) {
+            self.byName = byName
+        }
+
         public init(from decoder: Decoder) throws {
             let c = try decoder.singleValueContainer()
             self.byName = try c.decode([String: String].self)
@@ -99,10 +103,10 @@ public struct BundleManifest: Codable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.metadataVersion = try c.decode(String.self, forKey: .metadataVersion)
-        self.kind = try c.decode(String.self, forKey: .kind)
-        self.name = try c.decode(String.self, forKey: .name)
-        self.assets = try c.decode(Assets.self, forKey: .assets)
+        self.metadataVersion = try c.decodeIfPresent(String.self, forKey: .metadataVersion) ?? "legacy-coreai-asset"
+        self.kind = try c.decodeIfPresent(String.self, forKey: .kind) ?? "coreai_asset"
+        self.name = try c.decodeIfPresent(String.self, forKey: .name) ?? "legacy-coreai-asset"
+        self.assets = try c.decodeIfPresent(Assets.self, forKey: .assets) ?? Assets(byName: ["main": "."])
         self.language = try c.decodeIfPresent(Language.self, forKey: .language)
         self.source = try c.decodeIfPresent(Source.self, forKey: .source)
     }

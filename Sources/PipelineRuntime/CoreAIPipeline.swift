@@ -428,20 +428,8 @@ public enum CoreAIPipeline {
     /// is only reliable after specialization.
     public static func inspectBundle(modelPath: String) async throws -> String {
         #if COREAI_RUNTIME
-        let bundle = try ResolvedBundle.load(at: modelPath)
         var specialization = SpecializationOptions(preferredComputeUnitKind: LLMEngine.preferredComputeUnit())
         specialization.expectFrequentReshapes = true
-        let mainModel = try await AIModel.specialize(
-            contentsOf: bundle.aimodelURL, options: specialization,
-            cache: .default, cachePolicy: .persistent)
-        let decodeModel: AIModel?
-        if let decodeURL = bundle.decodeAimodelURL {
-            decodeModel = try await AIModel.specialize(
-                contentsOf: decodeURL, options: specialization,
-                cache: .default, cachePolicy: .persistent)
-        } else {
-            decodeModel = nil
-        }
 
         func appendFunction(
             role: String, name: String, model: AIModel, lines: inout [String]
@@ -484,6 +472,59 @@ public enum CoreAIPipeline {
                     lines.append("    state \(state): <missing>")
                 }
             }
+        }
+
+        let expanded = (modelPath as NSString).expandingTildeInPath
+        let root = URL(fileURLWithPath: expanded, isDirectory: true)
+        let fm = FileManager.default
+
+        func inspectRawAimodel(role: String, url: URL, lines: inout [String]) async throws {
+            let model = try await AIModel.specialize(
+                contentsOf: url, options: specialization,
+                cache: .default, cachePolicy: .persistent)
+            let functionName = model.functionNames.contains("main") ? "main" : (model.functionNames.first ?? "main")
+            try appendFunction(role: role, name: functionName, model: model, lines: &lines)
+        }
+
+        let eagleTarget = root.appendingPathComponent("eagle_target.aimodel")
+        let eagleDraft = root.appendingPathComponent("eagle_draft.aimodel")
+        if fm.fileExists(atPath: eagleTarget.path), fm.fileExists(atPath: eagleDraft.path) {
+            var lines = [
+                "bundle=\(root.path)",
+                "package=eagle-mtp",
+                "target_asset=\(eagleTarget.lastPathComponent)",
+                "draft_asset=\(eagleDraft.lastPathComponent)"
+            ]
+            try await inspectRawAimodel(role: "target", url: eagleTarget, lines: &lines)
+            try await inspectRawAimodel(role: "draft", url: eagleDraft, lines: &lines)
+            let unrolled = root.appendingPathComponent("eagle_draft_unrolled_k4.aimodel")
+            if fm.fileExists(atPath: unrolled.path) {
+                lines.append("draft_unrolled_asset=\(unrolled.lastPathComponent)")
+                try await inspectRawAimodel(role: "draft_unrolled", url: unrolled, lines: &lines)
+            }
+            return lines.joined(separator: "\n")
+        }
+
+        if root.pathExtension == "aimodel" {
+            var lines = [
+                "bundle=\(root.path)",
+                "main_asset=\(root.lastPathComponent)"
+            ]
+            try await inspectRawAimodel(role: "main", url: root, lines: &lines)
+            return lines.joined(separator: "\n")
+        }
+
+        let bundle = try ResolvedBundle.load(at: modelPath)
+        let mainModel = try await AIModel.specialize(
+            contentsOf: bundle.aimodelURL, options: specialization,
+            cache: .default, cachePolicy: .persistent)
+        let decodeModel: AIModel?
+        if let decodeURL = bundle.decodeAimodelURL {
+            decodeModel = try await AIModel.specialize(
+                contentsOf: decodeURL, options: specialization,
+                cache: .default, cachePolicy: .persistent)
+        } else {
+            decodeModel = nil
         }
 
         let functionMap = bundle.manifest.language?.functionMap

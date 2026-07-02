@@ -3,6 +3,17 @@ import XCTest
 @testable import PipelineRuntime
 
 final class BundleManifestTests: XCTestCase {
+    func testLegacyCoreAIAssetMetadataDefaultsMissingBundleFields() throws {
+        let data = #"{"assetVersion":"1.0"}"#.data(using: .utf8)!
+        let manifest = try JSONDecoder().decode(BundleManifest.self, from: data)
+
+        XCTAssertEqual(manifest.metadataVersion, "legacy-coreai-asset")
+        XCTAssertEqual(manifest.kind, "coreai_asset")
+        XCTAssertEqual(manifest.name, "legacy-coreai-asset")
+        XCTAssertEqual(manifest.assets.primary, ".")
+        XCTAssertNil(manifest.language)
+    }
+
     func testExplicitMinKVCapacityWins() throws {
         let root = try makeBundle(
             name: "ornith-1.0-9b-coreai",
