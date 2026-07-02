@@ -1191,8 +1191,8 @@ final class ServerRuntime: Sendable {
 
         do {
             log("generation start for \(modelName)")
-            let generationStarted = Date()
             let result = try await handle.generate(messages: messages, options: options, tools: tools)
+            let completedAt = Date()
             log("generation done for \(modelName): \(result.generatedTokenCount) tokens")
             // Normalize the raw base-format output into reasoning_content + content + tool_calls.
             let norm = StreamingNormalizer.normalizeComplete(result.text, format: format)
@@ -1210,7 +1210,8 @@ final class ServerRuntime: Sendable {
                 method: "POST", path: "/v1/chat/completions", status: 200, startedAt: started,
                 model: modelName, summary: "completed (\(finish))",
                 inputTokens: result.promptTokenCount, outputTokens: result.generatedTokenCount,
-                firstTokenSeconds: generationStarted.timeIntervalSince(started) + result.prefillSeconds,
+                firstTokenSeconds: Self.nonStreamingFirstTokenSeconds(
+                    startedAt: started, completedAt: completedAt, result: result),
                 loadSeconds: result.modelLoadSeconds, prefillSeconds: result.prefillSeconds,
                 decodeSeconds: result.decodeSeconds)
             return JSONResponder.encode(response)
@@ -1266,8 +1267,8 @@ final class ServerRuntime: Sendable {
         }
 
         do {
-            let generationStarted = Date()
             let result = try await handle.generate(messages: messages, options: options, tools: tools)
+            let completedAt = Date()
             // Normalize into thinking + text + tool_use content blocks (in that order).
             let norm = StreamingNormalizer.normalizeComplete(result.text, format: format)
             var blocks: [AnthropicBlock] = []
@@ -1285,7 +1286,8 @@ final class ServerRuntime: Sendable {
                 method: "POST", path: "/v1/messages", status: 200, startedAt: started,
                 model: modelName, summary: "completed (\(stop))",
                 inputTokens: result.promptTokenCount, outputTokens: result.generatedTokenCount,
-                firstTokenSeconds: generationStarted.timeIntervalSince(started) + result.prefillSeconds,
+                firstTokenSeconds: Self.nonStreamingFirstTokenSeconds(
+                    startedAt: started, completedAt: completedAt, result: result),
                 loadSeconds: result.modelLoadSeconds, prefillSeconds: result.prefillSeconds,
                 decodeSeconds: result.decodeSeconds)
             return JSONResponder.encode(response)
@@ -1295,6 +1297,17 @@ final class ServerRuntime: Sendable {
                 model: modelName, summary: "generation failed: \(error)")
             return JSONResponder.error("generation failed: \(error)", status: .internalServerError)
         }
+    }
+
+    private static func nonStreamingFirstTokenSeconds(
+        startedAt: Date,
+        completedAt: Date,
+        result: CoreAIPipeline.Result
+    ) -> Double {
+        // Non-streaming responses only observe the full generation result. Subtracting measured
+        // decode time leaves request-time work before the first decoded token, including any model
+        // load that happened for this request.
+        max(0, completedAt.timeIntervalSince(startedAt) - max(0, result.decodeSeconds))
     }
 
     // MARK: - Model resolution
