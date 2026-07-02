@@ -8,16 +8,40 @@ import PipelineRuntime
 /// Builds `application/json` responses by encoding `Encodable` values with Foundation, so the
 /// serving layer doesn't depend on Hummingbird's content negotiation.
 enum JSONResponder {
-    static func encode<T: Encodable>(_ value: T, status: HTTPResponse.Status = .ok) -> Response {
+    static func encode<T: Encodable>(
+        _ value: T,
+        status: HTTPResponse.Status = .ok,
+        headers extraHeaders: HTTPFields = HTTPFields()
+    ) -> Response {
         let data = (try? JSONEncoder().encode(value)) ?? Data(#"{"error":"encoding failed"}"#.utf8)
         var headers = HTTPFields()
         headers[.contentType] = "application/json"
+        for field in extraHeaders {
+            headers.append(field)
+        }
         return Response(
             status: status, headers: headers, body: ResponseBody(byteBuffer: ByteBuffer(bytes: data)))
     }
 
     static func error(_ message: String, status: HTTPResponse.Status) -> Response {
         encode(["error": ["message": message, "type": "coreai_error"]], status: status)
+    }
+
+    static func conversionActive(_ decision: ConversionGuard.Decision) -> Response {
+        var headers = HTTPFields()
+        headers[.retryAfter] = "\(decision.retryAfterSeconds)"
+        return encode(
+            [
+                "error": [
+                    "message": JSONValue.string(
+                        "generation is temporarily unavailable while a model conversion is active"),
+                    "type": JSONValue.string("conversion_active"),
+                    "reason": JSONValue.string(decision.reason),
+                    "retry_after_seconds": JSONValue.int(decision.retryAfterSeconds),
+                ],
+            ] as [String: [String: JSONValue]],
+            status: .serviceUnavailable,
+            headers: headers)
     }
 }
 

@@ -100,6 +100,7 @@ func printUsage() {
           --prewarm <model|smallest|all|off>
                                   Warm model before listening (default: smallest)
           --no-prewarm            Start serving without first-request compile warmup
+          --no-conversion-guard   Allow generation while conversion is active
           --cluster <manifest>    Stage manifest for distributed coordinator mode
           --remote-stage <id>     Remote stage id; repeatable (default: all transformer stages)
           --prompt-tokens <list>  Comma-separated token ids for a staged POC request
@@ -704,6 +705,7 @@ func serveCommand(_ argv: [String]) {
     var verbose = false
     var statsFile: String? = nil   // usage-stats persistence (default ~/.caix/usage.json)
     var prewarm = "smallest"
+    var conversionGuardEnabled = true
     var clusterManifest: String? = nil
     var clusterOptions = ClusterRuntimeOptions()
     // EAGLE MTP model. Enabled by default with the known bundle paths; disable with --no-eagle,
@@ -748,6 +750,7 @@ func serveCommand(_ argv: [String]) {
         case "--stats-file": statsFile = value(arg)
         case "--prewarm": prewarm = value(arg)
         case "--no-prewarm": prewarm = "off"
+        case "--no-conversion-guard": conversionGuardEnabled = false
         case "--cluster": clusterManifest = value(arg)
         case "--remote-stage": clusterOptions.remoteStageIDs.append(value(arg))
         case "--prompt-tokens":
@@ -851,7 +854,8 @@ func serveCommand(_ argv: [String]) {
                 verbose: verbose,
                 eagleConfig: eagleConfig,
                 statsFile: statsFile,
-                prewarm: prewarm)
+                prewarm: prewarm,
+                conversionGuardEnabled: conversionGuardEnabled)
         } catch {
             FileHandle.standardError.write(Data("serve error: \(error)\n".utf8))
             exitCode = 1

@@ -27,7 +27,8 @@ public enum CoreAIServer {
         verbose: Bool = false,
         eagleConfig: EagleConfig? = nil,
         statsFile: String? = nil,
-        prewarm: String = "smallest"
+        prewarm: String = "smallest",
+        conversionGuardEnabled: Bool = true
     ) async throws {
         // Persist usage stats (totals + per-model) across restarts, ollama/omlx-style.
         let statsPath = statsFile ?? (NSHomeDirectory() + "/.caix/usage.json")
@@ -42,7 +43,8 @@ public enum CoreAIServer {
             pythonExecutable: pythonExecutable,
             caixVersion: caixVersion,
             verbose: verbose,
-            eagleConfig: eagleConfig)
+            eagleConfig: eagleConfig,
+            conversionGuardEnabled: conversionGuardEnabled)
 
         await runtime.prewarm(selection: prewarm)
 
@@ -72,6 +74,7 @@ public enum CoreAIServer {
                               POST /api/convert  POST /api/load  POST /api/offload
                   runtime     \(linked)
                   prewarm     \(prewarm)
+                  guard      \(conversionGuardEnabled ? "conversion-aware" : "off")
                 """.appending("\n").utf8))
 
         try await app.runService()
@@ -96,11 +99,13 @@ final class ServerRuntime: Sendable {
     let chatHTML: String
     let shellHTML: String
     let verbose: Bool
+    let conversionGuard: ConversionGuard
     var userAgent: String { "caix/\(caixVersion)" }
 
     init(
         host: String, port: Int, exportsDir: URL, registryPath: URL, webDir: URL, convertScript: String,
-        pythonExecutable: String, caixVersion: String, verbose: Bool, eagleConfig: EagleConfig? = nil
+        pythonExecutable: String, caixVersion: String, verbose: Bool, eagleConfig: EagleConfig? = nil,
+        conversionGuardEnabled: Bool = true
     ) {
         self.host = host
         self.port = port
@@ -116,6 +121,9 @@ final class ServerRuntime: Sendable {
         self.pythonExecutable = pythonExecutable
         self.caixVersion = caixVersion
         self.verbose = verbose
+        self.conversionGuard = ConversionGuard(
+            enabled: conversionGuardEnabled,
+            lockPaths: ConversionGuard.defaultLockPaths(exportsDir: exportsDir))
         let indexURL = webDir.appendingPathComponent("index.html")
         self.indexHTML =
             (try? String(contentsOf: indexURL, encoding: .utf8))
@@ -134,6 +142,11 @@ final class ServerRuntime: Sendable {
         let selection = rawSelection.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard selection != "off", selection != "none", selection != "false", selection != "no" else {
             FileHandle.standardError.write(Data("[serve] prewarm skipped\n".utf8))
+            return
+        }
+        if let decision = conversionGuard.decision() {
+            FileHandle.standardError.write(
+                Data("[serve] prewarm skipped: \(decision.reason); serving health endpoints only until conversion clears\n".utf8))
             return
         }
         let models = await manager.servedModelsPreferredForChat()
@@ -1140,6 +1153,10 @@ final class ServerRuntime: Sendable {
 
     private func openAIChatHandler(_ request: Request, _ context: BasicRequestContext) async throws -> Response {
         let started = Date()
+        if let response = await conversionGuardResponse(
+            method: "POST", path: "/v1/chat/completions", startedAt: started) {
+            return response
+        }
         func log(_ message: @autoclosure () -> String) {
             if verbose {
                 FileHandle.standardError.write(Data("[openai] \(message())\n".utf8))
@@ -1227,6 +1244,10 @@ final class ServerRuntime: Sendable {
 
     private func anthropicMessagesHandler(_ request: Request, _ context: BasicRequestContext) async throws -> Response {
         let started = Date()
+        if let response = await conversionGuardResponse(
+            method: "POST", path: "/v1/messages", startedAt: started) {
+            return response
+        }
         let req: AnthropicMessagesRequest
         do {
             req = try await Self.decode(AnthropicMessagesRequest.self, request)
@@ -1297,6 +1318,17 @@ final class ServerRuntime: Sendable {
                 model: modelName, summary: "generation failed: \(error)")
             return JSONResponder.error("generation failed: \(error)", status: .internalServerError)
         }
+    }
+
+    private func conversionGuardResponse(method: String, path: String, startedAt: Date) async -> Response? {
+        guard let decision = conversionGuard.decision() else { return nil }
+        await activity.record(
+            method: method,
+            path: path,
+            status: 503,
+            startedAt: startedAt,
+            summary: "generation blocked: \(decision.reason)")
+        return JSONResponder.conversionActive(decision)
     }
 
     private static func nonStreamingFirstTokenSeconds(
