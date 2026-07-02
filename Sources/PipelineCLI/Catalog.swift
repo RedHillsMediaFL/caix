@@ -702,10 +702,24 @@ enum Catalog {
         if text.contains("not yet verified") || text.contains("not verified") || text.contains("unverified") {
             return "unverified"
         }
+        if text.contains("hardware smoke pending")
+            || text.contains("hardware runtime smoke")
+            || text.contains("runtime smoke is still pending")
+            || text.contains("testing wanted")
+            || text.contains("needs-test")
+        {
+            return "needs-test"
+        }
+        if text.contains("structural check passed")
+            || text.contains("cluster plan")
+            || text.contains("structural-only")
+        {
+            return "structural-only"
+        }
         if text.contains("verified") || text.contains("smoke passed") || text.contains("readback ok") {
             return "verified"
         }
-        if text.contains("tester") || text.contains("testing wanted") {
+        if text.contains("tester") {
             return "needs-test"
         }
         return "not-stated"

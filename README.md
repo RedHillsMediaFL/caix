@@ -186,6 +186,12 @@ caix catalog install <repo>
 ```
 
 Model cards list exact revisions, licenses, storage, RAM notes, and any speculative or EAGLE flags.
+Catalog entries are published only when they are backed by open-source/open-weight models and either
+have runtime verification, or are converted artifacts that our current hardware cannot fully smoke.
+Those cards must say what passed and what still needs tester hardware. Blocked and component-only
+packages must be labeled that way.
+
+To submit a model or tester result, see [docs/CATALOG_SUBMISSIONS.md](docs/CATALOG_SUBMISSIONS.md).
 
 **B. Convert a bundle.** See [Converting models](#converting-models-advanced).
 

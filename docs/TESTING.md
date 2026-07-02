@@ -5,6 +5,8 @@ Use this when testing a converted `redhillsmediafl/*-caix` bundle on hardware we
 Do not submit speed claims without raw logs. Do not compare runs that use different prompts, token
 budgets, temperature, seed, streaming mode, or chat-template mode.
 
+Catalog publication and submission rules are in [CATALOG_SUBMISSIONS.md](CATALOG_SUBMISSIONS.md).
+
 ## Pick a Target
 
 Prefer repos that are not already verified on the host you are using, or repos missing measured raw
