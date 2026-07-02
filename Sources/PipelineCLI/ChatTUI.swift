@@ -37,6 +37,9 @@ func chatTUICommand(_ argv: [String]) {
         case "--temperature":
             guard let parsed = Double(value(arg)), parsed >= 0 else { fail("--temperature must be >= 0") }
             options.temperature = parsed
+        case "--top-p":
+            guard let parsed = Double(value(arg)), parsed > 0, parsed <= 1 else { fail("--top-p must be in (0, 1]") }
+            options.topP = parsed
         case "--system":
             options.systemPrompt = value(arg)
         case "-h", "--help":
@@ -57,6 +60,10 @@ func chatTUICommand(_ argv: [String]) {
                   /activity             Show recent server requests
                   /dashboard            Show native dashboard command
                   /system <text>        Set system prompt for future turns
+                  /temperature <x>      Set sampling temperature for future turns
+                  /top-p <x|default>    Set nucleus sampling for future turns
+                  /max-tokens <n>       Set generation limit for future turns
+                  /params               Show current generation parameters
                   /clear                Clear chat history
                   /quit                 Exit
                 """
@@ -91,6 +98,7 @@ struct ChatTUI {
         var cwd = FileManager.default.currentDirectoryPath
         var maxTokens = 1024
         var temperature = 0.7
+        var topP: Double?
         var systemPrompt: String?
     }
 
@@ -200,6 +208,10 @@ struct ChatTUI {
                   /activity             show recent server requests
                   /dashboard            show native dashboard command
                   /system <text>        set system prompt for future turns
+                  /temperature <x>      set sampling temperature for future turns
+                  /top-p <x|default>    set nucleus sampling for future turns
+                  /max-tokens <n>       set generation limit for future turns
+                  /params               show current generation parameters
                   /clear                clear chat history
                   /log                  print redacted session log
                   /quit                 exit
@@ -273,6 +285,47 @@ struct ChatTUI {
                 log("system prompt cleared")
                 print("system prompt cleared")
             }
+        case "/temperature":
+            guard let parsed = Double(rest), parsed >= 0 else {
+                print("usage: /temperature <value >= 0>  (current: \(options.temperature))")
+                return false
+            }
+            options.temperature = parsed
+            log("temperature \(parsed)")
+            print("temperature: \(parsed)")
+        case "/top-p", "/top_p":
+            if rest.lowercased() == "default" {
+                options.topP = nil
+                log("top_p default")
+                print("top_p: server default")
+                return false
+            }
+            guard let parsed = Double(rest), parsed > 0, parsed <= 1 else {
+                let current = options.topP.map { "\($0)" } ?? "server default"
+                print("usage: /top-p <value in (0, 1]|default>  (current: \(current))")
+                return false
+            }
+            options.topP = parsed
+            log("top_p \(parsed)")
+            print("top_p: \(parsed)")
+        case "/max-tokens":
+            guard let parsed = Int(rest), parsed > 0 else {
+                print("usage: /max-tokens <positive integer>  (current: \(options.maxTokens))")
+                return false
+            }
+            options.maxTokens = parsed
+            log("max tokens \(parsed)")
+            print("max tokens: \(parsed)")
+        case "/params":
+            let topP = options.topP.map { "\($0)" } ?? "server default"
+            print(
+                """
+                generation parameters:
+                  temperature  \(options.temperature)
+                  top_p        \(topP)
+                  max tokens   \(options.maxTokens)
+                """
+            )
         case "/clear":
             let system = history.first(where: { $0.role == "system" })
             history.removeAll()
@@ -460,6 +513,9 @@ struct ChatTUI {
             "temperature": options.temperature,
             "stream": false,
         ]
+        if let topP = options.topP {
+            body["top_p"] = topP
+        }
         if shellMode != .off {
             body["tools"] = [
                 [
