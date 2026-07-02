@@ -2,88 +2,166 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
+<script>(function(){try{var t=localStorage.getItem('caix.theme');if(!t)t=(window.matchMedia&&matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark';if(t==='dark')document.documentElement.classList.add('dark');}catch(e){}})();</script>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>caix shell</title>
 <style>
   :root{
-    color-scheme:dark;
-    --bg:#101114;--surface:#17181d;--raised:#202127;--line:#2d3038;--line-soft:#242730;
-    --text:#f1f2f5;--muted:#a3a7b1;--faint:#707580;--accent:#0a84ff;--accent-dim:rgba(10,132,255,.16);
-    --warn:#e0a64e;--bad:#f0625d;--ok:#46d39a;--blue:#64a8ff;
-    --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;
-    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    color-scheme:light dark;
+    --background:240 20% 97%;
+    --foreground:240 6% 9%;
+    --card:0 0% 100%;
+    --card-foreground:240 6% 9%;
+    --primary:211 100% 50%;
+    --primary-foreground:0 0% 100%;
+    --secondary:240 13% 93%;
+    --secondary-foreground:240 6% 12%;
+    --muted:240 12% 92%;
+    --muted-foreground:240 4% 42%;
+    --accent:211 100% 96%;
+    --accent-foreground:211 100% 36%;
+    --destructive:3 74% 45%;
+    --success:150 55% 33%;
+    --warning:36 88% 46%;
+    --warm-accent:266 48% 48%;
+    --caix:176 56% 34%;
+    --info:211 100% 50%;
+    --border:240 11% 86%;
+    --input:240 11% 86%;
+    --ring:211 100% 50%;
+    --radius:8px;
+    --shadow-sm:0 1px 2px rgb(0 0 0 / .07),0 10px 24px rgb(0 0 0 / .04);
+    --shadow-md:0 18px 50px rgb(0 0 0 / .10);
+    --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",system-ui,sans-serif;
+    --heading:-apple-system,BlinkMacSystemFont,"SF Pro Display","Helvetica Neue",system-ui,sans-serif;
+    --mono:"JetBrains Mono","SF Mono",Menlo,Consolas,monospace;
+  }
+  .dark{
+    --background:240 7% 8%;
+    --foreground:240 18% 92%;
+    --card:240 7% 11%;
+    --card-foreground:240 18% 92%;
+    --primary:211 100% 58%;
+    --primary-foreground:0 0% 100%;
+    --secondary:240 6% 16%;
+    --secondary-foreground:240 18% 92%;
+    --muted:240 6% 16%;
+    --muted-foreground:240 5% 62%;
+    --accent:211 70% 19%;
+    --accent-foreground:211 100% 78%;
+    --destructive:3 72% 58%;
+    --success:150 57% 44%;
+    --warning:36 90% 58%;
+    --warm-accent:266 60% 68%;
+    --caix:176 60% 50%;
+    --info:211 100% 64%;
+    --border:240 5% 21%;
+    --input:240 5% 21%;
+    --ring:211 100% 64%;
+    --shadow-sm:0 1px 2px rgb(0 0 0 / .32),0 14px 30px rgb(0 0 0 / .22);
+    --shadow-md:0 22px 60px rgb(0 0 0 / .34);
   }
   *{box-sizing:border-box}
   html{-webkit-font-smoothing:antialiased}
-  body{margin:0;height:100vh;background:var(--bg);color:var(--text);font:14px/1.5 var(--sans);overflow:hidden}
+  [hidden]{display:none!important}
+  body{margin:0;height:100vh;background:hsl(var(--background));color:hsl(var(--foreground));font:14px/1.5 var(--sans);overflow:hidden}
   button,input,select,textarea{font:inherit}
   button{cursor:pointer}
   button:disabled{opacity:.5;cursor:default}
   a{color:inherit;text-decoration:none}
+  input[type=range],input[type=checkbox]{accent-color:hsl(var(--primary))}
+  input[type=range]{padding:0;background:transparent;border:0;min-height:22px}
+  input:focus-visible,select:focus-visible,button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid hsl(var(--ring));outline-offset:2px}
+  .muted{color:hsl(var(--muted-foreground))}
+  .faint{color:hsl(var(--muted-foreground))}
   .app{height:100dvh;display:grid;grid-template-rows:auto 1fr auto;min-width:0}
   .top{
-    min-height:54px;display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);
-    background:rgba(23,24,29,.86);backdrop-filter:saturate(160%) blur(18px);min-width:0;
+    min-height:54px;display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid hsl(var(--border));
+    background:hsl(var(--background)/.86);backdrop-filter:saturate(160%) blur(18px);min-width:0;flex-wrap:wrap;
   }
   .brand{display:flex;align-items:center;gap:9px;min-width:0}
-  .mark{width:30px;height:30px;border:1px solid var(--line);border-radius:7px;display:grid;place-items:center;
-    background:var(--raised);color:var(--accent);font:700 12px var(--mono);overflow:hidden}
+  .mark{width:30px;height:30px;border:1px solid hsl(var(--border));border-radius:7px;display:grid;place-items:center;
+    background:hsl(var(--secondary));color:hsl(var(--primary));font:700 12px var(--mono);overflow:hidden}
   .mark img{width:100%;height:100%;object-fit:cover;display:block}
   .brand b{display:block;font-size:15px;line-height:1}
-  .brand span span{display:block;color:var(--muted);font:11px var(--mono);margin-top:2px}
+  .brand span span{display:block;color:hsl(var(--muted-foreground));font:11px var(--mono);margin-top:2px}
   .controls{display:flex;align-items:center;gap:8px;margin-left:auto;min-width:0;flex-wrap:wrap;justify-content:flex-end}
   select,input,textarea{
-    color:var(--text);background:var(--raised);border:1px solid var(--line);border-radius:7px;padding:8px 10px;
+    color:hsl(var(--foreground));background:hsl(var(--secondary));border:1px solid hsl(var(--border));border-radius:7px;padding:8px 10px;
   }
   select{min-width:230px;max-width:min(430px,48vw);font:12px var(--mono)}
   .cwd{
     min-width:180px;max-width:min(480px,42vw);font:12px var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-    border:1px solid var(--line);border-radius:7px;background:#0e1115;color:var(--muted);padding:8px 10px;
+    border:1px solid hsl(var(--border));border-radius:7px;background:hsl(var(--background));color:hsl(var(--muted-foreground));padding:8px 10px;
   }
   .btn{
-    border:1px solid var(--line);background:var(--raised);color:var(--text);border-radius:7px;padding:8px 11px;
+    border:1px solid hsl(var(--border));background:hsl(var(--secondary));color:hsl(var(--foreground));border-radius:7px;padding:8px 11px;
     font:600 12px var(--mono);white-space:nowrap;
   }
-  .btn:hover{border-color:rgba(56,199,180,.55)}
-  .btn.primary{background:var(--accent);border-color:var(--accent);color:#031312}
-  .btn.warn{border-color:rgba(217,154,62,.55);color:#f2bd71}
-  .btn.bad{border-color:rgba(236,99,92,.55);color:#ff928d}
+  .btn:hover{border-color:hsl(var(--caix)/.55)}
+  .btn.primary{background:hsl(var(--primary));border-color:hsl(var(--primary));color:hsl(var(--primary-foreground))}
+  .btn.warn{border-color:hsl(var(--warning)/.55);color:hsl(var(--warning))}
+  .btn.bad{border-color:hsl(var(--destructive)/.55);color:hsl(var(--destructive))}
+  .btn.ghost{background:transparent}
+  /* ---- mode switch (shared pattern+key with index.html) ---- */
+  .mode{display:inline-grid;grid-auto-flow:column;border:1px solid hsl(var(--border));border-radius:7px;overflow:hidden;background:hsl(var(--card))}
+  .mode button{min-width:64px;border:0;border-left:1px solid hsl(var(--border));background:transparent;color:hsl(var(--muted-foreground));padding:6px 9px;font:11.5px var(--sans)}
+  .mode button:first-child{border-left:0}
+  .mode button.active{background:hsl(var(--accent));color:hsl(var(--accent-foreground));font-weight:650}
   .status{
-    display:flex;align-items:center;gap:7px;color:var(--muted);font:11px var(--mono);
-    border-bottom:1px solid var(--line-soft);background:#0d1013;padding:7px 14px;min-height:32px;
+    display:flex;align-items:center;gap:7px;color:hsl(var(--muted-foreground));font:11px var(--mono);
+    border-bottom:1px solid hsl(var(--border)/.6);background:hsl(var(--background));padding:7px 14px;min-height:32px;
   }
-  .dot{width:7px;height:7px;border-radius:50%;background:var(--bad)}
-  .status.live .dot{background:var(--ok);box-shadow:0 0 0 4px rgba(70,211,134,.12)}
-  .status.busy .dot{background:var(--warn);box-shadow:0 0 0 4px rgba(217,154,62,.12)}
+  .dot{width:7px;height:7px;border-radius:50%;background:hsl(var(--destructive))}
+  .status.live .dot{background:hsl(var(--success));box-shadow:0 0 0 4px hsl(var(--success)/.13)}
+  .status.busy .dot{background:hsl(var(--warning));box-shadow:0 0 0 4px hsl(var(--warning)/.13)}
   .log{min-height:0;overflow-y:auto;padding:6px 0 14px}
   .wrap{max-width:980px;margin:0 auto;padding:0 18px}
-  .turn{border-top:1px solid var(--line-soft);padding:16px 0}
+  .turn{border-top:1px solid hsl(var(--border)/.6);padding:16px 0}
   .turn:first-child{border-top:0}
-  .role{color:var(--faint);font:700 11px var(--mono);letter-spacing:0;text-transform:uppercase;margin-bottom:8px}
-  .turn.user .role{color:var(--accent)}
-  .turn.shell .role{color:var(--warn)}
-  .turn.error .role{color:var(--bad)}
+  .role{color:hsl(var(--muted-foreground));font:700 11px var(--mono);letter-spacing:0;text-transform:uppercase;margin-bottom:8px}
+  .turn.user .role{color:hsl(var(--primary))}
+  .turn.shell .role{color:hsl(var(--warning))}
+  .turn.error .role{color:hsl(var(--destructive))}
   .md{font-size:14px;line-height:1.6;overflow-wrap:anywhere}
   .md p{margin:0 0 10px}
   .md>:last-child{margin-bottom:0}
-  .md code{font-family:var(--mono);font-size:12px;background:var(--raised);border:1px solid var(--line-soft);border-radius:5px;padding:1px 5px}
+  .md code{font-family:var(--mono);font-size:12px;background:hsl(var(--secondary));border:1px solid hsl(var(--border)/.7);border-radius:5px;padding:1px 5px}
   .md pre,.term{
-    margin:8px 0 0;background:#07090b;border:1px solid var(--line);border-radius:8px;padding:11px 12px;
-    color:#dce3e8;font:12px/1.55 var(--mono);white-space:pre-wrap;overflow:auto;max-height:380px;
+    margin:8px 0 0;background:hsl(var(--muted));border:1px solid hsl(var(--border));border-radius:8px;padding:11px 12px;
+    color:hsl(var(--foreground));font:12px/1.55 var(--mono);white-space:pre-wrap;overflow:auto;max-height:380px;
   }
-  .term.err{border-color:rgba(236,99,92,.42);color:#ffd4d2}
+  .term.err{border-color:hsl(var(--destructive)/.42);color:hsl(var(--destructive))}
   .command{
-    border:1px solid var(--line);border-radius:8px;background:var(--surface);padding:10px 11px;margin-top:6px;
+    border:1px solid hsl(var(--border));border-radius:8px;background:hsl(var(--card));padding:10px 11px;margin-top:6px;
   }
-  .cmdline{font:12px/1.55 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;color:#dce3e8}
-  .cmdmeta{margin-top:6px;color:var(--faint);font:11px var(--mono)}
+  .cmdline{font:12px/1.55 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;color:hsl(var(--foreground))}
+  .cmdmeta{margin-top:6px;color:hsl(var(--muted-foreground));font:11px var(--mono)}
   .cmdactions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
-  .pill{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;padding:4px 8px;color:var(--muted);font:11px var(--mono)}
-  .composer{border-top:1px solid var(--line);background:var(--surface);padding:12px 14px}
+  .pill{display:inline-flex;align-items:center;gap:6px;border:1px solid hsl(var(--border));border-radius:999px;padding:4px 8px;color:hsl(var(--muted-foreground));font:11px var(--mono)}
+  /* ---- generation controls (Advanced only; identical fields/ids/classes to chat.html) ---- */
+  .gen-panel{display:flex;flex-direction:column;gap:14px;max-width:980px;margin:0 auto 12px;padding:14px;
+    border:1px solid hsl(var(--border));border-radius:10px;background:hsl(var(--card))}
+  .genrow{display:flex;flex-direction:column;gap:5px}
+  .genlabel{display:flex;align-items:baseline;justify-content:space-between;gap:8px;font-size:12px;color:hsl(var(--foreground))}
+  .genlabel label{font-weight:500;cursor:pointer}
+  .genreadout{font-family:var(--mono);font-size:11px;color:hsl(var(--muted-foreground));max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right}
+  .genreadout.is-dirty{color:hsl(var(--primary))}
+  .genhint{font-size:11px;color:hsl(var(--muted-foreground));line-height:1.4}
+  .gen-actions{display:flex;justify-content:flex-end}
+  .gen-chips{display:flex;flex-wrap:wrap;gap:6px;max-width:980px;margin:0 auto 10px}
+  .chip{display:inline-flex;align-items:center;gap:5px;border:1px solid hsl(var(--primary)/.4);background:hsl(var(--accent));color:hsl(var(--accent-foreground));
+    border-radius:999px;padding:4px 10px;font:11px var(--mono);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .chip:hover{border-color:hsl(var(--primary))}
+  /* ---- disclosure motion: the single signature transition, transform+opacity only ---- */
+  @media(prefers-reduced-motion:no-preference){
+    .advanced-only:not([hidden]){animation:advIn 200ms ease-out}
+  }
+  @keyframes advIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+  .composer{border-top:1px solid hsl(var(--border));background:hsl(var(--card));padding:12px 14px}
   .compose-inner{max-width:980px;margin:0 auto;display:flex;align-items:flex-end;gap:10px}
-  textarea{min-height:46px;max-height:180px;resize:none;flex:1;border-radius:9px;padding:11px 12px;background:#0e1115;font-size:14px}
-  textarea:focus,select:focus,input:focus,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-  .spinner{display:inline-block;width:11px;height:11px;border:2px solid rgba(56,199,180,.28);border-top-color:var(--accent);
+  textarea{min-height:46px;max-height:180px;resize:none;flex:1;border-radius:9px;padding:11px 12px;background:hsl(var(--background));font-size:14px}
+  .spinner{display:inline-block;width:11px;height:11px;border:2px solid hsl(var(--caix)/.28);border-top-color:hsl(var(--primary));
     border-radius:50%;animation:spin .8s linear infinite;vertical-align:-1px;margin-right:7px}
   @keyframes spin{to{transform:rotate(360deg)}}
   @media(max-width:760px){
@@ -105,6 +183,11 @@
     <div class="controls">
       <select id="model" aria-label="Model"></select>
       <div class="cwd" id="cwd" title="cwd"></div>
+      <div class="mode" id="modeSwitch" aria-label="Mode">
+        <button type="button" data-mode="simple" class="active">Simple</button>
+        <button type="button" data-mode="advanced">Advanced</button>
+      </div>
+      <button class="btn" id="themeToggle" type="button" title="Toggle theme">Theme</button>
       <a class="btn" href="/">Dashboard</a>
       <a class="btn" href="/chat">Chat</a>
       <button class="btn" id="reconnect" type="button">Reconnect</button>
@@ -113,6 +196,46 @@
   <div class="status" id="status"><span class="dot"></span><span id="statusText">connecting</span></div>
   <main class="log" id="log"><div class="wrap" id="wrap"></div></main>
   <footer class="composer">
+    <div class="gen-chips" id="genChips" hidden></div>
+    <section class="gen-panel advanced-only" hidden>
+      <h3 style="margin:0 0 2px;font-size:11px;text-transform:uppercase;letter-spacing:0;color:hsl(var(--muted-foreground));font-weight:600">Generation</h3>
+      <div class="genrow">
+        <div class="genlabel"><label for="gen_temperature">Temperature</label><b class="genreadout" id="gr_temperature">0.15 · shell default</b></div>
+        <input type="range" id="gen_temperature" min="0" max="2" step="0.05" value="0.15" aria-describedby="gh_temperature"/>
+        <div class="genhint" id="gh_temperature">Higher values produce more varied, less predictable replies.</div>
+      </div>
+      <div class="genrow">
+        <div class="genlabel"><label for="gen_top_p">Top-p</label><b class="genreadout" id="gr_top_p">default</b></div>
+        <input type="range" id="gen_top_p" min="0" max="1" step="0.01" value="0.95" aria-describedby="gh_top_p"/>
+        <div class="genhint" id="gh_top_p">Keeps only the smallest set of likely next tokens that add up to this probability.</div>
+      </div>
+      <div class="genrow">
+        <div class="genlabel"><label for="gen_top_k">Top-k</label><b class="genreadout" id="gr_top_k">default</b></div>
+        <input type="number" id="gen_top_k" min="1" step="1" placeholder="server default" aria-describedby="gh_top_k"/>
+        <div class="genhint" id="gh_top_k">Limits sampling to the k most likely next tokens.</div>
+      </div>
+      <div class="genrow">
+        <div class="genlabel"><label for="gen_max_tokens">Max tokens</label><b class="genreadout" id="gr_max_tokens">default</b></div>
+        <input type="number" id="gen_max_tokens" min="1" step="1" placeholder="server default" aria-describedby="gh_max_tokens"/>
+        <div class="genhint" id="gh_max_tokens">Upper bound on how many tokens the reply can contain.</div>
+      </div>
+      <div class="genrow">
+        <div class="genlabel"><label for="gen_stop">Stop sequences</label><b class="genreadout" id="gr_stop">default</b></div>
+        <input type="text" id="gen_stop" placeholder="comma-separated, e.g. END, ###" aria-describedby="gh_stop"/>
+        <div class="genhint" id="gh_stop">Comma-separated strings that end generation early.</div>
+      </div>
+      <div class="genrow">
+        <div class="genlabel"><label for="gen_seed">Seed</label><b class="genreadout" id="gr_seed">default</b></div>
+        <input type="number" id="gen_seed" step="1" placeholder="random" aria-describedby="gh_seed"/>
+        <div class="genhint" id="gh_seed">Fixes the random seed so replies become reproducible.</div>
+      </div>
+      <div class="genrow">
+        <div class="genlabel"><label for="gen_kv_capacity">KV cache size (tokens)</label><b class="genreadout" id="gr_kv_capacity">default</b></div>
+        <input type="number" id="gen_kv_capacity" min="1" step="1" placeholder="server default" aria-describedby="gh_kv_capacity"/>
+        <div class="genhint" id="gh_kv_capacity">How many tokens of context the key/value cache keeps resident.</div>
+      </div>
+      <div class="gen-actions"><button class="btn ghost" id="genReset" type="button">Reset to defaults</button></div>
+    </section>
     <div class="compose-inner">
       <textarea id="prompt" rows="1" placeholder="Ask caix shell..."></textarea>
       <button class="btn primary" id="send" type="button">Send</button>
@@ -133,7 +256,7 @@ function md(s){
 }
 
 const state={
-  base:null,server:null,models:[],busy:false,abort:false,
+  base:null,server:null,models:[],busy:false,abort:false,abortCtrl:null,mode:'simple',
   cwd:localStorage.getItem('caix.shell.cwd')||'/Volumes/SSD/caix',
   thread:[]
 };
@@ -247,22 +370,47 @@ function buildMessages(){
   for(const m of state.thread)msgs.push(m);
   return msgs;
 }
-async function modelTurn(){
+async function modelTurnStream(onDelta){
   const model=$('model').value;
   if(!model)throw new Error('no model is available');
-  return await api('/v1/chat/completions',{
+  if(!state.base)throw new Error('server not connected');
+  const body=Object.assign({model,messages:buildMessages(),tools:[shellTool],stream:true},genBody());
+  const res=await fetch(state.base+'/v1/chat/completions',{
     method:'POST',
     headers:{'content-type':'application/json'},
-    body:JSON.stringify({
-      model,
-      messages:buildMessages(),
-      tools:[shellTool],
-      max_tokens:700,
-      temperature:0.15,
-      top_p:0.9,
-      stream:false
-    })
+    signal:state.abortCtrl?state.abortCtrl.signal:undefined,
+    body:JSON.stringify(body)
   });
+  if(!res.ok||!res.body){
+    let detail=''; try{detail=await res.text();}catch(e){}
+    throw new Error(detail||('HTTP '+res.status));
+  }
+  const acc={content:'',reasoning:''};
+  const tcs={};
+  const rd=res.body.getReader(),dec=new TextDecoder();let buf='';
+  for(;;){
+    const {done,value}=await rd.read(); if(done)break;
+    buf+=dec.decode(value,{stream:true});
+    let nl;
+    while((nl=buf.indexOf('\n\n'))>=0){
+      const blk=buf.slice(0,nl); buf=buf.slice(nl+2);
+      const dl=blk.split('\n').find(l=>l.startsWith('data:')); if(!dl)continue;
+      const p=dl.slice(5).trim(); if(p==='[DONE]')continue;
+      let d; try{d=JSON.parse(p);}catch(e){continue;}
+      const del=(d.choices&&d.choices[0]&&d.choices[0].delta)||{};
+      if(del.reasoning_content){acc.reasoning+=del.reasoning_content;onDelta(acc);}
+      if(del.content){acc.content+=del.content;onDelta(acc);}
+      if(del.tool_calls)for(const tc of del.tool_calls){
+        const ix=tc.index||0; tcs[ix]=tcs[ix]||{id:tc.id,name:'',args:''};
+        if(tc.id)tcs[ix].id=tc.id;
+        if(tc.function&&tc.function.name)tcs[ix].name+=tc.function.name;
+        if(tc.function&&tc.function.arguments)tcs[ix].args+=tc.function.arguments;
+      }
+    }
+  }
+  const calls=Object.values(tcs).filter(t=>t.name);
+  if(calls.length)acc.tool_calls=calls.map(c=>({id:c.id||('call_'+Math.random().toString(36).slice(2,8)),type:'function',function:{name:c.name,arguments:c.args||'{}'}}));
+  return acc;
 }
 
 function parseArgs(raw){
@@ -335,6 +483,7 @@ async function send(){
   $('prompt').value='';
   $('prompt').style.height='auto';
   state.abort=false;
+  state.abortCtrl=new AbortController();
   setBusy(true,'working');
   try{
     if(!state.base)await discover();
@@ -346,12 +495,18 @@ async function send(){
     textTurn('user','you',text);
     for(let hop=0;hop<6&&!state.abort;hop++){
       const wait=turn('assistant','caix','<div class="md"><span class="spinner"></span>thinking</div>');
-      const d=await modelTurn();
-      const choice=(d.choices&&d.choices[0])||{};
-      const msg=choice.message||{};
+      const live=wait.querySelector('.md');
+      let msg;
+      try{
+        msg=await modelTurnStream(acc=>{
+          if(acc.content)live.innerHTML=md(acc.content);
+          else if(acc.reasoning)live.innerHTML='<span class="faint">'+md(acc.reasoning)+'</span>';
+          scrollBottom();
+        });
+      }catch(e){wait.remove();throw e;}
       wait.remove();
-      if(msg.reasoning_content){
-        turn('assistant','thinking','<div class="md">'+md(msg.reasoning_content)+'</div>');
+      if(msg.reasoning){
+        turn('assistant','thinking','<div class="md">'+md(msg.reasoning)+'</div>');
       }
       if(msg.content){
         textTurn('assistant','caix',msg.content);
@@ -377,18 +532,141 @@ async function send(){
       }
     }
   }catch(e){
-    if(!state.abort)errorTurn(e.message||String(e));
+    if(!state.abort&&e.name!=='AbortError')errorTurn(e.message||String(e));
   }finally{
     setBusy(false);
   }
 }
 
 $('send').onclick=send;
-$('stop').onclick=()=>{state.abort=true;setBusy(false);};
+$('stop').onclick=()=>{state.abort=true;if(state.abortCtrl)state.abortCtrl.abort();setBusy(false);};
 $('reconnect').onclick=discover;
 $('prompt').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
 $('prompt').addEventListener('input',e=>{const t=e.target;t.style.height='auto';t.style.height=Math.min(180,t.scrollHeight)+'px';});
+
+// ---------- theme + simple/advanced mode (shared tokens/keys with index.html) ----------
+function preferredTheme(){
+  const saved=localStorage.getItem('caix.theme');
+  if(saved)return saved;
+  return (window.matchMedia&&matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark';
+}
+function setTheme(theme){
+  document.documentElement.classList.toggle('dark',theme==='dark');
+  localStorage.setItem('caix.theme',theme);
+  $('themeToggle').textContent=theme==='dark'?'Light':'Dark';
+}
+function setMode(mode){
+  state.mode=mode;
+  document.querySelectorAll('#modeSwitch button').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));
+  const adv=mode==='advanced';
+  document.querySelectorAll('.advanced-only').forEach(el=>el.hidden=!adv);
+  localStorage.setItem('caix.mode',mode);
+  renderGenChips();
+}
+document.querySelectorAll('#modeSwitch button').forEach(b=>b.addEventListener('click',()=>setMode(b.dataset.mode)));
+$('themeToggle').addEventListener('click',()=>setTheme(document.documentElement.classList.contains('dark')?'light':'dark'));
+function loadPrefs(){
+  setTheme(preferredTheme());
+  setMode(localStorage.getItem('caix.mode')||'simple');
+}
+
+// ---------- generation controls: temperature/top_p/top_k/max_tokens/stop/seed/kv_capacity.
+// Same fields/ids/classes/dirty-tracking as chat.html's panel, persisted under its own
+// localStorage namespace so the two pages don't share saved values. ----------
+const GEN_STORAGE_KEY='caix.shell.gen';
+// Shell page baseline: a low temperature keeps run_shell tool calls reliable, so 0.15 is
+// always sent — user override when dirty, baseline when clean. Every other field stays
+// clean-omitted so server defaults apply.
+const SHELL_TEMP_BASELINE=0.15;
+const GEN_FIELDS=['temperature','top_p','top_k','max_tokens','stop','seed','kv_capacity'];
+let genDirty={};
+function genEl(key){return document.getElementById('gen_'+key);}
+function genReadoutEl(key){return document.getElementById('gr_'+key);}
+function genDisplayValue(key){
+  const el=genEl(key); if(!el)return '';
+  if(key==='temperature'||key==='top_p')return Number(el.value).toFixed(2);
+  return el.value;
+}
+function numOrUndef(v){const n=Number(v);return v!==''&&Number.isFinite(n)?n:undefined;}
+function intOrUndef(v){const n=parseInt(v,10);return v!==''&&Number.isFinite(n)?n:undefined;}
+function genBody(){
+  const body={};
+  const t=genDirty.temperature?numOrUndef(genEl('temperature').value):undefined;
+  body.temperature=t!==undefined?t:SHELL_TEMP_BASELINE;
+  if(genDirty.top_p)body.top_p=numOrUndef(genEl('top_p').value);
+  if(genDirty.top_k)body.top_k=intOrUndef(genEl('top_k').value);
+  if(genDirty.max_tokens)body.max_tokens=intOrUndef(genEl('max_tokens').value);
+  if(genDirty.stop)body.stop=genEl('stop').value.split(',').map(s=>s.trim()).filter(Boolean);
+  if(genDirty.seed)body.seed=intOrUndef(genEl('seed').value);
+  if(genDirty.kv_capacity)body.kv_capacity=intOrUndef(genEl('kv_capacity').value);
+  return body;
+}
+function renderGenReadout(key){
+  const ro=genReadoutEl(key); if(!ro)return;
+  if(!genDirty[key]){
+    ro.textContent=key==='temperature'?SHELL_TEMP_BASELINE.toFixed(2)+' · shell default':'default';
+    ro.classList.remove('is-dirty');
+    return;
+  }
+  ro.textContent=genDisplayValue(key);
+  ro.classList.add('is-dirty');
+}
+function renderGenChips(){
+  const box=$('genChips'); if(!box)return;
+  const dirty=GEN_FIELDS.filter(k=>genDirty[k]);
+  box.innerHTML=dirty.map(k=>'<button type="button" class="chip" data-gen-clear="'+k+'">'+esc(k)+': '+esc(genDisplayValue(k))+' <span aria-hidden="true">✕</span></button>').join('');
+  box.hidden=!(state.mode==='advanced'&&dirty.length);
+}
+function saveGenPrefs(){
+  const values={};
+  GEN_FIELDS.forEach(k=>{const el=genEl(k);if(el)values[k]=el.value;});
+  localStorage.setItem(GEN_STORAGE_KEY,JSON.stringify({dirty:genDirty,values}));
+}
+function clearGenField(key,skipSave){
+  delete genDirty[key];
+  const el=genEl(key);
+  if(el){
+    if(key==='temperature')el.value=String(SHELL_TEMP_BASELINE);
+    else if(key==='top_p')el.value='0.95';
+    else el.value='';
+  }
+  renderGenReadout(key);
+  if(!skipSave){renderGenChips();saveGenPrefs();}
+}
+function resetGenDefaults(){
+  GEN_FIELDS.forEach(k=>clearGenField(k,true));
+  renderGenChips();
+  saveGenPrefs();
+}
+function loadGenPrefs(){
+  let saved={}; try{saved=JSON.parse(localStorage.getItem(GEN_STORAGE_KEY)||'{}');}catch(e){}
+  genDirty=saved.dirty||{};
+  const values=saved.values||{};
+  GEN_FIELDS.forEach(k=>{
+    const el=genEl(k);
+    if(el&&genDirty[k]&&values[k]!==undefined)el.value=values[k];
+    renderGenReadout(k);
+  });
+  renderGenChips();
+}
+function wireGenInputs(){
+  GEN_FIELDS.forEach(k=>{
+    const el=genEl(k); if(!el)return;
+    el.addEventListener('input',()=>{genDirty[k]=true;renderGenReadout(k);renderGenChips();saveGenPrefs();});
+  });
+  const chips=$('genChips');
+  if(chips)chips.addEventListener('click',e=>{
+    const b=e.target.closest('[data-gen-clear]'); if(!b)return;
+    clearGenField(b.dataset.genClear);
+  });
+  const reset=$('genReset');
+  if(reset)reset.addEventListener('click',resetGenDefaults);
+}
+wireGenInputs();
+
 setCwd(state.cwd);
+loadPrefs();
+loadGenPrefs();
 discover();
 </script>
 </body>
