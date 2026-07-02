@@ -189,9 +189,16 @@ eagle_backbone_for_bundle() {
 heavy_task_guard() {
   local guard_args=()
   [[ "$FORCE" == "1" ]] && guard_args+=(--ignore-lock)
-  if ! caix_heavy_task_lock="$LOCK" "$SCRIPT_DIR/conversion-guard.sh" "${guard_args[@]}" >/dev/null 2>&1; then
-    echo "error: heavy-task guard is busy; another build, conversion, upload, verification, benchmark, or lock is active" >&2
-    return 2
+  if [[ "${#guard_args[@]}" -gt 0 ]]; then
+    if ! caix_heavy_task_lock="$LOCK" "$SCRIPT_DIR/conversion-guard.sh" "${guard_args[@]}" >/dev/null 2>&1; then
+      echo "error: heavy-task guard is busy; another build, conversion, upload, verification, benchmark, or lock is active" >&2
+      return 2
+    fi
+  else
+    if ! caix_heavy_task_lock="$LOCK" "$SCRIPT_DIR/conversion-guard.sh" >/dev/null 2>&1; then
+      echo "error: heavy-task guard is busy; another build, conversion, upload, verification, benchmark, or lock is active" >&2
+      return 2
+    fi
   fi
 }
 
