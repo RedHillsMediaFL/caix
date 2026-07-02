@@ -43,10 +43,15 @@ temperature, seed, streaming mode, warmup count, measured run count, and chat-te
 
 | repo | revision | local dir | request | notes |
 |---|---|---|---|---|
-| `redhillsmediafl/rhm-gemma-4-12b-it-unified-caix` | `dfe4be2753fa0d4c35f0b7381e00894cf40d9594` | `gemma4-12b-it-unified-staged-4bit-ctx128-6x8` | distributed hardware smoke | staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook |
-| `redhillsmediafl/rhm-gemma-4-26b-a4b-it-staged-caix` | `ef8c4f465f5194e6a483630b235c779b8b6c7e33` | `gemma4-26b-a4b-it-staged-4bit-ctx128-5x6` | distributed hardware smoke | staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook |
-| `redhillsmediafl/rhm-gemma-4-31b-it-staged-caix` | `08c487578af348c86fc102230046bcd32ec4b7e9` | `gemma4-31b-it-staged-4bit-ctx128-6x10` | distributed hardware smoke | staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook |
-| `redhillsmediafl/rhm-gemma-4-31b-it-mtp-caix` | `a24fc3e8066495cee46bebea7c175c2a2e93ebcd` | `gemma-4-31b-it-mtp-coreai` | blocked; do not test | draft graph is standard two-input assistant; rebuild package with dependent EAGLE draft |
+| `redhillsmediafl/rhm-gemma-4-12b-it-unified-caix` | `721d1b798510f6cfcb1608e94ab660ba7d268005` | `gemma4-12b-it-unified-staged-4bit-ctx128-6x8` | distributed hardware smoke | staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook |
+| `redhillsmediafl/rhm-gemma-4-12b-staged-caix` | `3ae61884e5bf8ef459c2f0eb4a1c4a1cc2562d3b` | `gemma4-12b-staged-4bit-ctx128-2x24` | distributed hardware smoke | staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook |
+| `redhillsmediafl/rhm-gemma-4-e2b-it-staged-caix` | `7b4cb1da35402f25dc1269ef9eebf3f184257dba` | `gemma4-e2b-it-staged-4bit-ctx128-2x` | distributed hardware smoke | staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook |
+| `redhillsmediafl/rhm-gemma-4-e2b-staged-caix` | `d5bf65fe72faeb343bf9247ffb8dc9a4bf279cb1` | `gemma4-e2b-staged-4bit-ctx128-2x` | distributed hardware smoke | staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook |
+| `redhillsmediafl/rhm-gemma-4-e4b-it-staged-caix` | `bba60d99bdf1e119367b9166938c8c3ea82d1c54` | `gemma4-e4b-it-staged-4bit-ctx128-2x21` | distributed hardware smoke | staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook |
+| `redhillsmediafl/rhm-gemma-4-e4b-staged-caix` | `a0e35632c3600aeb3be62507948cb2d66c67d4e1` | `gemma4-e4b-staged-4bit-ctx128-2x21` | distributed hardware smoke | staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook |
+| `redhillsmediafl/rhm-gemma-4-26b-a4b-it-staged-caix` | `abf7ad43a38d9132e5b2b2f90d39c2bc261658c6` | `gemma4-26b-a4b-it-staged-4bit-ctx128-5x6` | distributed hardware smoke | staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook |
+| `redhillsmediafl/rhm-gemma-4-31b-it-staged-caix` | `c171bcc3df5d68afdc74a019046b784141a3f3b1` | `gemma4-31b-it-staged-4bit-ctx128-6x10` | distributed hardware smoke | staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook |
+| `redhillsmediafl/rhm-gemma-4-31b-it-mtp-caix` | `7bfec529dd5a9749588840a8b865c8b9937f454e` | `gemma-4-31b-it-mtp-coreai` | blocked; do not test | draft graph is standard two-input assistant; rebuild package with dependent EAGLE draft |
 | `redhillsmediafl/rhm-gemma-4-26b-a4b-draft-caix` | `b1d92267c10b5542c7b3bfdebd18f3814a19c37b` | `gemma-4-26b-a4b-draft-coreai` | component; do not test alone | draft component; benchmark with matching target |
 | `redhillsmediafl/rhm-gemma-4-31b-it-draft-caix` | `30c425f86bc123e9b95ddd783fba3398ab4a5604` | `gemma-4-31b-it-draft-coreai` | component; do not test alone | draft component; benchmark with matching target |
 

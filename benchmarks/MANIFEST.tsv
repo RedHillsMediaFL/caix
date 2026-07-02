@@ -18,6 +18,11 @@ redhillsmediafl/rhm-mistral-small-instruct-2409-caix	mistral-small-instruct-2409
 redhillsmediafl/rhm-mixtral-8x7b-instruct-caix	mixtral-8x7b-instruct-coreai	standalone	decode	eligible	cataloged
 redhillsmediafl/rhm-qwen3.6-27b-caix	qwen3.6-27b-coreai	standalone	decode	eligible	cataloged
 redhillsmediafl/rhm-gemma-4-12b-it-unified-caix	gemma4-12b-it-unified-staged-4bit-ctx128-6x8	staged	manual	component_only	staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook
+redhillsmediafl/rhm-gemma-4-12b-staged-caix	gemma4-12b-staged-4bit-ctx128-2x24	staged	manual	component_only	staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook
+redhillsmediafl/rhm-gemma-4-e2b-it-staged-caix	gemma4-e2b-it-staged-4bit-ctx128-2x	staged	manual	component_only	staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook
+redhillsmediafl/rhm-gemma-4-e2b-staged-caix	gemma4-e2b-staged-4bit-ctx128-2x	staged	manual	component_only	staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook
+redhillsmediafl/rhm-gemma-4-e4b-it-staged-caix	gemma4-e4b-it-staged-4bit-ctx128-2x21	staged	manual	component_only	staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook
+redhillsmediafl/rhm-gemma-4-e4b-staged-caix	gemma4-e4b-staged-4bit-ctx128-2x21	staged	manual	component_only	staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook
 redhillsmediafl/rhm-gemma-4-26b-a4b-caix	gemma-4-26b-a4b-coreai	standalone	decode	eligible	cataloged
 redhillsmediafl/rhm-gemma-4-26b-a4b-it-staged-caix	gemma4-26b-a4b-it-staged-4bit-ctx128-5x6	staged	manual	component_only	staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook
 redhillsmediafl/rhm-gemma-4-31b-it-caix	gemma-4-31b-it-coreai	standalone	decode	eligible	cataloged
