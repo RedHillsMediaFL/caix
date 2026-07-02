@@ -1203,7 +1203,9 @@ final class ServerRuntime: Sendable {
         if gen.stream {
             return Self.openAIStream(
                 handle: handle, messages: messages, options: options, tools: tools, format: format,
-                model: modelName, id: id, created: created, activity: activity, startedAt: started)
+                model: modelName, id: id, created: created,
+                includeUsage: req.stream_options?.include_usage == true,
+                activity: activity, startedAt: started)
         }
 
         do {

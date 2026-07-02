@@ -96,6 +96,9 @@ public struct GenerationRequest: Sendable {
 // MARK: - OpenAI: /v1/chat/completions
 
 public struct OpenAIChatRequest: Codable, Sendable {
+    public struct StreamOptions: Codable, Sendable {
+        public var include_usage: Bool?
+    }
     public var model: String
     public var messages: [ChatMessage]
     public var max_tokens: Int?
@@ -107,6 +110,7 @@ public struct OpenAIChatRequest: Codable, Sendable {
     public var apply_chat_template: Bool?
     public var stop: StringOrArray?
     public var stream: Bool?
+    public var stream_options: StreamOptions?
     public var seed: Int?
     /// Function/tool definitions (`[{type:"function", function:{name, description, parameters}}]`).
     public var tools: [JSONAny]?
@@ -180,14 +184,18 @@ public struct OpenAIChatChunk: Encodable, Sendable {
             try c.encode(finish_reason, forKey: .finish_reason)
         }
     }
-    public var id: String; public var object: String; public var created: Int; public var model: String; public var choices: [Choice]
+    public var id: String; public var object: String; public var created: Int; public var model: String
+    public var choices: [Choice]
+    public var usage: OpenAIChatResponse.Usage?
     public init(id: String, model: String, created: Int, role: String? = nil, content: String? = nil,
-                reasoningContent: String? = nil, toolCalls: [ToolCallDelta]? = nil, finish: String? = nil) {
+                reasoningContent: String? = nil, toolCalls: [ToolCallDelta]? = nil,
+                finish: String? = nil, usage: OpenAIChatResponse.Usage? = nil) {
         self.id = id; self.object = "chat.completion.chunk"; self.created = created; self.model = model
         self.choices = [Choice(
             index: 0,
             delta: Delta(role: role, content: content, reasoning_content: reasoningContent, tool_calls: toolCalls),
             finish_reason: finish)]
+        self.usage = usage
     }
 }
 

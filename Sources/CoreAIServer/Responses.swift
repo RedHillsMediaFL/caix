@@ -118,6 +118,7 @@ extension ServerRuntime {
         handle: ModelHandle, messages: [[String: String]], options: CoreAIPipeline.Options,
         tools: [[String: any Sendable]]?, format: OutputFormat,
         model: String, id: String, created: Int,
+        includeUsage: Bool = false,
         activity: ActivityLog? = nil, startedAt: Date? = nil
     ) -> Response {
         let requestStart = startedAt ?? Date()
@@ -169,6 +170,12 @@ extension ServerRuntime {
             let result = try? await genTask.value
             if let result { finish = openAIFinish(result.stopReason) }
             if sawToolCall { finish = "tool_calls" }
+            let usage = result.map {
+                OpenAIChatResponse.Usage(
+                    prompt_tokens: $0.promptTokenCount,
+                    completion_tokens: $0.generatedTokenCount,
+                    total_tokens: $0.promptTokenCount + $0.generatedTokenCount)
+            }
             await activity?.record(
                 method: "POST",
                 path: "/v1/chat/completions",
@@ -183,7 +190,12 @@ extension ServerRuntime {
                 prefillSeconds: result?.prefillSeconds,
                 decodeSeconds: result?.decodeSeconds)
             try await writer.write(
-                sseData(OpenAIChatChunk(id: id, model: model, created: created, finish: finish)))
+                sseData(OpenAIChatChunk(
+                    id: id,
+                    model: model,
+                    created: created,
+                    finish: finish,
+                    usage: includeUsage ? usage : nil)))
             try await writer.write(ByteBuffer(string: "data: [DONE]\n\n"))
             try await writer.finish(nil)
         }

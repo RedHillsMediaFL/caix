@@ -84,6 +84,43 @@ final class APITypesTests: XCTestCase {
         XCTAssertEqual(generation.modalities, [])
     }
 
+    func testOpenAIStreamOptionsDecodeIncludeUsage() throws {
+        let data = Data(
+            """
+            {
+              "model": "local",
+              "messages": [
+                {"role": "user", "content": "Plain text."}
+              ],
+              "stream": true,
+              "stream_options": {"include_usage": true}
+            }
+            """.utf8)
+
+        let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+        XCTAssertEqual(request.stream, true)
+        XCTAssertEqual(request.stream_options?.include_usage, true)
+    }
+
+    func testOpenAIStreamChunkCanEncodeUsage() throws {
+        let chunk = OpenAIChatChunk(
+            id: "chatcmpl-test",
+            model: "local",
+            created: 1,
+            finish: "stop",
+            usage: OpenAIChatResponse.Usage(
+                prompt_tokens: 3,
+                completion_tokens: 5,
+                total_tokens: 8))
+
+        let data = try JSONEncoder().encode(chunk)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let usage = try XCTUnwrap(object["usage"] as? [String: Any])
+        XCTAssertEqual(usage["prompt_tokens"] as? Int, 3)
+        XCTAssertEqual(usage["completion_tokens"] as? Int, 5)
+        XCTAssertEqual(usage["total_tokens"] as? Int, 8)
+    }
+
     func testServerRejectsMultimodalGenerationBeforeRuntime() throws {
         let generation = GenerationRequest(
             model: "local",
