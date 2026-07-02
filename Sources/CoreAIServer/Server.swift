@@ -1191,6 +1191,7 @@ final class ServerRuntime: Sendable {
 
         do {
             log("generation start for \(modelName)")
+            let generationStarted = Date()
             let result = try await handle.generate(messages: messages, options: options, tools: tools)
             log("generation done for \(modelName): \(result.generatedTokenCount) tokens")
             // Normalize the raw base-format output into reasoning_content + content + tool_calls.
@@ -1208,7 +1209,10 @@ final class ServerRuntime: Sendable {
             await activity.record(
                 method: "POST", path: "/v1/chat/completions", status: 200, startedAt: started,
                 model: modelName, summary: "completed (\(finish))",
-                inputTokens: result.promptTokenCount, outputTokens: result.generatedTokenCount)
+                inputTokens: result.promptTokenCount, outputTokens: result.generatedTokenCount,
+                firstTokenSeconds: generationStarted.timeIntervalSince(started) + result.prefillSeconds,
+                loadSeconds: result.modelLoadSeconds, prefillSeconds: result.prefillSeconds,
+                decodeSeconds: result.decodeSeconds)
             return JSONResponder.encode(response)
         } catch {
             await activity.record(
@@ -1262,6 +1266,7 @@ final class ServerRuntime: Sendable {
         }
 
         do {
+            let generationStarted = Date()
             let result = try await handle.generate(messages: messages, options: options, tools: tools)
             // Normalize into thinking + text + tool_use content blocks (in that order).
             let norm = StreamingNormalizer.normalizeComplete(result.text, format: format)
@@ -1279,7 +1284,10 @@ final class ServerRuntime: Sendable {
             await activity.record(
                 method: "POST", path: "/v1/messages", status: 200, startedAt: started,
                 model: modelName, summary: "completed (\(stop))",
-                inputTokens: result.promptTokenCount, outputTokens: result.generatedTokenCount)
+                inputTokens: result.promptTokenCount, outputTokens: result.generatedTokenCount,
+                firstTokenSeconds: generationStarted.timeIntervalSince(started) + result.prefillSeconds,
+                loadSeconds: result.modelLoadSeconds, prefillSeconds: result.prefillSeconds,
+                decodeSeconds: result.decodeSeconds)
             return JSONResponder.encode(response)
         } catch {
             await activity.record(

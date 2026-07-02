@@ -24,4 +24,28 @@ final class ActivityLogTests: XCTestCase {
         XCTAssertFalse(events.map(\.summary).joined(separator: "\n").contains("abcdef"))
         XCTAssertTrue(events.allSatisfy { $0.summary.contains("[redacted]") })
     }
+
+    func testActivityLogRecordsGenerationTimings() async {
+        let log = ActivityLog()
+        await log.record(
+            method: "POST",
+            path: "/v1/chat/completions",
+            status: 200,
+            startedAt: Date(),
+            model: "qwen",
+            summary: "completed",
+            inputTokens: 12,
+            outputTokens: 8,
+            firstTokenSeconds: 0.42,
+            loadSeconds: 1.25,
+            prefillSeconds: 0.2,
+            decodeSeconds: 2.0)
+
+        let event = await log.snapshot(limit: 1)[0]
+        XCTAssertEqual(event.firstTokenMs, 420)
+        XCTAssertEqual(event.loadMs, 1250)
+        XCTAssertEqual(event.prefillMs, 200)
+        XCTAssertEqual(event.decodeMs, 2000)
+        XCTAssertEqual(event.decodeTokensPerSecond, 4.0)
+    }
 }

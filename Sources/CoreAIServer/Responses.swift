@@ -132,7 +132,11 @@ extension ServerRuntime {
             // Initial role delta.
             try await writer.write(
                 sseData(OpenAIChatChunk(id: id, model: model, created: created, role: "assistant")))
+            var firstDeltaAt: Date?
             for await delta in stream {
+                if firstDeltaAt == nil {
+                    firstDeltaAt = Date()
+                }
                 try await emit(parser.push(delta))
             }
             try await emit(parser.finish())
@@ -149,7 +153,11 @@ extension ServerRuntime {
                 model: model,
                 summary: result == nil ? "stream failed" : "stream completed (\(finish))",
                 inputTokens: result?.promptTokenCount,
-                outputTokens: result?.generatedTokenCount)
+                outputTokens: result?.generatedTokenCount,
+                firstTokenSeconds: firstDeltaAt?.timeIntervalSince(requestStart),
+                loadSeconds: result?.modelLoadSeconds,
+                prefillSeconds: result?.prefillSeconds,
+                decodeSeconds: result?.decodeSeconds)
             try await writer.write(
                 sseData(OpenAIChatChunk(id: id, model: model, created: created, finish: finish)))
             try await writer.write(ByteBuffer(string: "data: [DONE]\n\n"))
@@ -238,7 +246,11 @@ extension ServerRuntime {
                 ))
             try await writer.write(sseEvent("ping", "{\"type\":\"ping\"}"))
 
+            var firstDeltaAt: Date?
             for await delta in stream {
+                if firstDeltaAt == nil {
+                    firstDeltaAt = Date()
+                }
                 try await emit(parser.push(delta))
             }
             try await emit(parser.finish())
@@ -269,7 +281,11 @@ extension ServerRuntime {
                 model: model,
                 summary: result == nil ? "stream failed" : "stream completed (\(stop))",
                 inputTokens: result?.promptTokenCount,
-                outputTokens: result?.generatedTokenCount)
+                outputTokens: result?.generatedTokenCount,
+                firstTokenSeconds: firstDeltaAt?.timeIntervalSince(requestStart),
+                loadSeconds: result?.modelLoadSeconds,
+                prefillSeconds: result?.prefillSeconds,
+                decodeSeconds: result?.decodeSeconds)
             try await writer.write(
                 sseEvent(
                     "message_delta",

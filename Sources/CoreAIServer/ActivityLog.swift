@@ -11,6 +11,11 @@ struct ActivityEvent: Codable, Sendable, Equatable {
     var summary: String
     var inputTokens: Int?
     var outputTokens: Int?
+    var firstTokenMs: Int?
+    var loadMs: Int?
+    var prefillMs: Int?
+    var decodeMs: Int?
+    var decodeTokensPerSecond: Double?
 }
 
 actor ActivityLog {
@@ -29,8 +34,14 @@ actor ActivityLog {
         model: String? = nil,
         summary: String,
         inputTokens: Int? = nil,
-        outputTokens: Int? = nil
+        outputTokens: Int? = nil,
+        firstTokenSeconds: Double? = nil,
+        loadSeconds: Double? = nil,
+        prefillSeconds: Double? = nil,
+        decodeSeconds: Double? = nil
     ) {
+        let output = max(0, outputTokens ?? 0)
+        let decode = decodeSeconds.map { max(0, $0) }
         let event = ActivityEvent(
             id: Self.shortID(),
             at: Date().timeIntervalSince1970,
@@ -41,7 +52,12 @@ actor ActivityLog {
             model: model?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty,
             summary: Self.redact(summary),
             inputTokens: inputTokens,
-            outputTokens: outputTokens)
+            outputTokens: outputTokens,
+            firstTokenMs: Self.milliseconds(firstTokenSeconds),
+            loadMs: Self.milliseconds(loadSeconds),
+            prefillMs: Self.milliseconds(prefillSeconds),
+            decodeMs: Self.milliseconds(decode),
+            decodeTokensPerSecond: decode.flatMap { $0 > 0 ? Double(output) / $0 : nil })
         events.append(event)
         if events.count > capacity {
             events.removeFirst(events.count - capacity)
@@ -70,6 +86,11 @@ actor ActivityLog {
             out = String(out.prefix(177)) + "..."
         }
         return out
+    }
+
+    private static func milliseconds(_ seconds: Double?) -> Int? {
+        guard let seconds, seconds.isFinite, seconds >= 0 else { return nil }
+        return Int((seconds * 1000).rounded())
     }
 
     private static func shortID() -> String {

@@ -337,11 +337,29 @@ private func summarizeActivity(_ rows: [[String: Any]]) -> [String] {
         let method = (row["method"] as? String) ?? "-"
         let path = (row["path"] as? String) ?? "-"
         let latency = row.numberValue("latencyMs", "latency_ms").map { "\(Int($0.rounded()))ms" } ?? "-"
+        let timing = activityTiming(row)
         let model = (row["model"] as? String).map { " \($0)" } ?? ""
         let summary = (row["summary"] as? String) ?? "-"
-        return "\(status) \(method) \(path) \(latency)\(model) - \(summary)"
+        return "\(status) \(method) \(path) \(latency)\(timing)\(model) - \(summary)"
     }
     return recent.isEmpty ? [field("recent", "none")] : recent
+}
+
+private func activityTiming(_ row: [String: Any]) -> String {
+    var parts: [String] = []
+    if let ttft = row.numberValue("firstTokenMs", "first_token_ms", "ttftMs", "ttft_ms") {
+        parts.append("ttft \(Int(ttft.rounded()))ms")
+    }
+    if let prefill = row.numberValue("prefillMs", "prefill_ms") {
+        parts.append("prefill \(Int(prefill.rounded()))ms")
+    }
+    if let decode = row.numberValue("decodeMs", "decode_ms") {
+        parts.append("decode \(Int(decode.rounded()))ms")
+    }
+    if let tps = row.numberValue("decodeTokensPerSecond", "decode_tokens_per_second") {
+        parts.append(String(format: "%.1f tok/s", tps))
+    }
+    return parts.isEmpty ? "" : " [\(parts.joined(separator: ", "))]"
 }
 
 private extension Dictionary where Key == String, Value == Any {
