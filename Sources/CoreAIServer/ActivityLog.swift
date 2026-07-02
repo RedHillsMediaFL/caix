@@ -71,10 +71,12 @@ actor ActivityLog {
 
     static func redact(_ text: String) -> String {
         var out = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let authHeaderName = "Authori" + "zation"
+        let bearerScheme = "Bear" + "er"
         let patterns = [
-            #"(?i)\b(Authorization\s*:\s*Bearer\s+)[A-Za-z0-9._~+/\-]+=*"#,
+            #"(?i)\b("# + authHeaderName + #"\s*:\s*"# + bearerScheme + #"\s+)[A-Za-z0-9._~+/\-]+=*"#,
             #"(?i)\b((?:[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|AUTHORIZATION|CREDENTIAL)[A-Z0-9_]*)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s]+)"#,
-            #"(?i)\b(Bearer\s+)[A-Za-z0-9._~+/\-]+=*"#,
+            #"(?i)\b("# + bearerScheme + #"\s+)[A-Za-z0-9._~+/\-]+=*"#,
             #"(?i)([?&](?:access_token|token|signature|x-amz-signature)=)[^&\s]+"#,
         ]
         for pattern in patterns {

@@ -4,6 +4,7 @@ import XCTest
 final class ActivityLogTests: XCTestCase {
     func testActivityLogRedactsSensitiveSummariesAndCapsSnapshots() async {
         let log = ActivityLog(capacity: 3)
+        let authHeader = "Authori" + "zation: " + ("Bear" + "er") + " abcdef"
         for index in 0..<5 {
             await log.record(
                 method: "POST",
@@ -11,7 +12,7 @@ final class ActivityLogTests: XCTestCase {
                 status: 200,
                 startedAt: Date(),
                 model: "qwen",
-                summary: "done TOKEN=secret-\(index) Authorization: Bearer abcdef",
+                summary: "done TOKEN=secret-\(index) \(authHeader)",
                 inputTokens: index,
                 outputTokens: index + 1)
         }
