@@ -77,6 +77,10 @@ public enum CoreAIServer {
                   guard      \(conversionGuardEnabled ? "conversion-aware" : "off")
                 """.appending("\n").utf8))
 
+        let bonjour = BonjourAdvertiser(host: host, port: port, caixVersion: caixVersion, verbose: verbose)
+        bonjour.start()
+        defer { bonjour.stop() }
+
         try await app.runService()
     }
 }
@@ -1172,10 +1176,10 @@ final class ServerRuntime: Sendable {
             return JSONResponder.error("invalid OpenAI chat request: \(error)", status: .badRequest)
         }
         let gen = req.toGeneration()
-        if let response = Self.rejectMultimodalIfNeeded(gen) {
+        if let response = Self.rejectUnsupportedResponseFormatIfNeeded(gen) {
             await activity.record(
                 method: "POST", path: "/v1/chat/completions", status: 400, startedAt: started,
-                model: gen.model, summary: "multimodal request rejected")
+                model: gen.model, summary: "response_format request rejected")
             return response
         }
         let modelName = await resolveModelName(gen.model)
@@ -1190,6 +1194,18 @@ final class ServerRuntime: Sendable {
                 model: modelName, summary: "model load failed: \(error)")
             return JSONResponder.error("could not load model '\(modelName)': \(error)", status: .serviceUnavailable)
         }
+        if let response = Self.rejectMultimodalIfNeeded(gen, handle: handle) {
+            await activity.record(
+                method: "POST", path: "/v1/chat/completions", status: 400, startedAt: started,
+                model: modelName, summary: "multimodal request rejected")
+            return response
+        }
+        if let response = Self.rejectUnsupportedResponseFormatIfNeeded(gen, handle: handle) {
+            await activity.record(
+                method: "POST", path: "/v1/chat/completions", status: 400, startedAt: started,
+                model: modelName, summary: "response_format unsupported by backend")
+            return response
+        }
 
         let messages = Self.messagePayload(gen.messages)
         var options = Self.options(from: gen)
@@ -1203,6 +1219,7 @@ final class ServerRuntime: Sendable {
         if gen.stream {
             return Self.openAIStream(
                 handle: handle, messages: messages, options: options, tools: tools, format: format,
+                generationRequest: gen.hasMultimodalContent ? gen : nil,
                 model: modelName, id: id, created: created,
                 includeUsage: req.stream_options?.include_usage == true,
                 activity: activity, startedAt: started)
@@ -1210,7 +1227,10 @@ final class ServerRuntime: Sendable {
 
         do {
             log("generation start for \(modelName)")
-            let result = try await handle.generate(messages: messages, options: options, tools: tools)
+            let result = gen.hasMultimodalContent
+                ? try await handle.generateMultimodal(
+                    request: gen, options: options, tools: tools)
+                : try await handle.generate(messages: messages, options: options, tools: tools)
             let completedAt = Date()
             log("generation done for \(modelName): \(result.generatedTokenCount) tokens")
             // Normalize the raw base-format output into reasoning_content + content + tool_calls.
@@ -1232,7 +1252,7 @@ final class ServerRuntime: Sendable {
                 firstTokenSeconds: Self.nonStreamingFirstTokenSeconds(
                     startedAt: started, completedAt: completedAt, result: result),
                 loadSeconds: result.modelLoadSeconds, prefillSeconds: result.prefillSeconds,
-                decodeSeconds: result.decodeSeconds)
+                decodeSeconds: result.decodeSeconds, prefixHitCount: result.prefixHitCount)
             return JSONResponder.encode(response)
         } catch {
             await activity.record(
@@ -1260,12 +1280,6 @@ final class ServerRuntime: Sendable {
             return JSONResponder.error("invalid Anthropic messages request: \(error)", status: .badRequest)
         }
         let gen = req.toGeneration()
-        if let response = Self.rejectMultimodalIfNeeded(gen) {
-            await activity.record(
-                method: "POST", path: "/v1/messages", status: 400, startedAt: started,
-                model: gen.model, summary: "multimodal request rejected")
-            return response
-        }
         let modelName = await resolveModelName(gen.model)
         let handle: ModelHandle
         do {
@@ -1275,6 +1289,12 @@ final class ServerRuntime: Sendable {
                 method: "POST", path: "/v1/messages", status: 503, startedAt: started,
                 model: modelName, summary: "model load failed: \(error)")
             return JSONResponder.error("could not load model '\(modelName)': \(error)", status: .serviceUnavailable)
+        }
+        if let response = Self.rejectMultimodalIfNeeded(gen, handle: handle) {
+            await activity.record(
+                method: "POST", path: "/v1/messages", status: 400, startedAt: started,
+                model: modelName, summary: "multimodal request rejected")
+            return response
         }
 
         let messages = Self.messagePayload(gen.messages)
@@ -1286,11 +1306,15 @@ final class ServerRuntime: Sendable {
         if gen.stream {
             return Self.anthropicStream(
                 handle: handle, messages: messages, options: options, tools: tools, format: format,
+                generationRequest: gen.hasMultimodalContent ? gen : nil,
                 model: modelName, id: id, activity: activity, startedAt: started)
         }
 
         do {
-            let result = try await handle.generate(messages: messages, options: options, tools: tools)
+            let result = gen.hasMultimodalContent
+                ? try await handle.generateMultimodal(
+                    request: gen, options: options, tools: tools)
+                : try await handle.generate(messages: messages, options: options, tools: tools)
             let completedAt = Date()
             // Normalize into thinking + text + tool_use content blocks (in that order).
             let norm = StreamingNormalizer.normalizeComplete(result.text, format: format)
@@ -1312,7 +1336,7 @@ final class ServerRuntime: Sendable {
                 firstTokenSeconds: Self.nonStreamingFirstTokenSeconds(
                     startedAt: started, completedAt: completedAt, result: result),
                 loadSeconds: result.modelLoadSeconds, prefillSeconds: result.prefillSeconds,
-                decodeSeconds: result.decodeSeconds)
+                decodeSeconds: result.decodeSeconds, prefixHitCount: result.prefixHitCount)
             return JSONResponder.encode(response)
         } catch {
             await activity.record(
@@ -1361,12 +1385,70 @@ final class ServerRuntime: Sendable {
         messages.map { ["role": $0.role, "content": $0.content] }
     }
 
-    static func rejectMultimodalIfNeeded(_ gen: GenerationRequest) -> Response? {
+    static func rejectMultimodalIfNeeded(
+        _ gen: GenerationRequest,
+        handle: ModelHandle
+    ) -> Response? {
+        rejectMultimodalIfNeeded(
+            gen,
+            backendSupportsMultimodalInput: handle.supportsMultimodalInput)
+    }
+
+    static func rejectMultimodalIfNeeded(
+        _ gen: GenerationRequest,
+        backendSupportsMultimodalInput: Bool
+    ) -> Response? {
         guard gen.hasMultimodalContent else { return nil }
-        let modalities = gen.modalities.joined(separator: ", ")
-        return JSONResponder.error(
-            "multimodal input is parsed but not supported by any verified caix runtime bundle yet: \(modalities)",
-            status: .badRequest)
+        if let error = MultimodalRequestSupport.validateMinimalSingleImageRequest(gen) {
+            return JSONResponder.error(error.description, status: .badRequest)
+        }
+        guard backendSupportsMultimodalInput else {
+            return JSONResponder.error(
+                "multimodal input requires a loaded multimodal staged Gemma backend; resolved backend is text-only",
+                status: .badRequest)
+        }
+        return nil
+    }
+
+    static func rejectUnsupportedResponseFormatIfNeeded(_ gen: GenerationRequest) -> Response? {
+        guard let responseFormat = gen.responseFormat, responseFormat.requiresConstrainedDecoding else {
+            return nil
+        }
+        guard CoreAIPipeline.supportsConstrainedDecoding else {
+            return JSONResponder.error(
+                "response_format \(responseFormat.diagnosticName) requires a COREAI_RUNTIME=1 build with CoreAILM constrained decoding",
+                status: .badRequest)
+        }
+        return nil
+    }
+
+    static func rejectUnsupportedResponseFormatIfNeeded(
+        _ gen: GenerationRequest,
+        handle: ModelHandle
+    ) -> Response? {
+        rejectUnsupportedResponseFormatIfNeeded(
+            gen,
+            backendSupportsConstrainedDecoding: handle.supportsConstrainedDecoding)
+    }
+
+    static func rejectUnsupportedResponseFormatIfNeeded(
+        _ gen: GenerationRequest,
+        backendSupportsConstrainedDecoding: Bool
+    ) -> Response? {
+        guard let responseFormat = gen.responseFormat, responseFormat.requiresConstrainedDecoding else {
+            return nil
+        }
+        guard backendSupportsConstrainedDecoding else {
+            return JSONResponder.error(
+                "response_format \(responseFormat.diagnosticName) requires a persistent CoreAILM language backend; this served backend does not support constrained decoding",
+                status: .badRequest)
+        }
+        guard responseFormat.constrainedJSONSchema != nil else {
+            return JSONResponder.error(
+                "response_format \(responseFormat.diagnosticName) did not produce a JSON schema for constrained decoding",
+                status: .badRequest)
+        }
+        return nil
     }
 
     static func options(from gen: GenerationRequest) -> CoreAIPipeline.Options {
@@ -1378,7 +1460,8 @@ final class ServerRuntime: Sendable {
             applyChatTemplate: gen.applyChatTemplate,
             kvCapacity: gen.kvCapacity,
             stopSequences: gen.stop,
-            seed: gen.seed)
+            seed: gen.seed,
+            constrainedJSONSchema: gen.responseFormat?.constrainedJSONSchema)
     }
 
     static func openAIFinish(_ reason: CoreAIPipeline.StopReason) -> String {

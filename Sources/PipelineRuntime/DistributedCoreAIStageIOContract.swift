@@ -124,19 +124,31 @@ enum DistributedCoreAIStageCacheContract {
     case explicitOutputs
 }
 
+struct DistributedCoreAIStageCacheGroupIO {
+    let groupName: String
+    let keyCacheName: String
+    let valueCacheName: String
+    let keyCacheDescriptor: NDArrayDescriptor
+    let valueCacheDescriptor: NDArrayDescriptor
+    let keyCacheOutputDescriptor: NDArrayDescriptor
+    let valueCacheOutputDescriptor: NDArrayDescriptor
+}
+
 struct DistributedCoreAIStageCacheIO {
     let contract: DistributedCoreAIStageCacheContract
-    let keyCacheName: String?
-    let valueCacheName: String?
-    let keyCacheDescriptor: NDArrayDescriptor?
-    let valueCacheDescriptor: NDArrayDescriptor?
-    let keyCacheOutputDescriptor: NDArrayDescriptor?
-    let valueCacheOutputDescriptor: NDArrayDescriptor?
+    let groups: [DistributedCoreAIStageCacheGroupIO]
+
+    var keyCacheName: String? { groups.first?.keyCacheName }
+    var valueCacheName: String? { groups.first?.valueCacheName }
+    var keyCacheDescriptor: NDArrayDescriptor? { groups.first?.keyCacheDescriptor }
+    var valueCacheDescriptor: NDArrayDescriptor? { groups.first?.valueCacheDescriptor }
+    var keyCacheOutputDescriptor: NDArrayDescriptor? { groups.first?.keyCacheOutputDescriptor }
+    var valueCacheOutputDescriptor: NDArrayDescriptor? { groups.first?.valueCacheOutputDescriptor }
 
     var stageIOInputExclusions: Set<String> {
         switch contract {
         case .explicitOutputs:
-            return Set([keyCacheName, valueCacheName].compactMap { $0 })
+            return Set(groups.flatMap { [$0.keyCacheName, $0.valueCacheName] })
         case .none, .stateful:
             return []
         }
@@ -145,7 +157,7 @@ struct DistributedCoreAIStageCacheIO {
     var stageIOOutputExclusions: Set<String> {
         switch contract {
         case .explicitOutputs:
-            return Set([keyCacheName, valueCacheName].compactMap { $0 })
+            return Set(groups.flatMap { [$0.keyCacheName, $0.valueCacheName] })
         case .none, .stateful:
             return []
         }
@@ -154,30 +166,17 @@ struct DistributedCoreAIStageCacheIO {
     static func extracted(from descriptor: InferenceFunctionDescriptor) throws
         -> DistributedCoreAIStageCacheIO
     {
-        let hasStateKV = descriptor.stateNames.count == 2
+        let stateGroups = try stateCacheGroups(from: descriptor)
         let hasExplicitKV =
             descriptor.stateNames.isEmpty
             && descriptor.inputNames.contains("keyCache")
             && descriptor.inputNames.contains("valueCache")
             && descriptor.outputNames.contains("keyCache")
             && descriptor.outputNames.contains("valueCache")
-        if hasStateKV {
-            let keyName = pick("keyCache", descriptor.stateNames, index: 0)
-            let valueName = pick("valueCache", descriptor.stateNames, index: 1)
-            guard case .ndArray(let keyDesc) = descriptor.stateDescriptor(of: keyName),
-                case .ndArray(let valueDesc) = descriptor.stateDescriptor(of: valueName)
-            else {
-                throw CoreAIPipeline.RuntimeError.modelContract(
-                    "distributed stage KV cache states are not NDArrays")
-            }
+        if !stateGroups.isEmpty {
             return DistributedCoreAIStageCacheIO(
                 contract: .stateful,
-                keyCacheName: keyName,
-                valueCacheName: valueName,
-                keyCacheDescriptor: keyDesc,
-                valueCacheDescriptor: valueDesc,
-                keyCacheOutputDescriptor: keyDesc,
-                valueCacheOutputDescriptor: valueDesc)
+                groups: stateGroups)
         }
         if hasExplicitKV {
             let keyName = pick("keyCache", descriptor.inputNames, index: 2)
@@ -196,12 +195,16 @@ struct DistributedCoreAIStageCacheIO {
             }
             return DistributedCoreAIStageCacheIO(
                 contract: .explicitOutputs,
-                keyCacheName: keyName,
-                valueCacheName: valueName,
-                keyCacheDescriptor: inputKeyDesc,
-                valueCacheDescriptor: inputValueDesc,
-                keyCacheOutputDescriptor: outputKeyDesc,
-                valueCacheOutputDescriptor: outputValueDesc)
+                groups: [
+                    DistributedCoreAIStageCacheGroupIO(
+                        groupName: "default",
+                        keyCacheName: keyName,
+                        valueCacheName: valueName,
+                        keyCacheDescriptor: inputKeyDesc,
+                        valueCacheDescriptor: inputValueDesc,
+                        keyCacheOutputDescriptor: outputKeyDesc,
+                        valueCacheOutputDescriptor: outputValueDesc)
+                ])
         }
         if descriptor.stateNames.isEmpty
             && !descriptor.inputNames.contains("keyCache")
@@ -211,12 +214,7 @@ struct DistributedCoreAIStageCacheIO {
         {
             return DistributedCoreAIStageCacheIO(
                 contract: .none,
-                keyCacheName: nil,
-                valueCacheName: nil,
-                keyCacheDescriptor: nil,
-                valueCacheDescriptor: nil,
-                keyCacheOutputDescriptor: nil,
-                valueCacheOutputDescriptor: nil)
+                groups: [])
         }
         throw CoreAIPipeline.RuntimeError.modelContract(
             "expected no KV cache, stateful KV states, or explicit-cache inputs/outputs; "
@@ -225,6 +223,95 @@ struct DistributedCoreAIStageCacheIO {
 
     private static func pick(_ wanted: String, _ names: [String], index: Int) -> String {
         names.contains(wanted) ? wanted : names[index]
+    }
+
+    private static func stateCacheGroups(
+        from descriptor: InferenceFunctionDescriptor
+    ) throws -> [DistributedCoreAIStageCacheGroupIO] {
+        guard !descriptor.stateNames.isEmpty else { return [] }
+        if descriptor.stateNames.count == 2 {
+            let keyName = pick("keyCache", descriptor.stateNames, index: 0)
+            let valueName = pick("valueCache", descriptor.stateNames, index: 1)
+            guard case .ndArray(let keyDesc) = descriptor.stateDescriptor(of: keyName),
+                case .ndArray(let valueDesc) = descriptor.stateDescriptor(of: valueName)
+            else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "distributed stage KV cache states are not NDArrays")
+            }
+            return [
+                DistributedCoreAIStageCacheGroupIO(
+                    groupName: "default",
+                    keyCacheName: keyName,
+                    valueCacheName: valueName,
+                    keyCacheDescriptor: keyDesc,
+                    valueCacheDescriptor: valueDesc,
+                    keyCacheOutputDescriptor: keyDesc,
+                    valueCacheOutputDescriptor: valueDesc)
+            ]
+        }
+        guard descriptor.stateNames.count.isMultiple(of: 2) else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "distributed stage stateful KV cache must declare key/value state pairs; "
+                    + ioSummary(descriptor))
+        }
+        var keyByGroup: [String: String] = [:]
+        var valueByGroup: [String: String] = [:]
+        var groupOrder: [String] = []
+        for stateName in descriptor.stateNames {
+            if let groupName = cacheGroupName(for: stateName, suffix: "keyCache") {
+                if keyByGroup[groupName] != nil {
+                    throw CoreAIPipeline.RuntimeError.modelContract(
+                        "distributed stage KV cache group '\(groupName)' has duplicate key state")
+                }
+                keyByGroup[groupName] = stateName
+                groupOrder.append(groupName)
+            } else if let groupName = cacheGroupName(for: stateName, suffix: "valueCache") {
+                if valueByGroup[groupName] != nil {
+                    throw CoreAIPipeline.RuntimeError.modelContract(
+                        "distributed stage KV cache group '\(groupName)' has duplicate value state")
+                }
+                valueByGroup[groupName] = stateName
+                if !groupOrder.contains(groupName) {
+                    groupOrder.append(groupName)
+                }
+            } else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "distributed stage KV cache state '\(stateName)' must end in keyCache/valueCache")
+            }
+        }
+        var groups: [DistributedCoreAIStageCacheGroupIO] = []
+        for groupName in groupOrder {
+            guard let keyName = keyByGroup[groupName],
+                let valueName = valueByGroup[groupName]
+            else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "distributed stage KV cache group '\(groupName)' is missing a key/value state")
+            }
+            guard case .ndArray(let keyDesc) = descriptor.stateDescriptor(of: keyName),
+                case .ndArray(let valueDesc) = descriptor.stateDescriptor(of: valueName)
+            else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "distributed stage KV cache states are not NDArrays")
+            }
+            groups.append(DistributedCoreAIStageCacheGroupIO(
+                groupName: groupName,
+                keyCacheName: keyName,
+                valueCacheName: valueName,
+                keyCacheDescriptor: keyDesc,
+                valueCacheDescriptor: valueDesc,
+                keyCacheOutputDescriptor: keyDesc,
+                valueCacheOutputDescriptor: valueDesc))
+        }
+        return groups
+    }
+
+    private static func cacheGroupName(for stateName: String, suffix: String) -> String? {
+        guard stateName.hasSuffix(suffix) else { return nil }
+        var prefix = String(stateName.dropLast(suffix.count))
+        if prefix.hasSuffix("_") || prefix.hasSuffix(".") || prefix.hasSuffix("/") {
+            prefix.removeLast()
+        }
+        return prefix.isEmpty ? "default" : prefix
     }
 
     private static func ioSummary(_ descriptor: InferenceFunctionDescriptor) -> String {
@@ -245,6 +332,8 @@ private struct DistributedCoreAIStageExecutionIO {
     let logitsOutput: DistributedCoreAIStageNDArrayBinding?
     let ropeCosInput: DistributedCoreAIStageNDArrayBinding?
     let ropeSinInput: DistributedCoreAIStageNDArrayBinding?
+    let blockIDsQInput: DistributedCoreAIStageNDArrayBinding?
+    let blockIDsKVInput: DistributedCoreAIStageNDArrayBinding?
 
     static func bound(
         for stage: DistributedStageDescriptor,
@@ -261,7 +350,9 @@ private struct DistributedCoreAIStageExecutionIO {
                 hiddenStatesOutput: try output(.hiddenStates, descriptor: descriptor),
                 logitsOutput: nil,
                 ropeCosInput: nil,
-                ropeSinInput: nil)
+                ropeSinInput: nil,
+                blockIDsQInput: nil,
+                blockIDsKVInput: nil)
         case .transformerLayers:
             return DistributedCoreAIStageExecutionIO(
                 inputIDs: try optionalInput(.inputIDs, descriptor: descriptor),
@@ -274,7 +365,9 @@ private struct DistributedCoreAIStageExecutionIO {
                 },
                 ropeSinInput: try stage.rope.map {
                     try input(named: $0.sinInputName, descriptor: descriptor)
-                })
+                },
+                blockIDsQInput: try optionalInput(.blockIDsQ, descriptor: descriptor),
+                blockIDsKVInput: try optionalInput(.blockIDsKV, descriptor: descriptor))
         case .finalNormHead:
             guard vocabSize != nil else {
                 throw CoreAIPipeline.RuntimeError.modelContract(
@@ -287,7 +380,9 @@ private struct DistributedCoreAIStageExecutionIO {
                 hiddenStatesOutput: nil,
                 logitsOutput: try output(.logits, descriptor: descriptor),
                 ropeCosInput: nil,
-                ropeSinInput: nil)
+                ropeSinInput: nil,
+                blockIDsQInput: nil,
+                blockIDsKVInput: nil)
         }
     }
 
@@ -529,6 +624,11 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
                 ],
                 outputViews: consume outputViews,
                 requestState: &requestState)
+            try DistributedCoreAIStageNDArrayIO.applySoftTokenSpliceIfPresent(
+                input.softTokenSplice,
+                to: &hiddenStates,
+                descriptor: hiddenOutputBinding.descriptor,
+                positionRange: input.positionRange)
             try traceHiddenArrayIfRequested(
                 hiddenStates,
                 point: "hidden_output_ndarray",
@@ -589,6 +689,15 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
                 inputs[inputIDsBinding.name] = try DistributedCoreAIStageNDArrayIO.makeInputIDs(
                     tokenIDs: input.tokenIDs,
                     descriptor: inputIDsBinding.descriptor)
+            }
+            if positionCount > 1 {
+                try addBlockIDInputsIfNeeded(
+                    to: &inputs,
+                    input: input,
+                    positionCount: positionCount)
+            } else if input.blockIDsQ != nil || input.blockIDsKV != nil {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "decode stage must not receive block_ids")
             }
             if let rope = descriptor.rope,
                 let ropeCosInput = executionIO.ropeCosInput,
@@ -696,7 +805,8 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
             output = DistributedStageForwardOutput(
                 stageID: descriptor.id,
                 stepIndex: input.stepIndex,
-                tokenID: Int32(tokenID))
+                tokenID: Int32(tokenID),
+                topLogits: Self.captureTopLogitsIfRequested(logitsRow))
         }
 
         requestState.processedTokenCount += positionCount
@@ -817,6 +927,19 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
         FileHandle.standardError.write(Data(line.utf8))
     }
 
+    private static func captureTopLogitsIfRequested(_ logits: [Float]) -> [DistributedLogitScore] {
+        guard let rawLimit = ProcessInfo.processInfo.environment["CAIX_CAPTURE_STAGE_TOPK"],
+            let limit = Int(rawLimit),
+            limit > 0
+        else {
+            return []
+        }
+        return Sampler.topK(logits, count: min(limit, logits.count)).compactMap { item in
+            guard item.index <= Int(Int32.max) else { return nil }
+            return DistributedLogitScore(tokenID: Int32(item.index), logit: item.logit)
+        }
+    }
+
     private func validateForwardInput(
         _ input: DistributedStageForwardInput,
         requestState: DistributedCoreAIStageRequestState
@@ -841,6 +964,7 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
             throw DistributedStageExecutionError.invalidForwardInput(
                 "position_ids count must cover position_range")
         }
+        try validateBlockIDsIfPresent(input)
 
         switch descriptor.role {
         case .embeddings:
@@ -852,7 +976,16 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
                 throw DistributedStageExecutionError.invalidForwardInput(
                     "embeddings stage must not receive hidden_state")
             }
+            guard input.blockIDsQ == nil && input.blockIDsKV == nil else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "embeddings stage must not receive block_ids")
+            }
+            try validateSoftTokenSpliceIfPresent(input)
         case .transformerLayers, .finalNormHead:
+            guard input.softTokenSplice == nil else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "\(descriptor.role.rawValue) stage must not receive soft_token_splice")
+            }
             if executionIO.inputIDs != nil {
                 guard input.tokenIDs.count == input.positionRange.count else {
                     throw DistributedStageExecutionError.invalidForwardInput(
@@ -884,7 +1017,85 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
                 throw DistributedStageExecutionError.invalidForwardInput(
                     "hidden_state position_range does not match request")
             }
+            if descriptor.role == .finalNormHead {
+                guard input.blockIDsQ == nil && input.blockIDsKV == nil else {
+                    throw DistributedStageExecutionError.invalidForwardInput(
+                        "final_norm_head stage must not receive block_ids")
+                }
+            }
         }
+    }
+
+    private func validateBlockIDsIfPresent(_ input: DistributedStageForwardInput) throws {
+        guard input.blockIDsQ != nil || input.blockIDsKV != nil else { return }
+        guard let blockIDsQ = input.blockIDsQ,
+            let blockIDsKV = input.blockIDsKV
+        else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "block_ids_q and block_ids_kv must be supplied together")
+        }
+        guard blockIDsQ.count == input.positionRange.count else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "block_ids_q count must match position_range")
+        }
+        guard blockIDsKV.count == input.positionIDs.count else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "block_ids_kv count must match position_ids")
+        }
+    }
+
+    private func validateSoftTokenSpliceIfPresent(
+        _ input: DistributedStageForwardInput
+    ) throws {
+        guard let splice = input.softTokenSplice else { return }
+        guard input.positionRange.count > 1 else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "decode stage must not receive soft_token_splice")
+        }
+        guard splice.positionStart >= input.positionRange.lowerBound
+            && splice.positionEnd <= input.positionRange.upperBound
+        else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "soft_token_splice position range must be inside position_range")
+        }
+        if let hiddenSize = boundaryTensor?.shape.last, hiddenSize > 0 {
+            guard splice.hiddenSize == hiddenSize else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "soft_token_splice hidden size must match boundary tensor")
+            }
+        }
+    }
+
+    private func addBlockIDInputsIfNeeded(
+        to inputs: inout [String: NDArray],
+        input: DistributedStageForwardInput,
+        positionCount: Int
+    ) throws {
+        let hasAnyBinding = executionIO.blockIDsQInput != nil || executionIO.blockIDsKVInput != nil
+        guard hasAnyBinding else {
+            guard input.blockIDsQ == nil && input.blockIDsKV == nil else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "\(descriptor.role.rawValue) stage has no block_ids inputs")
+            }
+            return
+        }
+        guard let blockIDsQInput = executionIO.blockIDsQInput,
+            let blockIDsKVInput = executionIO.blockIDsKVInput
+        else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "distributed transformer_layers block_ids_q/block_ids_kv bindings are incomplete")
+        }
+
+        let blockIDsQ = input.blockIDsQ ?? Array(repeating: Int32(-1), count: positionCount)
+        let blockIDsKV = input.blockIDsKV ?? Array(repeating: Int32(-1), count: input.positionIDs.count)
+        inputs[blockIDsQInput.name] = try DistributedCoreAIStageNDArrayIO.makeBlockIDs(
+            blockIDsQ,
+            descriptor: blockIDsQInput.descriptor,
+            tensorName: blockIDsQInput.name)
+        inputs[blockIDsKVInput.name] = try DistributedCoreAIStageNDArrayIO.makeBlockIDs(
+            blockIDsKV,
+            descriptor: blockIDsKVInput.descriptor,
+            tensorName: blockIDsKVInput.name)
     }
 
     private func run(
@@ -899,52 +1110,67 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
                 inputs: inputs,
                 outputViews: consume outputViews)
         case .stateful:
-            guard var keyCache = requestState.keyCache,
-                var valueCache = requestState.valueCache,
-                let keyCacheName = cacheIO.keyCacheName,
-                let valueCacheName = cacheIO.valueCacheName
-            else {
+            guard !cacheIO.groups.isEmpty else {
                 throw CoreAIPipeline.RuntimeError.modelContract(
                     "distributed stage stateful KV cache is missing")
             }
-            var states = InferenceFunction.MutableViews()
-            states.insert(&keyCache, for: keyCacheName)
-            states.insert(&valueCache, for: valueCacheName)
-            _ = try await function.run(
-                inputs: inputs,
-                states: consume states,
-                outputViews: consume outputViews)
-            requestState.keyCache = keyCache
-            requestState.valueCache = valueCache
-        case .explicitOutputs:
-            guard let keyCache = requestState.keyCache,
-                let valueCache = requestState.valueCache,
-                let keyCacheName = cacheIO.keyCacheName,
-                let valueCacheName = cacheIO.valueCacheName,
-                let keyCacheOutputDescriptor = cacheIO.keyCacheOutputDescriptor,
-                let valueCacheOutputDescriptor = cacheIO.valueCacheOutputDescriptor
-            else {
+            if cacheIO.groups.count == 1 {
+                let group = cacheIO.groups[0]
+                var cacheGroup = try requestState.cacheGroup(named: group.groupName)
+                var states = InferenceFunction.MutableViews()
+                states.insert(&cacheGroup.keyCache, for: group.keyCacheName)
+                states.insert(&cacheGroup.valueCache, for: group.valueCacheName)
+                _ = try await function.run(
+                    inputs: inputs,
+                    states: consume states,
+                    outputViews: consume outputViews)
+                requestState.cacheGroups[group.groupName] = cacheGroup
+            } else if cacheIO.groups.count == 2 {
+                let firstGroupIO = cacheIO.groups[0]
+                let secondGroupIO = cacheIO.groups[1]
+                var firstGroup = try requestState.cacheGroup(named: firstGroupIO.groupName)
+                var secondGroup = try requestState.cacheGroup(named: secondGroupIO.groupName)
+                var states = InferenceFunction.MutableViews()
+                states.insert(&firstGroup.keyCache, for: firstGroupIO.keyCacheName)
+                states.insert(&firstGroup.valueCache, for: firstGroupIO.valueCacheName)
+                states.insert(&secondGroup.keyCache, for: secondGroupIO.keyCacheName)
+                states.insert(&secondGroup.valueCache, for: secondGroupIO.valueCacheName)
+                _ = try await function.run(
+                    inputs: inputs,
+                    states: consume states,
+                    outputViews: consume outputViews)
+                requestState.cacheGroups[firstGroupIO.groupName] = firstGroup
+                requestState.cacheGroups[secondGroupIO.groupName] = secondGroup
+            } else {
                 throw CoreAIPipeline.RuntimeError.modelContract(
-                    "distributed stage explicit KV cache is missing")
+                    "distributed stage stateful KV cache supports at most two cache groups")
             }
+        case .explicitOutputs:
+            guard cacheIO.groups.count == 1 else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "distributed stage explicit KV cache requires one key/value group")
+            }
+            let group = cacheIO.groups[0]
+            let cacheGroup = try requestState.cacheGroup(named: group.groupName)
             var nextKeyCache = try Self.makeExplicitKVCacheOutput(
-                descriptor: keyCacheOutputDescriptor,
-                currentCache: keyCache,
-                tensorName: keyCacheName)
+                descriptor: group.keyCacheOutputDescriptor,
+                currentCache: cacheGroup.keyCache,
+                tensorName: group.keyCacheName)
             var nextValueCache = try Self.makeExplicitKVCacheOutput(
-                descriptor: valueCacheOutputDescriptor,
-                currentCache: valueCache,
-                tensorName: valueCacheName)
-            outputViews.insert(&nextKeyCache, for: keyCacheName)
-            outputViews.insert(&nextValueCache, for: valueCacheName)
+                descriptor: group.valueCacheOutputDescriptor,
+                currentCache: cacheGroup.valueCache,
+                tensorName: group.valueCacheName)
+            outputViews.insert(&nextKeyCache, for: group.keyCacheName)
+            outputViews.insert(&nextValueCache, for: group.valueCacheName)
             var explicitInputs = inputs
-            explicitInputs[keyCacheName] = keyCache
-            explicitInputs[valueCacheName] = valueCache
+            explicitInputs[group.keyCacheName] = cacheGroup.keyCache
+            explicitInputs[group.valueCacheName] = cacheGroup.valueCache
             _ = try await function.run(
                 inputs: explicitInputs,
                 outputViews: consume outputViews)
-            requestState.keyCache = nextKeyCache
-            requestState.valueCache = nextValueCache
+            requestState.cacheGroups[group.groupName] = DistributedCoreAIStageRequestCacheGroup(
+                keyCache: nextKeyCache,
+                valueCache: nextValueCache)
         }
     }
 
@@ -998,21 +1224,25 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
                 requestID: allocation.requestID,
                 kvCapacity: allocation.kvCapacity)
         case .stateful, .explicitOutputs:
-            guard let keyCacheDescriptor = cacheIO.keyCacheDescriptor,
-                let valueCacheDescriptor = cacheIO.valueCacheDescriptor
-            else {
+            guard !cacheIO.groups.isEmpty else {
                 throw CoreAIPipeline.RuntimeError.modelContract(
                     "distributed stage KV cache descriptors are missing")
+            }
+            var cacheGroups: [String: DistributedCoreAIStageRequestCacheGroup] = [:]
+            for group in cacheIO.groups {
+                let capacity = allocation.capacity(forCacheGroup: group.groupName)
+                cacheGroups[group.groupName] = DistributedCoreAIStageRequestCacheGroup(
+                    keyCache: try Self.makeKVCache(
+                        descriptor: group.keyCacheDescriptor,
+                        capacity: capacity),
+                    valueCache: try Self.makeKVCache(
+                        descriptor: group.valueCacheDescriptor,
+                        capacity: capacity))
             }
             return DistributedCoreAIStageRequestState(
                 requestID: allocation.requestID,
                 kvCapacity: allocation.kvCapacity,
-                keyCache: try Self.makeKVCache(
-                    descriptor: keyCacheDescriptor,
-                    capacity: allocation.kvCapacity),
-                valueCache: try Self.makeKVCache(
-                    descriptor: valueCacheDescriptor,
-                    capacity: allocation.kvCapacity))
+                cacheGroups: cacheGroups)
         }
     }
 
@@ -1181,6 +1411,26 @@ enum DistributedCoreAIStageNDArrayIO {
         return array
     }
 
+    static func makeBlockIDs(
+        _ blockIDs: [Int32],
+        descriptor: NDArrayDescriptor,
+        tensorName: String
+    ) throws -> NDArray {
+        let shape = try DistributedCoreAIStageNDArrayShape.resolvedMatrix(
+            descriptor.shape,
+            columns: blockIDs.count,
+            tensorName: tensorName)
+        var array = NDArray(descriptor: descriptor.resolvingDynamicDimensions(shape))
+        switch descriptor.scalarType {
+        case .int32:
+            fillInt32(&array, blockIDs)
+        default:
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "\(tensorName) scalar type \(descriptor.scalarType) is not supported for block ids")
+        }
+        return array
+    }
+
     static func makeRoPEInput(
         positionIDs: [Int32],
         positionCount: Int,
@@ -1270,6 +1520,54 @@ enum DistributedCoreAIStageNDArrayIO {
         }
         return NDArray(
             descriptor: descriptor.resolvingDynamicDimensions(shape))
+    }
+
+    static func applySoftTokenSpliceIfPresent(
+        _ splice: DistributedSoftTokenSplice?,
+        to output: inout NDArray,
+        descriptor: NDArrayDescriptor,
+        positionRange: DistributedSequenceRange
+    ) throws {
+        guard let splice else { return }
+        guard splice.positionStart >= positionRange.lowerBound
+            && splice.positionEnd <= positionRange.upperBound
+        else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "soft_token_splice position range must be inside position_range")
+        }
+        switch descriptor.scalarType {
+        case .float16:
+            let values: [Float16]
+            switch splice.scalarType {
+            case .float16:
+                values = try splice.float16Values()
+            case .float32:
+                values = try splice.float32Values().map(Float16.init)
+            }
+            try applySoftTokenRows(
+                values,
+                splice: splice,
+                to: &output,
+                positionRange: positionRange,
+                as: Float16.self)
+        case .float32:
+            let values: [Float]
+            switch splice.scalarType {
+            case .float16:
+                values = try splice.float16Values().map(Float.init)
+            case .float32:
+                values = try splice.float32Values()
+            }
+            try applySoftTokenRows(
+                values,
+                splice: splice,
+                to: &output,
+                positionRange: positionRange,
+                as: Float.self)
+        default:
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "hidden_states scalar type \(descriptor.scalarType) is not supported for soft_token_splice")
+        }
     }
 
     static func makeLogitsOutput(
@@ -1414,6 +1712,48 @@ enum DistributedCoreAIStageNDArrayIO {
         }
         var view = array.mutableView(as: T.self)
         view.copyElements(fromContentsOf: values)
+    }
+
+    private static func applySoftTokenRows<T: BinaryFloatingPoint & BitwiseCopyable>(
+        _ values: [T],
+        splice: DistributedSoftTokenSplice,
+        to output: inout NDArray,
+        positionRange: DistributedSequenceRange,
+        as _: T.Type
+    ) throws {
+        guard values.count == splice.rowCount * splice.hiddenSize else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "soft_token_splice element count does not match shape")
+        }
+        let localStart = splice.positionStart - positionRange.lowerBound
+        var view = output.mutableView(as: T.self)
+        try view.withUnsafeMutablePointer { pointer, shape, strides in
+            let viewShape = copySpan(shape)
+            let viewStrides = copySpan(strides)
+            guard viewShape.count == 3, viewShape[0] == 1 else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "hidden_states shape \(viewShape) does not match [1, sequence, hidden]")
+            }
+            guard localStart >= 0, localStart + splice.rowCount <= viewShape[1] else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "soft_token_splice row range is outside hidden_states output")
+            }
+            guard splice.hiddenSize == viewShape[2] else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "soft_token_splice hidden size must match hidden_states")
+            }
+            for row in 0..<splice.rowCount {
+                let destinationRow = localStart + row
+                let sourceBase = row * splice.hiddenSize
+                for column in 0..<splice.hiddenSize {
+                    let destinationOffset =
+                        viewStrides[0] * 0
+                        + viewStrides[1] * destinationRow
+                        + viewStrides[2] * column
+                    pointer[destinationOffset] = values[sourceBase + column]
+                }
+            }
+        }
     }
 
     private static func readRank3<T: BitwiseCopyable>(
@@ -1595,25 +1935,35 @@ enum DistributedCoreAIStageNDArrayIO {
     }
 }
 
+private struct DistributedCoreAIStageRequestCacheGroup {
+    var keyCache: NDArray
+    var valueCache: NDArray
+}
+
 private struct DistributedCoreAIStageRequestState {
     let requestID: String
     let kvCapacity: Int
     var processedTokenCount: Int
-    var keyCache: NDArray?
-    var valueCache: NDArray?
+    var cacheGroups: [String: DistributedCoreAIStageRequestCacheGroup]
 
     init(
         requestID: String,
         kvCapacity: Int,
         processedTokenCount: Int = 0,
-        keyCache: NDArray? = nil,
-        valueCache: NDArray? = nil
+        cacheGroups: [String: DistributedCoreAIStageRequestCacheGroup] = [:]
     ) {
         self.requestID = requestID
         self.kvCapacity = kvCapacity
         self.processedTokenCount = processedTokenCount
-        self.keyCache = keyCache
-        self.valueCache = valueCache
+        self.cacheGroups = cacheGroups
+    }
+
+    func cacheGroup(named groupName: String) throws -> DistributedCoreAIStageRequestCacheGroup {
+        guard let group = cacheGroups[groupName] else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "distributed stage KV cache group '\(groupName)' is missing")
+        }
+        return group
     }
 }
 #endif

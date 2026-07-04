@@ -10,6 +10,8 @@ import Glibc
 
 /// One row of `GET /api/models` (`[{name, params, status, bundle}]`). `memoryBytes` is an
 /// additive field carrying the resident footprint of loaded models (ignored by the dashboard).
+/// `reasoningSupported` is derived from bundle tokenizer markers and does not require model load.
+/// `multimodalSupported` is true for bundles that can accept the currently supported image route.
 public struct ModelEntry: Codable, Sendable {
     public var name: String
     public var params: String
@@ -17,6 +19,8 @@ public struct ModelEntry: Codable, Sendable {
     public var bundle: Bool
     public var memoryBytes: UInt64?
     public var mode: String?
+    public var reasoningSupported: Bool?
+    public var multimodalSupported: Bool?
 }
 
 public enum ModelSuitability: Sendable {
@@ -168,6 +172,7 @@ final class ModelHandle: @unchecked Sendable {
         case speculative(PersistentSpeculativeModel)
         #if COREAI_RUNTIME
         case eagle(EagleEngine)  // EAGLE speculative decoding
+        case multimodalStaged(MultimodalStagedModel, Gemma4VisionEmbedder)
         #endif
     }
     let backend: Backend
@@ -199,10 +204,36 @@ final class ModelHandle: @unchecked Sendable {
         self.displayName = name
         self.bytes = bytes
     }
+
+    init(multimodalStaged: MultimodalStagedModel, embedder: Gemma4VisionEmbedder, name: String, bytes: UInt64) {
+        self.backend = .multimodalStaged(multimodalStaged, embedder)
+        self.displayName = name
+        self.bytes = bytes
+    }
     #endif
 
     var name: String { displayName }
     var memoryBytes: UInt64 { bytes }
+    var supportsMultimodalInput: Bool {
+        #if COREAI_RUNTIME
+        if case .multimodalStaged = backend { return true }
+        #endif
+        return false
+    }
+    var supportsConstrainedDecoding: Bool {
+        switch backend {
+        case .persistent(let model):
+            return model.supportsConstrainedDecoding
+        case .speculative:
+            return false
+        #if COREAI_RUNTIME
+        case .eagle:
+            return false
+        case .multimodalStaged:
+            return false
+        #endif
+        }
+    }
     var eagleBackbone: Int? {
         #if COREAI_RUNTIME
         if case .eagle(let engine) = backend { return engine.backbone }
@@ -256,6 +287,13 @@ final class ModelHandle: @unchecked Sendable {
                     generatedTokenCount: r.generatedTokenCount, stopReason: r.stopReason,
                     modelLoadSeconds: r.modelLoadSeconds, prefillSeconds: r.prefillSeconds,
                     decodeSeconds: r.decodeSeconds)
+            case .multimodalStaged(let model, _):
+                if let tools, !tools.isEmpty {
+                    throw CoreAIPipeline.RuntimeError.unsupportedFeature(
+                        "multimodal staged Gemma does not support tool prompting yet")
+                }
+                result = try await model.generate(
+                    messages: messages, options: options, onToken: onToken)
             #endif
             }
             await gate.release()
@@ -267,6 +305,186 @@ final class ModelHandle: @unchecked Sendable {
             await gate.release()
             throw error
         }
+    }
+
+    func generateMultimodal(
+        request: GenerationRequest,
+        options: CoreAIPipeline.Options,
+        tools: [[String: any Sendable]]? = nil,
+        onToken: ((String) -> Void)? = nil
+    ) async throws -> CoreAIPipeline.Result {
+        #if !COREAI_RUNTIME
+        _ = (request, options, tools, onToken)
+        throw CoreAIPipeline.RuntimeError.runtimeUnavailable
+        #else
+        await gate.acquire()
+        do {
+            let result: CoreAIPipeline.Result
+            switch backend {
+            case .multimodalStaged(let model, let embedder):
+                if let tools, !tools.isEmpty {
+                    throw CoreAIPipeline.RuntimeError.unsupportedFeature(
+                        "multimodal staged Gemma does not support tool prompting yet")
+                }
+                let imageData = try MultimodalRequestSupport.singleImageData(in: request)
+                let messages = try MultimodalRequestSupport.messagesWithImagePlaceholder(
+                    from: request.messages,
+                    imageTextSeparator: model.imageTextSeparator)
+                let generated = try await model.generateSingleImage(
+                    messages: messages,
+                    imageData: imageData,
+                    embedder: embedder,
+                    options: options,
+                    onToken: onToken)
+                if options.verbose {
+                    FileHandle.standardError.write(Data(
+                        String(
+                            format: "[server-mm] model=%@ embedder=%@ compute=%@ preprocess=%.3fs embedder=%.3fs output_shape=%@ rows=%d\n",
+                            displayName,
+                            embedder.assetURL.path,
+                            embedder.computeMode,
+                            generated.embedding.preprocessSeconds,
+                            generated.embedding.embedderSeconds,
+                            String(describing: generated.embedding.outputShape),
+                            generated.embedding.rows).utf8))
+                }
+                result = generated.result
+            case .persistent, .speculative, .eagle:
+                throw CoreAIPipeline.RuntimeError.unsupportedFeature(
+                    "resolved backend '\(displayName)' does not support multimodal input")
+            }
+            await gate.release()
+            Usage.record(model: displayName, inputTokens: result.promptTokenCount,
+                         outputTokens: result.generatedTokenCount, decodeSeconds: result.decodeSeconds,
+                         at: Date().timeIntervalSince1970)
+            return result
+        } catch {
+            await gate.release()
+            throw error
+        }
+        #endif
+    }
+}
+
+enum MultimodalRequestSupport {
+    enum RequestError: Error, CustomStringConvertible {
+        case unsupported(String)
+
+        var description: String {
+            switch self {
+            case .unsupported(let message): return message
+            }
+        }
+    }
+
+    static func validateMinimalSingleImageRequest(_ request: GenerationRequest) -> RequestError? {
+        guard request.hasMultimodalContent else { return nil }
+        if let tools = request.tools, !tools.isEmpty {
+            return .unsupported("tools are not supported on the multimodal route yet")
+        }
+        if let responseFormat = request.responseFormat, responseFormat.requiresConstrainedDecoding {
+            return .unsupported("response_format is not supported on the multimodal route yet")
+        }
+        let media = request.media
+        let imageCount = media.filter { $0.modality == "image" }.count
+        guard media.count == 1, imageCount == 1 else {
+            return .unsupported(
+                "multimodal route supports exactly one JSON base64 image; got modalities \(request.modalities.joined(separator: ","))")
+        }
+        do {
+            _ = try singleImageData(in: request)
+            _ = try messagesWithImagePlaceholder(from: request.messages)
+            return nil
+        } catch let error as RequestError {
+            return error
+        } catch {
+            return .unsupported("\(error)")
+        }
+    }
+
+    static func singleImageData(in request: GenerationRequest) throws -> Data {
+        let media = request.media
+        guard media.count == 1, let image = media.first, image.modality == "image" else {
+            throw RequestError.unsupported("multimodal route supports exactly one image")
+        }
+        return try imageData(from: image.payload)
+    }
+
+    static func messagesWithImagePlaceholder(
+        from messages: [ChatMessage],
+        imageTextSeparator: String = "\n"
+    ) throws -> [[String: String]] {
+        var inserted = false
+        return try messages.map { message in
+            guard !message.media.isEmpty else {
+                return ["role": message.role, "content": message.content]
+            }
+            guard message.media.count == 1,
+                  message.media.first?.modality == "image",
+                  !inserted
+            else {
+                throw RequestError.unsupported("multimodal route supports exactly one image message")
+            }
+            inserted = true
+            let text = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            let content = text.isEmpty ? "<|image|>" : "<|image|>\(imageTextSeparator)\(text)"
+            return ["role": message.role, "content": content]
+        }
+    }
+
+    private static func imageData(from payload: JSONAny) throws -> Data {
+        guard case .object(let object) = payload else {
+            throw RequestError.unsupported("image payload must be a JSON object")
+        }
+        if let imageURL = object["image_url"] {
+            if let raw = stringValue(imageURL) {
+                return try dataURLOrBase64(raw)
+            }
+            if case .object(let nested) = imageURL,
+               let raw = stringValue(nested["url"])
+            {
+                return try dataURLOrBase64(raw)
+            }
+        }
+        if let raw = stringValue(object["url"]) ?? stringValue(object["data"]) {
+            return try dataURLOrBase64(raw)
+        }
+        if case .object(let source) = object["source"],
+           let raw = stringValue(source["data"])
+        {
+            return try dataURLOrBase64(raw)
+        }
+        throw RequestError.unsupported("image payload must contain a base64 data URL")
+    }
+
+    private static func dataURLOrBase64(_ raw: String) throws -> Data {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let base64: String
+        if trimmed.lowercased().hasPrefix("data:") {
+            guard let comma = trimmed.firstIndex(of: ",") else {
+                throw RequestError.unsupported("image data URL is missing a comma separator")
+            }
+            let header = String(trimmed[..<comma]).lowercased()
+            guard header.contains(";base64") else {
+                throw RequestError.unsupported("image data URL must be base64 encoded")
+            }
+            base64 = String(trimmed[trimmed.index(after: comma)...])
+        } else if trimmed.lowercased().hasPrefix("http://") || trimmed.lowercased().hasPrefix("https://") {
+            throw RequestError.unsupported("remote image URLs are not supported; send a base64 data URL")
+        } else {
+            base64 = trimmed
+        }
+        guard let data = Data(base64Encoded: base64, options: [.ignoreUnknownCharacters]),
+              !data.isEmpty
+        else {
+            throw RequestError.unsupported("image base64 payload could not be decoded")
+        }
+        return data
+    }
+
+    private static func stringValue(_ value: JSONAny?) -> String? {
+        guard case .string(let text) = value else { return nil }
+        return text
     }
 }
 
@@ -425,7 +643,9 @@ public actor ModelManager {
                 ModelEntry(
                     name: cfg.name, params: Self.inferParams(from: cfg.name),
                     status: loaded ? "loaded" : "available", bundle: true,
-                    memoryBytes: handles[cfg.name]?.memoryBytes, mode: "eagle"))
+                    memoryBytes: handles[cfg.name]?.memoryBytes, mode: "eagle",
+                    reasoningSupported: outputFormat(for: cfg.name).supportsReasoning,
+                    multimodalSupported: false))
         }
 
         for bundle in bundleEntries() {
@@ -440,7 +660,9 @@ public actor ModelManager {
                     status: loaded ? "loaded" : "available",
                     bundle: true,
                     memoryBytes: handles[name]?.memoryBytes,
-                    mode: bundle.mode))
+                    mode: bundle.mode,
+                    reasoningSupported: outputFormat(for: name).supportsReasoning,
+                    multimodalSupported: bundle.mode == "multimodal_staged"))
         }
 
         for (key, params) in registryModels() {
@@ -451,7 +673,8 @@ public actor ModelManager {
             entries.append(
                 ModelEntry(
                     name: key, params: params, status: "available", bundle: false,
-                    memoryBytes: nil, mode: "registry"))
+                    memoryBytes: nil, mode: "registry", reasoningSupported: nil,
+                    multimodalSupported: nil))
         }
         return entries
     }
@@ -603,6 +826,30 @@ public actor ModelManager {
                 let model = try await PersistentSpeculativeModel.load(
                     bundlePath: path, draftTokens: 4, verbose: verbose)
                 return ModelHandle(speculative: model, name: name)
+            } else if Self.isMultimodalStagedBundle(at: URL(fileURLWithPath: path, isDirectory: true)) {
+                #if COREAI_RUNTIME
+                let root = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
+                guard let embedderURL = Self.multimodalEmbedderURL(for: root, exportsDir: URL(fileURLWithPath: path).deletingLastPathComponent())
+                else {
+                    throw CoreAIPipeline.RuntimeError.invalidBundle(
+                        "multimodal staged bundle requires gemma4-mm-embedder_float32.aimodel (set CAIX_MM_EMBEDDER_ASSET or place it under exports)")
+                }
+                if verbose {
+                    FileHandle.standardError.write(
+                        Data("[server] loading multimodal staged bundle \(name) embedder=\(embedderURL.path)\n".utf8))
+                }
+                let model = try await MultimodalStagedModel.load(
+                    manifestURL: root.appendingPathComponent("stage-manifest.json"),
+                    verbose: verbose)
+                let embedder = try await Gemma4VisionEmbedder.load(assetURL: embedderURL)
+                return ModelHandle(
+                    multimodalStaged: model,
+                    embedder: embedder,
+                    name: name,
+                    bytes: Self.dirSize(root) + Self.dirSize(embedderURL))
+                #else
+                throw CoreAIPipeline.RuntimeError.runtimeUnavailable
+                #endif
             } else {
                 if verbose {
                     FileHandle.standardError.write(Data("[server] loading persistent bundle \(name)\n".utf8))
@@ -738,12 +985,13 @@ public actor ModelManager {
     }
 
     static func isLoadableBundle(at root: URL) -> Bool {
-        isDirectLLMBundle(at: root) || isEagleBundle(at: root)
+        isDirectLLMBundle(at: root) || isEagleBundle(at: root) || isMultimodalStagedBundle(at: root)
     }
 
     static func bundleMode(at root: URL) -> String? {
         if isEagleBundle(at: root) { return "eagle" }
         if isClassicSpeculativeBundle(at: root) { return "speculative" }
+        if isMultimodalStagedBundle(at: root) { return "multimodal_staged" }
         if isDirectLLMBundle(at: root) { return "standard" }
         return nil
     }
@@ -882,6 +1130,65 @@ public actor ModelManager {
         let draft = root.appendingPathComponent("eagle_draft.aimodel", isDirectory: true)
         let tokenizer = root.appendingPathComponent("tokenizer", isDirectory: true)
         return dirExists(target) && dirExists(draft) && dirExists(tokenizer)
+    }
+
+    static func isMultimodalStagedBundle(at root: URL) -> Bool {
+        let manifest = root.appendingPathComponent("stage-manifest.json")
+        guard fileExists(manifest),
+              let data = readSmallFile(manifest, timeoutSeconds: 0.5),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let multimodal = object["multimodal"] as? [String: Any],
+              let kind = multimodal["kind"] as? String,
+              kind == "gemma4_unified" || kind == "gemma4"
+        else { return false }
+        return true
+    }
+
+    static func multimodalEmbedderURL(for root: URL, exportsDir: URL) -> URL? {
+        let env = ProcessInfo.processInfo.environment
+        if let raw = caixEnv(env, "caix_mm_embedder_asset", legacy: "MM_EMBEDDER_ASSET")?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !raw.isEmpty
+        {
+            let url = URL(fileURLWithPath: raw).standardizedFileURL
+            return isDirectory(url) ? url : nil
+        }
+
+        let manifest = root.appendingPathComponent("stage-manifest.json")
+        let declared: (name: String?, path: String?) = {
+            guard let data = readSmallFile(manifest, timeoutSeconds: 0.5),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let multimodal = object["multimodal"] as? [String: Any]
+            else { return (nil, nil) }
+            return (
+                multimodal["embedder_asset"] as? String,
+                multimodal["embedder_asset_path"] as? String)
+        }()
+        if let declaredPath = declared.path?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty {
+            let url = URL(fileURLWithPath: declaredPath).standardizedFileURL
+            if isDirectory(url) { return url }
+        }
+        let declaredName = declared.name?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+            ?? "gemma4-mm-embedder_float16.aimodel"
+        let fp32Name = declaredName
+            .replacingOccurrences(of: "_float16.aimodel", with: "_float32.aimodel")
+            .replacingOccurrences(of: "float16.aimodel", with: "float32.aimodel")
+        let candidates = [
+            root.appendingPathComponent(fp32Name, isDirectory: true),
+            exportsDir.appendingPathComponent(fp32Name, isDirectory: true),
+        ]
+        for candidate in candidates where isDirectory(candidate) {
+            return candidate.standardizedFileURL
+        }
+        for child in childNames(in: exportsDir) {
+            let candidate = exportsDir
+                .appendingPathComponent(child, isDirectory: true)
+                .appendingPathComponent(fp32Name, isDirectory: true)
+            if isDirectory(candidate) {
+                return candidate.standardizedFileURL
+            }
+        }
+        return nil
     }
 
     static func eagleUnrolledURL(in root: URL) -> URL? {

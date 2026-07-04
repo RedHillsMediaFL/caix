@@ -56,10 +56,164 @@ scan_exact() {
   fi
 }
 
+scan_structured_output_claims() {
+  local matches filtered
+  matches="$(
+    rg -n -i --glob '!benchmarks/raw/**' --glob '!benchmarks/reports/**' \
+      'supports?[^[:cntrl:].]*(response_format|json_schema|structured[- ]outputs?|constrained decoding)|(response_format|json_schema|structured[- ]outputs?|constrained decoding)[^[:cntrl:].]*(supported|enabled|available|ready|verified)' \
+      "${existing[@]}" || true
+  )"
+  [[ -n "$matches" ]] || return 0
+
+  filtered="$(
+    printf '%s\n' "$matches" \
+      | rg -v -i 'not supported|unsupported|until|before|requires?|required|no-load|code/typecheck|smoke|must not|does not' \
+      || true
+  )"
+  [[ -n "$filtered" ]] || return 0
+
+  printf '%s\n' "$filtered"
+  echo "error: structured-output public claim requires real model smoke evidence" >&2
+  fail=1
+}
+
+scan_prefix_cache_claims() {
+  local matches filtered
+  matches="$(
+    rg -n -i --glob '!benchmarks/raw/**' --glob '!benchmarks/reports/**' \
+      'prompt caching[^[:cntrl:].]*(supported|enabled|available|ready|verified|works?|automatic)|(prompt|prefix|context|kv)[- ]?(cache|caching|reuse|snapshot)[^[:cntrl:].]*(supported|enabled|available|ready|verified|automatic|cross[- ]session|conversation[- ]keyed|semantic|partial[- ]prefix|general|ssd[- ]persistent)|(semantic|partial[- ]prefix|cross[- ]session|conversation[- ]keyed|ssd[- ]persistent|general)[^[:cntrl:].]*(prompt|prefix|context|kv)[- ]?(cache|caching|reuse|snapshot)' \
+      "${existing[@]}" || true
+  )"
+  [[ -n "$matches" ]] || return 0
+
+  filtered="$(
+    printf '%s\n' "$matches" \
+      | rg -v -i 'not supported|unsupported|not available|no |future|deferred|until|before|requires?|required|gated?|gate|blocked|do not|must not|does not|only|exact[- ]continuation|audit(ed)?|observability|backlog|design|planned' \
+      || true
+  )"
+  [[ -n "$filtered" ]] || return 0
+
+  printf '%s\n' "$filtered"
+  echo "error: prefix-cache public claim must be limited to exact continuation reuse on loaded CoreAILM fast handles" >&2
+  fail=1
+}
+
+scan_multimodal_claims() {
+  local matches filtered
+  matches="$(
+    rg -n -i --glob '!benchmarks/raw/**' --glob '!benchmarks/reports/**' \
+      '(supports?|accepts?|serves?)[^[:cntrl:].]*(multimodal|vision|image[-/ ]?(input|request|content)|audio[-/ ]?(input|request|content)|video[-/ ]?(input|request|content))|(multimodal|vision|image[-/ ]?(input|request|content)|audio[-/ ]?(input|request|content)|video[-/ ]?(input|request|content))[^[:cntrl:].]*(supported|enabled|available|ready|verified|works?|accepted|served|serving|runtime bundle|runtime support)' \
+      "${existing[@]}" || true
+  )"
+  [[ -n "$matches" ]] || return 0
+
+  filtered="$(
+    printf '%s\n' "$matches" \
+      | rg -v -i 'not supported|unsupported|not available|no verified|no runtime|no-load|structural|preflight|fixture|parser|parses|parsed|reject(ed|s)?|returns? (a )?(clear )?400|http 400|until|before|requires?|required|gated?|gate|blocked|blocks? positive|admissible wording|public-copy guard|same guard|held|do not|must not|does not|no support|not yet|future|plan|planned|todo' \
+      || true
+  )"
+  [[ -n "$filtered" ]] || return 0
+
+  printf '%s\n' "$filtered"
+  echo "error: multimodal public claim requires a verified runtime bundle and serving evidence" >&2
+  fail=1
+}
+
+scan_serving_path_label_claims() {
+  local matches filtered
+  matches="$(
+    rg -n -i --glob '!benchmarks/raw/**' --glob '!benchmarks/reports/**' \
+      '(staged|same[- ]machine staged)[^[:cntrl:].]*(single[- ]device fast path|local fast path|one[- ]device fast path|fast local path|fastest local|faster on (one|a single) (mac|device))|(single[- ]device fast path|local fast path|one[- ]device fast path|fast local path|fastest local|faster on (one|a single) (mac|device))[^[:cntrl:].]*(staged|same[- ]machine staged)|(4[- ]?bit|4bit)[^[:cntrl:].]*(fp16[- ]?1:1|1:1[^[:cntrl:].]*fp16|hf[- ]?fp16[- ]?1:1)|(fp16[- ]?1:1|1:1[^[:cntrl:].]*fp16|hf[- ]?fp16[- ]?1:1)[^[:cntrl:].]*(4[- ]?bit|4bit)' \
+      "${existing[@]}" || true
+  )"
+  [[ -n "$matches" ]] || return 0
+
+  filtered="$(
+    printf '%s\n' "$matches" \
+      | rg -v -i 'not |must not|do not|does not|cannot|no |unsupported|blocked|held|future|requires?|required|per-model parity|internal directional|debug|correctness|label|guard|public-copy|admissible wording|single-device fast path, but|not a single-device fast path|4[- ]?bit bundles must not claim|must still distinguish' \
+      || true
+  )"
+  [[ -n "$filtered" ]] || return 0
+
+  printf '%s\n' "$filtered"
+  echo "error: serving-path public copy must keep monolithic=single-device fast and staged=distributed; 4-bit bundles must not claim fp16 1:1" >&2
+  fail=1
+}
+
+scan_speed_claims() {
+  local matches filtered
+  matches="$(
+    rg -n -i --glob '!benchmarks/raw/**' --glob '!benchmarks/reports/**' \
+      '(`?[0-9]+([.][0-9]+)?`?[[:space:]]*tok/s)|([0-9]+([.][0-9]+)?[[:space:]]*x[[:space:]]+(faster|slower|speedup))|(speedup[^[:cntrl:].]*[0-9]+([.][0-9]+)?[[:space:]]*x)' \
+      "${existing[@]}" || true
+  )"
+  [[ -n "$matches" ]] || return 0
+
+  filtered="$(
+    printf '%s\n' "$matches" \
+      | rg -v -i 'internal|not (a )?public|not publish|not publishable|do not publish|quarantine|quarantined|adjudication|comparator|ceiling|example|examples?|usage dashboard|live|rolling|decode tok/s|output tokens divided|benchmark rules|raw evidence|required evidence|public-copy guard|publication-gate fixture|contract fixture|token_accurate|directional|architecture decision input' \
+      || true
+  )"
+  [[ -n "$filtered" ]] || return 0
+
+  printf '%s\n' "$filtered"
+  echo "error: public speed claims require publishable raw benchmark evidence or explicit internal/not-publishable framing" >&2
+  fail=1
+}
+
+scan_distributed_readiness_claims() {
+  local matches filtered
+  matches="$(
+    rg -n -i --glob '!benchmarks/raw/**' --glob '!benchmarks/reports/**' \
+      '(distributed|staged|two[- ]machine|2[- ]machine|thunderbolt|macbook)[^[:cntrl:].]*(ready[- ]to[- ]test|ready for thunderbolt testing|upload[- ]?ready|upload readiness|ready to upload|publication ready)|(ready[- ]to[- ]test|ready for thunderbolt testing|upload[- ]?ready|upload readiness|ready to upload|publication ready)[^[:cntrl:].]*(distributed|staged|two[- ]machine|2[- ]machine|thunderbolt|macbook)' \
+      "${existing[@]}" || true
+  )"
+  [[ -n "$matches" ]] || return 0
+
+  filtered="$(
+    printf '%s\n' "$matches" \
+      | rg -v -i 'not |no |do not|must not|does not|cannot|blocked|deferred|later|future|until|before|requires?|required|needs?|gate|runbook|must print|prints?|not ready|check[- ]distributed[- ]readiness|publication policy|sign[- ]off|without|nothing about|no staged upload|no upload|current two-machine gate|hardware runbook' \
+      || true
+  )"
+  [[ -n "$filtered" ]] || return 0
+
+  printf '%s\n' "$filtered"
+  echo "error: distributed readiness/upload claims require two-machine hardware evidence and sign-off" >&2
+  fail=1
+}
+
+scan_rdma_claims() {
+  local matches filtered
+  matches="$(
+    rg -n -i --glob '!benchmarks/raw/**' --glob '!benchmarks/reports/**' \
+      '(rdma|tb5|thunderbolt 5|rdma_verbs_tb5|applethunderboltrdma|jaccl)[^[:cntrl:].]*(supported|enabled|available|ready|shipping|ships?|production|validated|verified|speedup|tensor[- ]parallel|all[- ]reduce)|(supported|enabled|available|ready|shipping|ships?|production|validated|verified|speedup|tensor[- ]parallel|all[- ]reduce)[^[:cntrl:].]*(rdma|tb5|thunderbolt 5|rdma_verbs_tb5|applethunderboltrdma|jaccl)' \
+      "${existing[@]}" || true
+  )"
+  [[ -n "$matches" ]] || return 0
+
+  filtered="$(
+    printf '%s\n' "$matches" \
+      | rg -v -i 'not |no |do not|must not|does not|cannot|without|until|before|requires?|required|future|planned|design|design-only|hardware[- ]gated|hardware evidence|gate|gated|blocked|deferred|later|fallback|contract|claim rules?|claims? require|public-copy|guard|current fleet cannot|current shipping|tcp_worker_frame|source-backed|interface|stub|stubbed|transport swap|negotiat(e|ion)|capabilit(y|ies)|admissible wording|DTS|when a tb5 pair|when tb5 hardware|optional|if/when|not testable' \
+      || true
+  )"
+  [[ -n "$filtered" ]] || return 0
+
+  printf '%s\n' "$filtered"
+  echo "error: RDMA/TB5 public claims require TB5 hardware evidence, negotiation evidence, token-accurate raw evidence, and sign-off" >&2
+  fail=1
+}
+
 scan "benchmark placeholder or unsupported public speed claim" \
   'benchmark pending|coming soon|fastest|blazing|guaranteed|100%[[:space:]]+(compatible|support(ed)?|coverage|accurate|accuracy|working|faster|speed|safe|verified)'
 scan "raw benchmark speed number in public copy" \
   '[0-9]+([.][0-9]+)?[[:space:]]*tok/s'
+scan_speed_claims
+scan_structured_output_claims
+scan_prefix_cache_claims
+scan_multimodal_claims
+scan_serving_path_label_claims
+scan_distributed_readiness_claims
+scan_rdma_claims
 scan "marketing/hype wording" \
   'revolutionary|game[- ]chang(er|ing)|world[- ]class|best[- ]in[- ]class|cutting[- ]edge|state[- ]of[- ]the[- ]art|next[- ]gen|breakthrough|magic|seamless|effortless|supercharge|turbocharge|unleash|gimmick'
 scan "support gimmick wording" \

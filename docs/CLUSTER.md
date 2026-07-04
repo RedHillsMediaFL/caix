@@ -25,9 +25,10 @@ caix cluster join --coordinator main.local:1237 --manifest stage-manifest.json -
 `caix deploy verify` checks caix HTTP visibility and link speed across distinct machine identities.
 It does not load models, run staged inference, or prove tensor transport.
 
-`--model` reads `metadata.json` from the bundle and expects a `cluster.stages` block. Current
-single-bundle exports do not include that block, so the command reports a TODO telling the exporter
-what metadata is missing.
+`--model` reads `metadata.json` from the bundle and expects a `cluster.stages` block. Staged
+exports include that block and can be planned directly. Non-staged single-bundle exports do not
+include cluster metadata, so the command reports what staged metadata is missing instead of
+inventing a split.
 
 The planner preserves stage order and assigns each stage to a worker with enough remaining memory.
 Worker memory is a dry-run budget in GB. Pass `--kv-capacity` to include a conservative per-stage KV
@@ -36,12 +37,18 @@ cache estimate and `--headroom-gb` to reserve OS/runtime memory on every worker.
 
 ## Thunderbolt Test Gate
 
+Temporary Studio-only overlay, 2026-07-03: the MacBook is unavailable, so this section is a later
+hardware runbook, not tonight's action list. Current work stays on same-machine parity and oracle
+quality until the second machine is reachable again.
+
 Before asking for MacBook Thunderbolt testing, the gate is:
 
-1. Same-machine staged POC works over loopback.
-2. `caix deploy verify` sees both machines and reports acceptable link speed.
-3. Tiny staged smoke runs through Brew-installed `caix` with explicit timeouts.
-4. Real Qwen3-0.6B stays unpublished until parity/load gates pass.
+1. Same-machine Qwen3-0.6B staged parity passes the 128-token teacher-forced HF-fp16 prompt-set
+   gate through `scripts/run-staged-parity-p0.sh`.
+2. Same-machine staged POC works over loopback.
+3. `caix deploy verify` sees both machines and reports acceptable link speed.
+4. Tiny staged smoke runs through Brew-installed `caix` with explicit timeouts.
+5. Real Qwen3-0.6B stays unpublished until parity/load gates pass.
 
 Install caix through Brew on the test machine and run the installed check scripts, not checkout
 binaries.
@@ -56,7 +63,11 @@ scripts/check-distributed-readiness.sh --tiny-poc \
 
 It must print `tiny distributed POC is ready for Thunderbolt testing`. If it prints `not ready`,
 keep work local. The real-Qwen publication gate remains `scripts/check-publication-gates.sh
---distributed --brew-caix "$(command -v caix)"`.
+--distributed --strict-evidence --brew-caix "$(command -v caix)"`.
+
+RDMA-over-Thunderbolt-5 is a future transport path, not part of the current Thunderbolt test gate.
+Keep its design contract green with `scripts/check-rdma-transport-contract.sh`; do not treat it as
+hardware evidence until a TB5 pair can produce captured negotiation and token-accurate run evidence.
 
 ## Stage Manifest Format
 
@@ -153,4 +164,22 @@ and final-stage `vocab_size`. It does not create staged assets.
 - `scripts/check-tiny-cluster-smoke.sh` prints or runs tiny staged smoke commands with timeouts.
 - The converter can attach validated cluster metadata for existing staged assets, but staged asset
   creation remains a separate export path.
-- Real Qwen3-0.6B staged bundles are not publishable until parity/load gates pass.
+- Real local Qwen/Gemma staged manifests exist and plan successfully, but transport evidence is not
+  release evidence.
+- Real Qwen3-0.6B staged bundles are not publishable until 128-token same-machine parity/load gates
+  pass against an admissible oracle and the publication policy is satisfied. The Qwen3-0.6B
+  noopt-first3 staged asset now passes the teacher-forced HF-fp16 128-token gate with 1020 exact
+  matches and 4 genuine fp16 ties, recorded in
+  `docs/distributed-evidence/qwen3-0.6b-teacher-forced-fp16-128.txt`, but upload/readiness still
+  needs load/speed evidence and sign-off.
+  If the monolithic Core AI bundle fails fresh-process determinism, use deterministic HF/PyTorch
+  token sequences for staged correctness and track the monolithic nondeterminism separately.
+  Production-config qwen3-4b has reproduced monolithic repeat instability starting at the 17-token
+  prefill boundary through both `LLMEngine` and the serving-compatible persistent
+  `CoreAIPipelinedEngine` path, so do not use production monolithic runs as staged-oracle evidence
+  until that bug is resolved.
+- For naming, `<model>-staged` is the local-same-machine plus distributed form; `<model>-monolithic`
+  is a separate single-machine fast path and must carry an explicit determinism/parity status block.
+  Current qwen3-4b monolithic status in the reviewed worktree is deterministic with the default
+  `<=16` prefill chunk mitigation, but it is a 4bit path and must not claim fp16 1:1 until a
+  same-quant oracle and release gates say more.

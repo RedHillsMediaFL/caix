@@ -558,6 +558,10 @@ public final class EagleEngine {
     public func generate(messages: [[String: String]], options: CoreAIPipeline.Options,
                          tools: [[String: any Sendable]]? = nil,
                          onToken: ((String) -> Void)?) async throws -> CoreAIPipeline.SpeculativeResult {
+        guard options.constrainedJSONSchema == nil else {
+            throw CoreAIPipeline.RuntimeError.unsupportedFeature(
+                "JSON-schema constrained decoding is not supported on EAGLE speculative decoding backends")
+        }
         let promptTokens: [Int]
         if options.applyChatTemplate {
             if let tools, !tools.isEmpty {
@@ -575,6 +579,10 @@ public final class EagleEngine {
 
     func generate(promptTokens: [Int], options: CoreAIPipeline.Options,
                   onToken: ((String) -> Void)?) async throws -> CoreAIPipeline.SpeculativeResult {
+        guard options.constrainedJSONSchema == nil else {
+            throw CoreAIPipeline.RuntimeError.unsupportedFeature(
+                "JSON-schema constrained decoding is not supported on EAGLE speculative decoding backends")
+        }
         func log(_ s: @autoclosure () -> String) {
             if options.verbose { FileHandle.standardError.write(Data(("[coreai] " + s() + "\n").utf8)) }
         }

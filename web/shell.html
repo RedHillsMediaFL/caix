@@ -149,6 +149,7 @@
   .genreadout.is-dirty{color:hsl(var(--primary))}
   .genhint{font-size:11px;color:hsl(var(--muted-foreground));line-height:1.4}
   .gen-actions{display:flex;justify-content:flex-end}
+  .system-prompt{min-height:108px;max-height:220px;font:12px/1.5 var(--mono)}
   .gen-chips{display:flex;flex-wrap:wrap;gap:6px;max-width:980px;margin:0 auto 10px}
   .chip{display:inline-flex;align-items:center;gap:5px;border:1px solid hsl(var(--primary)/.4);background:hsl(var(--accent));color:hsl(var(--accent-foreground));
     border-radius:999px;padding:4px 10px;font:11px var(--mono);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -198,6 +199,12 @@
   <footer class="composer">
     <div class="gen-chips" id="genChips" hidden></div>
     <section class="gen-panel advanced-only" hidden>
+      <h3 style="margin:0 0 2px;font-size:11px;text-transform:uppercase;letter-spacing:0;color:hsl(var(--muted-foreground));font-weight:600">System</h3>
+      <div class="genrow">
+        <div class="genlabel"><label for="systemPrompt">System prompt</label><b class="genreadout" id="systemPromptState">default</b></div>
+        <textarea id="systemPrompt" class="system-prompt" rows="5"></textarea>
+        <div class="gen-actions"><button class="btn ghost" id="systemReset" type="button">Reset system prompt</button></div>
+      </div>
       <h3 style="margin:0 0 2px;font-size:11px;text-transform:uppercase;letter-spacing:0;color:hsl(var(--muted-foreground));font-weight:600">Generation</h3>
       <div class="genrow">
         <div class="genlabel"><label for="gen_temperature">Temperature</label><b class="genreadout" id="gr_temperature">0.15 · shell default</b></div>
@@ -261,7 +268,7 @@ const state={
   thread:[]
 };
 
-const SYSTEM=[
+const DEFAULT_SYSTEM=[
   'You are caix shell, a natural language shell terminal for the user local Mac.',
   'Use the run_shell tool when a shell command is needed.',
   'Prefer concise answers and one command at a time.',
@@ -269,6 +276,7 @@ const SYSTEM=[
   'Avoid destructive commands unless the user explicitly asks for them.',
   'Do not print or expose secrets, tokens, credentials, or auth headers.'
 ].join('\\n');
+const SYSTEM_STORAGE_KEY='caix.shell.system';
 
 const shellTool={
   type:'function',
@@ -366,7 +374,7 @@ async function loadModels(){
 }
 
 function buildMessages(){
-  const msgs=[{role:'system',content:SYSTEM+'\\nCurrent working directory: '+state.cwd}];
+  const msgs=[{role:'system',content:shellSystemPrompt()+'\\nCurrent working directory: '+state.cwd}];
   for(const m of state.thread)msgs.push(m);
   return msgs;
 }
@@ -570,6 +578,36 @@ function loadPrefs(){
   setMode(localStorage.getItem('caix.mode')||'simple');
 }
 
+function renderSystemPromptState(){
+  const value=($('systemPrompt').value||'').trim()||DEFAULT_SYSTEM;
+  const isDefault=value===DEFAULT_SYSTEM.trim();
+  $('systemPromptState').textContent=isDefault?'default':'custom';
+  $('systemPromptState').classList.toggle('is-dirty',!isDefault);
+}
+function shellSystemPrompt(){
+  const el=$('systemPrompt');
+  const value=(el&&el.value.trim())||DEFAULT_SYSTEM;
+  return value;
+}
+function loadSystemPromptPrefs(){
+  const saved=localStorage.getItem(SYSTEM_STORAGE_KEY);
+  $('systemPrompt').value=saved&&saved.trim()?saved:DEFAULT_SYSTEM;
+  renderSystemPromptState();
+}
+function wireSystemPrompt(){
+  $('systemPrompt').addEventListener('input',()=>{
+    const value=$('systemPrompt').value;
+    if(value.trim())localStorage.setItem(SYSTEM_STORAGE_KEY,value);
+    else localStorage.removeItem(SYSTEM_STORAGE_KEY);
+    renderSystemPromptState();
+  });
+  $('systemReset').addEventListener('click',()=>{
+    $('systemPrompt').value=DEFAULT_SYSTEM;
+    localStorage.removeItem(SYSTEM_STORAGE_KEY);
+    renderSystemPromptState();
+  });
+}
+
 // ---------- generation controls: temperature/top_p/top_k/max_tokens/stop/seed/kv_capacity.
 // Same fields/ids/classes/dirty-tracking as chat.html's panel, persisted under its own
 // localStorage namespace so the two pages don't share saved values. ----------
@@ -663,9 +701,11 @@ function wireGenInputs(){
   if(reset)reset.addEventListener('click',resetGenDefaults);
 }
 wireGenInputs();
+wireSystemPrompt();
 
 setCwd(state.cwd);
 loadPrefs();
+loadSystemPromptPrefs();
 loadGenPrefs();
 discover();
 </script>

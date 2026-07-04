@@ -43,6 +43,10 @@ public struct OutputFormat: Sendable, Equatable {
     /// reasoning span (e.g. Qwythos appends a dangling `<think>`); there is no opening marker in
     /// the stream, only a closing one.
     public var implicitReasoningStart: Bool
+    /// Whether this format can emit a separate reasoning/thinking channel after normalization.
+    public var supportsReasoning: Bool {
+        !reasoningStarts.isEmpty || !reasoningEnds.isEmpty || implicitReasoningStart
+    }
 
     public init(
         family: Family,
@@ -279,7 +283,7 @@ public final class StreamingNormalizer {
             }
         }
         if state == .tool, !toolBuffer.isEmpty {
-            if let tc = parseToolBlock(String(toolBuffer)) { events.append(.toolCall(tc)) }
+            events.append(contentsOf: parseToolBlock(String(toolBuffer)).map(Event.toolCall))
             toolBuffer.removeAll(keepingCapacity: false)
             state = .text
         }
@@ -314,7 +318,7 @@ public final class StreamingNormalizer {
                 if let range = firstMatchPlain(in: buffer, toolEndChars) {
                     toolBuffer.append(contentsOf: buffer[0..<range.lowerBound])
                     buffer.removeSubrange(0..<range.upperBound)
-                    if let tc = parseToolBlock(String(toolBuffer)) { events.append(.toolCall(tc)) }
+                    events.append(contentsOf: parseToolBlock(String(toolBuffer)).map(Event.toolCall))
                     toolBuffer.removeAll(keepingCapacity: true)
                     state = .text
                     continue loop
@@ -421,24 +425,44 @@ public final class StreamingNormalizer {
     /// Parse a captured tool-call block (the text between the start/end markers) into a
     /// ``ToolCall``. Handles JSON (`{"name":…,"arguments":{…}}`) and the Qwen/Hermes XML form
     /// (`<function=name><parameter=k>v</parameter></function>`).
-    private func parseToolBlock(_ raw: String) -> ToolCall? {
+    private func parseToolBlock(_ raw: String) -> [ToolCall] {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        if trimmed.hasPrefix("{"), let tc = parseJSONTool(trimmed) { return tc }
-        if trimmed.contains("<function="), let tc = parseXMLTool(trimmed) { return tc }
-        // Fallback: locate a JSON object embedded anywhere in the block.
-        if let brace = trimmed.firstIndex(of: "{"), let tc = parseJSONTool(String(trimmed[brace...])) {
-            return tc
+        guard !trimmed.isEmpty else { return [] }
+        if trimmed.hasPrefix("{") || trimmed.hasPrefix("[") {
+            let calls = parseJSONTools(trimmed)
+            if !calls.isEmpty { return calls }
         }
-        return nil
+        if trimmed.contains("<function="), let tc = parseXMLTool(trimmed) { return [tc] }
+        // Fallback: locate JSON embedded anywhere in the block.
+        if let bracket = trimmed.firstIndex(of: "[") {
+            let calls = parseJSONTools(String(trimmed[bracket...]))
+            if !calls.isEmpty { return calls }
+        }
+        if let brace = trimmed.firstIndex(of: "{") {
+            let calls = parseJSONTools(String(trimmed[brace...]))
+            if !calls.isEmpty { return calls }
+        }
+        return []
     }
 
-    private func parseJSONTool(_ s: String) -> ToolCall? {
+    private func parseJSONTools(_ s: String) -> [ToolCall] {
         guard let data = s.data(using: .utf8),
-            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let name = obj["name"] as? String
-        else { return nil }
-        let argsObj = obj["arguments"] ?? obj["parameters"] ?? [String: Any]()
+            let value = try? JSONSerialization.jsonObject(with: data)
+        else { return [] }
+        if let obj = value as? [String: Any], let call = parseJSONToolObject(obj) {
+            return [call]
+        }
+        if let objects = value as? [[String: Any]] {
+            return objects.compactMap(parseJSONToolObject)
+        }
+        return []
+    }
+
+    private func parseJSONToolObject(_ obj: [String: Any]) -> ToolCall? {
+        let function = obj["function"] as? [String: Any]
+        let source = function ?? obj
+        guard let name = source["name"] as? String else { return nil }
+        let argsObj = source["arguments"] ?? source["parameters"] ?? [String: Any]()
         return makeToolCall(name: name, arguments: Self.compactJSON(argsObj))
     }
 
@@ -619,6 +643,18 @@ public enum JSONAny: Codable, Sendable, Equatable {
     public var toolSpec: [String: any Sendable]? {
         if case .object(let o) = self { return o.mapValues { $0.sendable } }
         return nil
+    }
+
+    /// Compact JSON serialization for request values that need to be handed to lower-level
+    /// runtime APIs as a schema string.
+    public var compactJSONString: String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard
+            let data = try? encoder.encode(self),
+            let text = String(data: data, encoding: .utf8)
+        else { return "null" }
+        return text
     }
 
     /// Parse a JSON string into a `JSONAny` (used to turn `function.arguments` back into an

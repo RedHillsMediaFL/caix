@@ -22,6 +22,17 @@ public enum CoreAIPipeline {
         #endif
     }
 
+    /// True when this build can route JSON-schema constrained decoding through CoreAILM's
+    /// pipelined language engine. Individual model backends can still reject it if they are not
+    /// backed by that engine.
+    public static var supportsConstrainedDecoding: Bool {
+        #if COREAI_RUNTIME
+        true
+        #else
+        false
+        #endif
+    }
+
     // MARK: - Options
 
     /// Generation options for a single `run`.
@@ -45,6 +56,8 @@ public enum CoreAIPipeline {
         public var stopSequences: [String]
         /// RNG seed for reproducible temperature sampling. `nil` = system RNG.
         public var seed: UInt64?
+        /// JSON Schema string used by CoreAILM constrained decoding. Nil selects normal decoding.
+        public var constrainedJSONSchema: String?
         /// Emit progress/diagnostics to stderr.
         public var verbose: Bool
 
@@ -57,6 +70,7 @@ public enum CoreAIPipeline {
             kvCapacity: Int? = nil,
             stopSequences: [String] = [],
             seed: UInt64? = nil,
+            constrainedJSONSchema: String? = nil,
             verbose: Bool = false
         ) {
             self.maxTokens = maxTokens
@@ -67,6 +81,7 @@ public enum CoreAIPipeline {
             self.kvCapacity = kvCapacity
             self.stopSequences = stopSequences
             self.seed = seed
+            self.constrainedJSONSchema = constrainedJSONSchema
             self.verbose = verbose
         }
     }
@@ -90,6 +105,10 @@ public enum CoreAIPipeline {
         public let modelLoadSeconds: Double
         public let prefillSeconds: Double
         public let decodeSeconds: Double
+        /// Tokens reused from a warm engine prefix cache for this request, when the backend reports it.
+        public let prefixHitCount: Int?
+        /// Internal diagnostics for parity/determinism tests; not part of the public API surface.
+        let generatedTokenIDs: [Int32]
 
         public var decodeTokensPerSecond: Double {
             decodeSeconds > 0 ? Double(generatedTokenCount) / decodeSeconds : 0
@@ -102,7 +121,31 @@ public enum CoreAIPipeline {
             stopReason: StopReason,
             modelLoadSeconds: Double,
             prefillSeconds: Double,
-            decodeSeconds: Double
+            decodeSeconds: Double,
+            prefixHitCount: Int? = nil
+        ) {
+            self.init(
+                text: text,
+                promptTokenCount: promptTokenCount,
+                generatedTokenCount: generatedTokenCount,
+                stopReason: stopReason,
+                modelLoadSeconds: modelLoadSeconds,
+                prefillSeconds: prefillSeconds,
+                decodeSeconds: decodeSeconds,
+                prefixHitCount: prefixHitCount,
+                generatedTokenIDs: [])
+        }
+
+        init(
+            text: String,
+            promptTokenCount: Int,
+            generatedTokenCount: Int,
+            stopReason: StopReason,
+            modelLoadSeconds: Double,
+            prefillSeconds: Double,
+            decodeSeconds: Double,
+            prefixHitCount: Int? = nil,
+            generatedTokenIDs: [Int32]
         ) {
             self.text = text
             self.promptTokenCount = promptTokenCount
@@ -111,6 +154,8 @@ public enum CoreAIPipeline {
             self.modelLoadSeconds = modelLoadSeconds
             self.prefillSeconds = prefillSeconds
             self.decodeSeconds = decodeSeconds
+            self.prefixHitCount = prefixHitCount
+            self.generatedTokenIDs = generatedTokenIDs
         }
     }
 
@@ -268,6 +313,7 @@ public enum CoreAIPipeline {
         case bundleNotFound(String)
         case invalidBundle(String)
         case modelContract(String)
+        case unsupportedFeature(String)
 
         public var description: String {
             switch self {
@@ -281,6 +327,8 @@ public enum CoreAIPipeline {
                 return "Invalid model bundle: \(m)"
             case .modelContract(let m):
                 return "Model does not match the expected LLM runtime contract: \(m)"
+            case .unsupportedFeature(let m):
+                return "Unsupported Core AI feature: \(m)"
             }
         }
     }
@@ -329,6 +377,10 @@ public enum CoreAIPipeline {
                 return fast
             }
         }
+        if options.constrainedJSONSchema != nil {
+            throw RuntimeError.unsupportedFeature(
+                "JSON-schema constrained decoding requires the CoreAILM pipelined language engine")
+        }
         return try await LLMEngine.run(
             modelPath: modelPath, prompt: prompt, options: options, onToken: onToken)
         #else
@@ -352,6 +404,10 @@ public enum CoreAIPipeline {
         onToken: ((String) -> Void)? = nil
     ) async throws -> SpeculativeResult {
         #if COREAI_RUNTIME
+        guard options.constrainedJSONSchema == nil else {
+            throw RuntimeError.unsupportedFeature(
+                "JSON-schema constrained decoding is not supported on speculative decoding backends")
+        }
         let engine = try await SpeculativeEngine.load(
             targetPath: targetPath, draftPath: draftPath, draftTokens: draftTokens,
             verbose: options.verbose)
@@ -571,6 +627,10 @@ public enum CoreAIPipeline {
         onToken: ((String) -> Void)? = nil
     ) async throws -> SpeculativeResult {
         #if COREAI_RUNTIME
+        guard options.constrainedJSONSchema == nil else {
+            throw RuntimeError.unsupportedFeature(
+                "JSON-schema constrained decoding is not supported on EAGLE speculative decoding backends")
+        }
         let engine = try await EagleEngine.load(
             targetURL: URL(fileURLWithPath: targetAimodel),
             draftURL: URL(fileURLWithPath: draftAimodel),
@@ -618,6 +678,10 @@ public enum CoreAIPipeline {
         onToken: ((String) -> Void)? = nil
     ) async throws -> DiffusionResult {
         #if COREAI_RUNTIME
+        guard options.constrainedJSONSchema == nil else {
+            throw RuntimeError.unsupportedFeature(
+                "JSON-schema constrained decoding is not supported on diffusion backends")
+        }
         let bundle = try ResolvedBundle.load(at: modelPath)
         let engine = try await DiffusionEngine.load(bundle: bundle, verbose: options.verbose)
         let promptTokens = try engine.encodePrompt(

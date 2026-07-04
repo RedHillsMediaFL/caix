@@ -1,9 +1,10 @@
 # Distributed Execution (v0 architecture)
 
-Status: design plus partial runtime. A typed plan/validation layer, dry-run planner command,
-same-machine coordinator, worker frame path, and Core AI stage handle have landed in the tree
-(see §0). Staged export assets, real same-machine token-match evidence, and cross-process
-transport are still missing.
+Status: design plus runtime POC. A typed plan/validation layer, dry-run planner command,
+same-machine coordinator, worker frame path, Core AI stage handle, and socket-backed
+coordinator/worker path have landed in the tree (see §0). The Qwen3-0.6B noopt-first3 staged asset
+has teacher-forced HF-fp16 parity evidence through 128 tokens. Do not claim staged upload readiness
+until load/speed gates and publication policy checks also pass.
 
 Goal (from `docs/ROADMAP.md`): run a model that does not fit on one Mac by splitting Core AI
 execution into stage shards across Macs. Pipeline parallelism only. No tensor parallelism, no
@@ -56,13 +57,17 @@ This is blunt on purpose. Where the current code cannot do something, it says so
   - `DistributedWorkerFrameExecutor` dispatches validated request frames to one
     `DistributedStageHandle` and returns `forward_result` frames. It tracks request allocation,
     step order, processed-token position, KV capacity, reset, and free state before forwarding.
-    It is transport-independent worker logic for the loopback and Thunderbolt paths.
+    It is transport-independent worker logic for the loopback and socket paths.
   - `DistributedWorkerHandshakeCoordinator` accepts or rejects worker `HELLO` frames, prevents
     duplicate stage claims, and reports missing startup stages before execution.
   - `DistributedLoopbackWorkerTransport` runs worker handshakes and requests through the same
-    frame encoder, stream decoder, executor, and response path in-process. It is the socket
-    contract before there is a socket. Worker execution failures are encoded as `ERROR` frames,
-    with distributed validation failures tagged as `runtime_validation`.
+    frame encoder, stream decoder, executor, and response path in-process. Worker execution
+    failures are encoded as `ERROR` frames, with distributed validation failures tagged as
+    `runtime_validation`.
+  - The socket-backed worker path uses the same JSON-header-line plus raw tensor payload frame
+    codec over TCP. `caix serve --cluster` coordinates the staged POC, and `caix cluster join`
+    connects a worker stage to that coordinator. This proves the wire path can run; it does not
+    prove model parity.
   - `DistributedRemoteStageHandle` wraps a worker frame round trip so the coordinator can mix local
     and remote stages through the same `DistributedStageHandle` interface. Worker `ERROR` frames
     preserve their code/detail and must match the active request and remote stage before the
@@ -78,10 +83,14 @@ This is blunt on purpose. Where the current code cannot do something, it says so
   request KV state, runs `.none`/`.stateful`/`.explicitOutputs` stage functions, compacts
   hidden-state outputs, and reads final logits for greedy token selection.
 
-**Gap:** there is no staged exporter output or token-match evidence yet. The Core AI
-`DistributedStageHandle` can run `.none`, `.stateful`, and `.explicitOutputs` cache contracts,
-but nothing in-tree produces per-stage `.aimodel` assets or the tracked evidence required by the
-readiness gate. There is still no cross-process forward. The monolithic path stays as the oracle.
+**Current hold:** the Qwen3-0.6B noopt-first3 staged asset now has a tie-aware
+teacher-forced 128-token HF-fp16 parity artifact from real staged assets. Other staged artifacts
+still need their own per-model parity before any 1:1 claim. The monolithic Core AI path is the
+intended same-lineage oracle when it is deterministic; if that path is unstable for a bundle, use a
+deterministic HF/PyTorch reference as the staged-correctness oracle and track same-lineage Core AI
+equivalence as blocked by the monolithic bug. No staged upload claim follows from the socket POC,
+short-sequence diagnostics, or the Qwen3-0.6B parity artifact without the remaining load/speed and
+publication policy gates.
 
 ---
 
@@ -215,7 +224,8 @@ typed as `DistributedHiddenStatePacketMetadata`; this section pins down what the
 - Per boundary, per decode step: `1*1024*2 = 2048` bytes each direction.
 - Per boundary, prefill of `n` tokens: `2048 * n` bytes.
 - A 3-stage split has 2 internal boundaries; per decode step the hidden state crosses both
-  (~4 KB moved). Negligible on a Thunderbolt Bridge link.
+  (~4 KB moved). Small enough for the current LAN gate to test the socket path before any
+  throughput claim.
 - **Why logits never cross the wire:** full logits per decode step are
   `vocab * 2 = 151936 * 2 ≈ 297 KB` — ~145× a hidden-state boundary, every step. The
   `final_norm_head` stage samples locally and returns a token id (4 bytes). This is the
@@ -287,6 +297,17 @@ the head stage returns a top-k logit slice (id+value pairs, not the full vocab) 
 coordinator samples, keeping the existing `Sampler` + `SeededGenerator` (`:801-812`) as the
 single RNG. Full-vocab logits are never returned.
 
+### 5.5 Current socket transport
+
+The current socket path is the worker-frame protocol above over a TCP connection. It uses one
+JSON header line per frame, then raw tensor bytes when the header declares a payload. The
+incremental stream decoder, frame executor, request-state checks, and HELLO/ACK plan validation
+are shared with loopback.
+
+The intended first hardware proof is one remote transformer stage (`layers-01-02`) over LAN with
+the rest local on the Studio. Use explicit timeouts: coordinator `caix serve --cluster ...
+--join-timeout 120`, worker `caix cluster join ... --connect-timeout 120`.
+
 ---
 
 ## 6. KV ownership and lifecycle
@@ -334,8 +355,10 @@ Built today (`Sources/PipelineCLI/Cluster.swift`, documented in `docs/CLUSTER.md
   no workers, no tensors.
 - `caix cluster join --coordinator <host:port> --manifest <path> --stage <dir>` — run one staged
   worker.
-- `caix serve --cluster <manifest>` — run the minimal coordinator POC with a staged engine.
-- `caix deploy verify` — check multi-host visibility and link-speed warnings before hardware tests.
+- `caix serve --cluster <manifest>` — run the socket-backed coordinator POC with a staged engine.
+- `caix deploy verify` — check endpoint visibility, distinct machine identity, caix version, and
+  link-speed/latency warnings before hardware tests. It does not load models, run staged
+  inference, or prove parity.
 
 Auth between coordinator and workers is out of scope for milestones 1–4 (loopback, then a
 trusted point-to-point Thunderbolt Bridge / LAN link). Any later pre-shared cluster secret on
@@ -350,17 +373,19 @@ The only milestone that matters right now. It isolates the **staging math** from
 everything runs in one process, hidden states pass through `DistributedHiddenStatePacket`s
 in memory — no sockets.
 
-### 9.1 Prerequisite (define, do not start)
+### 9.1 Prerequisite
 
-A stage exporter that cuts the existing Qwen3-0.6B `.aimodel` into stage bundles per §2/§3,
-plus the `cluster.stages` manifest metadata that the planner already expects but the converter
-does not yet emit (`docs/CLUSTER.md` "Current TODOs"). Minimum useful split is 3 stages so the
-test exercises all three IO shapes: `embeddings` (`input_ids`→hidden), `transformer_layers`
-(hidden→hidden), `final_norm_head` (hidden→logits). A 2-stage split skips the pure hidden→hidden
-boundary. The committed example `docs/examples/cluster-stage-manifest.json` is one such split
-(a 4-stage layout: one `embeddings`, two `transformer_layers`, one `final_norm_head`).
-Conversions, downloads, and exports are out of scope for this agent — this milestone
-is blocked on that exporter and says so.
+A staged artifact must provide per-stage `.aimodel` bundles plus `cluster.stages` manifest metadata
+that satisfies the §2/§3 contracts. Local staged Qwen/Gemma artifacts now exist, and the converter can
+attach validated cluster metadata for existing staged assets. Staged asset creation remains a separate
+exporter lane from the normal single-bundle converter, so release evidence must record the exact export
+lineage and dependency SHAs.
+
+Minimum useful split is 3 stages so the test exercises all three IO shapes: `embeddings`
+(`input_ids`→hidden), `transformer_layers` (hidden→hidden), `final_norm_head` (hidden→logits). A
+2-stage split skips the pure hidden→hidden boundary. The committed example
+`docs/examples/cluster-stage-manifest.json` is one such split (a 4-stage layout: one `embeddings`, two
+`transformer_layers`, one `final_norm_head`).
 
 ### 9.2 Runtime status
 
@@ -371,25 +396,85 @@ stage functions, allocates per-request KV state, runs `.none`, `.stateful`, and
 the final stage with greedy
 `Sampler.argmax`.
 
-Still held:
+Current evidence and holds:
 
-- The staged exporter has not emitted real per-stage `.aimodel` assets and manifest metadata.
-- Same-machine Qwen3-0.6B token-match evidence is not present.
+- Real per-stage `.aimodel` assets and manifest metadata exist for multiple local Qwen/Gemma
+  staged bundles. The benchmark-window teacher-forced 128-token staged-vs-HF-fp16 gate passed for
+  all 8 prompts, recorded in
+  `docs/distributed-evidence/qwen3-0.6b-teacher-forced-fp16-128.txt` with raw log
+  `docs/distributed-evidence/qwen3-0.6b-teacher-forced-fp16-128.log`. Decode feeds the HF token each
+  step so tie flips do not cascade; four residual flips were accepted by staged logit margin: prompt
+  2 step 1 (`4718` vs `2750`, margin `0.015625`), prompt 2 step 13 (`576` vs `7281`, margin `0`),
+  prompt 4 step 80 (`1447` vs `438`, margin `0.015625`), and prompt 4 step 90 (`2490` vs `2877`,
+  margin `0`). This validates staged prefill, decode, and per-stage KV against the HF fp16 oracle at
+  128 tokens for that staged asset only.
+- Same-machine Qwen3-0.6B staged correctness is closed for this noopt-first3 staged asset under the
+  HF fp16 teacher-forced oracle. The prefill P0 confound is also resolved: the staged noopt-first3
+  pipeline matches HF/PyTorch ground truth at the 16-token boundary and beyond. Fresh benchmark-window evidence in
+  `.tmp/benchmark-window/20260703T1443Z-hf-stage-baseline-deconfound/hf-staged-baseline-table.tsv`
+  shows HF float32 and float16 agree, staged is deterministic across three fresh processes, and
+  staged equals HF for lengths 16, 17, 18, 19, and 20 (`54289`, `19614`, `11`, `576`, `11`). The
+  monolithic Core AI f16 baseline is not an admissible oracle at those lengths: its fresh-process
+  first tokens were `716/279/470` at length 17, `198/279/279` at length 18, `659/4710/3411` at
+  length 19, and `11/220/11` at length 20. Apple `llm-runner` reproduced the same class of
+  monolithic instability earlier, so this is tracked as a separate monolithic-asset/Core AI stateful
+  nondeterminism bug, not a staged distributed-runtime failure.
 
 ### 9.3 Equivalence procedure
 
 1. Fixed prompt set from `docs/distributed-evidence/qwen3-0.6b-prompts.txt`,
    `temperature = 0`, `maxTokens = 128`, fixed `kvCapacity`.
 2. Oracle: run the **monolithic** Qwen3-0.6B bundle through `LLMEngine` (not `PipelinedLLM` —
-   the explicit engine is the reference) and record the generated token-id sequence per prompt.
+   the explicit engine is the reference) and first prove it is deterministic for the prompt set.
+   Use
+   `DistributedCoreAIStageAssetIntegrationTests/testRealMonolithicGreedyTokenSequencesAreDeterministic`
+   with `CAIX_MONOLITHIC_DETERMINISM_REPEATS >= 3` before comparing a staged artifact to that
+   bundle. For release evidence, run that determinism check in fresh `swift test` processes and
+   compare the captured token-sequence files so process-level Core AI instability is caught.
+   If the monolithic Core AI path is unstable, record that failure and use a deterministic,
+   tie-aware HF/PyTorch reference as the staged-correctness oracle. Keep monolithic Core AI
+   equivalence blocked until the monolithic asset/runtime path is deterministic again.
+   The canonical heavy-window wrapper is:
+   `scripts/run-staged-parity-p0.sh --baseline <monolithic-bundle> --manifest <stage-manifest.json>`.
+   It writes the heavy-task lock, captures repo/dependency/RAM/disk state, compares fresh-process
+   monolithic token-sequence files, and only runs the staged-vs-monolithic 128-token parity test after
+   the oracle is stable.
 3. Candidate: run the same prompts through `StagedEngine` over the 3-stage split.
 4. Compare.
+
+Diagnostic procedure after the broken-oracle finding:
+
+1. Do not use `testRealStageAssetsMatchMonolithicGreedyTokens` as release evidence unless the
+   monolithic Core AI bundle first passes fresh-process determinism. If it fails, stop before the
+   staged-vs-monolithic comparison and classify the monolithic bundle as a non-admissible oracle.
+2. Use deterministic HF/PyTorch token-sequence files as the staged correctness oracle when the
+   monolithic Core AI path is unstable. The gate must be teacher-forced: feed the HF token each decode
+   step, compare staged argmax at that aligned context, and accept residual flips only when the HF
+   token is inside the captured staged top-k and within the configured logit tie tolerance. The
+   current HF-fp16 128-token run passed with tolerance `0.02`.
+3. Keep RoPE and staged SDPA hard-16 hypotheses closed unless new staged-vs-HF evidence contradicts
+   the current table. The previous trace-query-length-32 result was confounded by the broken
+   monolithic oracle and is not evidence of a staged exported-attention bug.
+4. Scope monolithic nondeterminism separately on production-config monolithic models before making
+   production serving claims. Production-config qwen3-4b evidence now includes the initial 19-token
+   repeat failure at `.tmp/benchmark-window/20260703T1504Z-production-qwen3-4b-monolithic-determinism/`
+   and the onset/engine-path table at
+   `.tmp/benchmark-window/20260703T1531Z-qwen3-4b-monolithic-onset/`. `LLMEngine` is stable at
+   8/16-token prefills and unstable at 17/19; the serving-compatible persistent
+   `CoreAIPipelinedEngine` path is stable at 8/16, unstable at 17 (`369/369/330`), and stable in the
+   collected 19-token sample (`576/576/576`). Treat this as a production-scope monolithic stateful
+   path bug, not as staged distributed-runtime evidence. The reviewed caix mitigation caps stateful
+   monolithic prefill at the traced query width 16 by default, covers both `LLMEngine` and the
+   CoreAILM fast path, and is validated by fresh-process deterministic repeats past 16. The residual
+   divergence from HF-fp16 on qwen3-4b is quantization evidence, not a chunking failure, because the
+   4-bit monolithic bundle already diverges from HF-fp16 below the 17-token onset.
 
 ### 9.4 Acceptance criteria
 
 - **Primary**: per-prompt generated token-id sequences are **identical** (token-for-token) for
-  all 128 steps across the whole prompt set. Greedy argmax over the same residual stream is
-  deterministic, so anything short of an exact match is a real bug, not numerical noise.
+  all 128 steps across the whole prompt set when the oracle has a unique argmax at every step.
+  For fp16 ties, the gate must compare logits or accept any token in the tied top set within the
+  declared tolerance; raw token-sequence comparison alone is not admissible after a verified tie.
 - **Diagnostic** (when primary fails, to localize drift before it flips a token): at step 0,
   compare the head stage's last-row logits against the monolithic last-row logits — they should
   match within float16 rounding. Also assert each internal boundary hidden state is finite
@@ -398,21 +483,60 @@ Still held:
   coordinator's expected count.
 
 Passing 9.4 proves the cut points, the hidden-state contract, the per-stage KV, and the
-position handling are correct **before** any byte crosses a process or machine boundary. Only
-then do milestones 2+ (loopback processes → Thunderbolt Bridge → Mac mini third shard → CLI)
-add transport, per §4/§5/§7.
+position handling are correct. The socket POC can run before that proof, but it stays a transport
+check only until the same token-match evidence exists for real staged assets.
 
 ### 9.5 What this milestone does not prove
 
 - Nothing about throughput. A 3-stage split on one machine serializes three graph calls per
   token and shares one GPU; it will not be faster than monolithic and is not meant to be.
+- Nothing about qwen3-4b staged-local speed yet. No qwen3-4b staged artifact exists locally, and the
+  held qwen3-4b staged export is shelved unless BOSS explicitly reopens it. Existing Qwen3-0.6B
+  artifacts provide only internal directional local evidence: internal monolithic median `171.3` tok/s
+  vs internal same-machine staged `38.2` tok/s over the captured 256-token probe (`R=0.223`). Treat this as an
+  architecture decision input, not a published benchmark.
 - Nothing about temperature sampling (greedy only).
-- Nothing about multi-machine transport, serialization, or failure handling — those are
-  milestones 2+ and depend on §4/§5/§7, designed here but unbuilt.
+- Nothing about real two-machine throughput or placing a model that exceeds one host's memory budget.
+- Nothing about staged upload readiness.
+
+### 9.6 Artifact names and labels
+
+- `<model>-staged`: distributed/multi-device artifact. It can run local same-machine when all stages
+  are placed on one host, but that mode is for correctness/debug placement and must not be marketed as
+  a single-device fast path. Qwen3-0.6B fp16 is verified 1:1 with HF under the teacher-forced gate;
+  every other staged model needs per-model parity before any 1:1 claim.
+- `<model>-monolithic`: single-device fused local fast path. It must carry an explicit
+  determinism/parity status block. Current qwen3-4b monolithic behavior is deterministic in the
+  reviewed-ready local worktree via default `MonolithicPrefillPolicy` chunk16 mitigation, but as a
+  4-bit bundle it must not claim fp16-1:1 HF; it is the deterministic local 4-bit greedy path until a
+  same-quant oracle says more. No upload, HF card relabel, or public claim follows until BOSS sign-off.
 
 ---
 
-## 10. Open questions / contract risks
+## 10. Current two-machine gate
+
+This is the current hardware POC gate, not a release claim:
+
+1. Use Brew-installed, versioned `caix` on both machines. Do not use checkout binaries.
+2. Copy the local tiny staged bundle to the worker and verify it with `check-stage-bundle-copy.sh`.
+3. Start endpoint-only servers with `caix serve --host 0.0.0.0 --port 1237 --no-prewarm`.
+4. Run `caix deploy verify` and the Brew checker against both endpoints with `--fail-on-warn`
+   semantics. This must cover visibility, distinct machine identity, caix version, latency, and
+   link speed before any cluster smoke.
+5. Run the tiny remote-hop smoke only after the endpoint gate is clean. Keep `layers-01-02`
+   remote and keep `embeddings`, `layers-00-01`, and `final_norm_head` local for the first proof.
+6. Preserve deploy-verify JSON, Brew checker log, command file, and raw coordinator/worker
+   stdout/stderr.
+
+Worker selection for this gate is deferred until a second machine is awake, reachable, and verified
+with current endpoint evidence. Do not carry forward stale LAN hostnames or IP addresses as proof.
+
+Passing this gate proves the tiny socket path for the captured topology only. It does not prove
+staged parity, does not prove full-model placement, and does not justify a staged upload.
+
+---
+
+## 11. Open questions / contract risks
 
 - **Boundary dtype export policy (§4).** `DistributedTensorScalarType` is float16/float32 only.
   Staged metadata can record the boundary tensor contract now; for internally bfloat16 graphs, the
@@ -435,3 +559,26 @@ add transport, per §4/§5/§7.
 - **Tied-embedding memory.** Per-stage memory after the embedding/unembedding duplication on
   the `embeddings` and `final_norm_head` stages — feeds `caix cluster plan` and the eventual
   placement on the 32 GB / 16 GB workers.
+
+---
+
+## 12. RDMA-ready transport contract
+
+RDMA-over-Thunderbolt-5 is design-only in this tree today. The current fleet cannot produce RDMA
+hardware evidence, and the shipping staged path remains `tcp_worker_frame`.
+
+The pinned contract is [RDMA_TRANSPORT.md](RDMA_TRANSPORT.md), backed by
+`docs/RDMA_TRANSPORT_CONTRACT.json` and `scripts/check-rdma-transport-contract.sh`.
+
+The contract keeps RDMA as a transport swap:
+
+- the worker-frame request id, stage id, step index, hidden-state shape, dtype, and byte count remain
+  authoritative;
+- payloads over the RDMA message limit are chunked under the same frame identity;
+- KV remains on the worker that owns the stage;
+- failed or partial sends fail the request rather than retrying a forward that may have advanced KV;
+- missing TB5, macOS, `rdma_ctl`, or `ibv` capability evidence falls back to `tcp_worker_frame` and
+  records the reason.
+
+No RDMA, decode-speedup, or tensor-parallel claim follows from this contract. Those claims require a
+Thunderbolt 5 pair, captured negotiation evidence, and token-accurate raw evidence.

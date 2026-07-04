@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.2.13-beta
+
+- Fixed Gemma-4 E4B multimodal PLE per-layer-embedding pad-mask handling so image
+  conditioning now reaches the transformer stages correctly.
+
 ## 0.2.7-beta
 
 - Made `caix deploy verify --fail-on-warn` fail on local-machine warnings.

@@ -120,6 +120,8 @@ awk -F '\t' -v registry="$registry_tsv" -v manifest="$manifest_repos" '
     status = $3
     published = $4
     next_step = $5
+    published_lower = tolower(published)
+    next_step_lower = tolower(next_step)
     if (!(status in allowed)) {
       printf "error: unsupported ledger status for %s: %s\n", key, status > "/dev/stderr"
       fail = 1
@@ -149,6 +151,22 @@ awk -F '\t' -v registry="$registry_tsv" -v manifest="$manifest_repos" '
     }
     if (next_step == "-") {
       printf "error: next_step must be explicit for %s\n", key > "/dev/stderr"
+      fail = 1
+    }
+    if (published_lower ~ /-staged-caix/ && next_step_lower !~ /(staged|distributed|hardware smoke|needs-test|thunderbolt|macbook)/) {
+      printf "error: staged published repo for %s needs an explicit distributed/hardware next_step\n", key > "/dev/stderr"
+      fail = 1
+    }
+    if (published_lower ~ /-mtp-caix/) {
+      mtp_explicit = next_step_lower ~ /(mtp|eagle|speculative)/
+      target_benchmark = next_step_lower ~ /(target|draft)/ && next_step_lower ~ /(benchmark|compare|rebuild)/
+      if (!mtp_explicit && !target_benchmark) {
+        printf "error: MTP/speculative published repo for %s needs an explicit target/draft benchmark next_step\n", key > "/dev/stderr"
+        fail = 1
+      }
+    }
+    if (published_lower ~ /-draft-caix/ && next_step_lower !~ /(component|matching target|do not test alone|benchmark)/) {
+      printf "error: draft published repo for %s needs an explicit component/matching-target next_step\n", key > "/dev/stderr"
       fail = 1
     }
   }

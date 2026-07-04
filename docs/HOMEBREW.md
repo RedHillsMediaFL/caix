@@ -37,7 +37,8 @@ For a verified `0.x` release:
 
 1. Update the version in `Sources/PipelineCLI/BuildInfo.swift`, `scripts/package.sh`, and `Formula/caix.rb`.
 2. Run `scripts/check-version-sync.sh`.
-3. Run `scripts/check-release-version.sh v0.2.0-beta`.
+3. Run `scripts/check-release-version.sh v0.2.0-beta`. The local publication gate runs
+   `scripts/check-release-version-contract.sh` so the Core AI beta version policy stays fixture-tested.
 4. Build `caix-<version>-macos-arm64.tar.gz` with `scripts/package.sh <version>`.
 5. Cut a release tag below `v1.0.0`.
 6. Upload the tarball.
@@ -101,6 +102,10 @@ Keep the formula blunt: what it installs, required macOS/Core AI version, and ho
 doctor`. No marketing copy.
 
 ## MacBook Distributed POC Prep
+
+Temporary Studio-only overlay, 2026-07-03: the MacBook is unavailable, so this section is a later
+hardware runbook, not tonight's action list. Do not run these checks, copy staged bundles, or claim
+distributed readiness until the second machine is reachable again.
 
 Use the Brew-installed binary only. Do not use checkout binaries for MacBook validation.
 

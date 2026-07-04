@@ -6,6 +6,9 @@ Raw evidence source: `benchmarks/raw`.
 
 No speed claims without raw logs. Use the exact revision in the table. Keep prompts, token budget,
 temperature, seed, streaming mode, warmup count, measured run count, and chat-template mode unchanged.
+Speculative and EAGLE/MTP rows are target+draft package evidence, not standalone target evidence.
+Report target-only and target+draft results separately, and do not average or substitute one for the
+other.
 
 ## Ready Benchmark Requests
 
@@ -40,6 +43,10 @@ temperature, seed, streaming mode, warmup count, measured run count, and chat-te
 | `redhillsmediafl/rhm-qwen3-4b-mtp-caix` | `4190150f7a47b113d36ea679c4541d95a21ce3f6` | `qwen3-4b-mtp-coreai` | `speculative` | 3 | `benchmarks/raw/20260629-045620-qwen3-4b-mtp-coreai` |
 
 ## Manual Or Component Requests
+
+The staged distributed rows below remain `needs-test` while the second Mac is unavailable. They
+require installed-caix hardware evidence, not Studio-only loopback, plan dry-runs, or HF diagnostic
+parity.
 
 | repo | revision | local dir | request | notes |
 |---|---|---|---|---|

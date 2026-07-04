@@ -70,4 +70,15 @@ if ! diff -u "$DOC" "$tmp"; then
   exit 1
 fi
 
+if awk -F '\t' '$1 != "" && $1 != "repo" && $1 !~ /^#/ && ($4 == "speculative" || $4 == "eagle" || $4 == "eagle-mtp") { found = 1 } END { exit found ? 0 : 1 }' "$MANIFEST"; then
+  if ! rg -q 'target-only and target[+]draft results separately' "$DOC"; then
+    echo "error: tester request sheet must distinguish target-only and target+draft results" >&2
+    exit 1
+  fi
+  if ! rg -q 'do not average or substitute' "$DOC"; then
+    echo "error: tester request sheet must forbid averaging/substituting speculative and target-only evidence" >&2
+    exit 1
+  fi
+fi
+
 echo "tester requests ok"

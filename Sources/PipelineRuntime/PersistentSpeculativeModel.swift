@@ -83,6 +83,10 @@ public final class PersistentSpeculativeModel {
         onToken: ((String) -> Void)? = nil
     ) async throws -> CoreAIPipeline.SpeculativeResult {
         #if COREAI_RUNTIME
+        guard options.constrainedJSONSchema == nil else {
+            throw CoreAIPipeline.RuntimeError.unsupportedFeature(
+                "JSON-schema constrained decoding is not supported on speculative decoding backends")
+        }
         let promptTokens = try engine.encodePrompt(
             messages: messages,
             tools: tools,

@@ -1,0 +1,76 @@
+{
+  "schema": "caix.rdma_transport_contract.v0",
+  "status": "design_only_no_hardware_evidence",
+  "current_shipping_transport": "tcp_worker_frame",
+  "planned_transports": [
+    {
+      "id": "tcp_worker_frame",
+      "role": "fallback_and_tb4_path",
+      "frame_protocol": "json_header_line_plus_raw_tensor_payload",
+      "supports_pipeline_stage_handoff": true,
+      "supports_tensor_parallel_collectives": false
+    },
+    {
+      "id": "rdma_verbs_tb5",
+      "role": "future_tb5_path",
+      "api": "apple_rdma_verbs",
+      "swift_boundary": "thin_c_shim",
+      "supports_pipeline_stage_handoff": true,
+      "supports_tensor_parallel_collectives": false,
+      "requires_jaccl_for_collectives": "optional_future"
+    }
+  ],
+  "rdma_verbs_constraints": {
+    "send_recv_only": true,
+    "one_sided_read_write": false,
+    "max_message_bytes": 16773120,
+    "max_unreliable_connection_queue_pairs": 10,
+    "max_work_requests_in_flight": 4095,
+    "page_aligned_buffers": true,
+    "memory_registration_scope": "per_thunderbolt_controller"
+  },
+  "negotiation_inputs": [
+    "plan_integrity_hash",
+    "peer_machine_id",
+    "peer_caix_version",
+    "link_kind",
+    "macos_version",
+    "thunderbolt_generation",
+    "rdma_ctl_enabled",
+    "ibv_device_names",
+    "transport_capabilities"
+  ],
+  "selection_rules": [
+    "rdma_verbs_tb5_requires_all_peers_tb5",
+    "rdma_verbs_tb5_requires_macos_26_2_or_newer",
+    "rdma_verbs_tb5_requires_rdma_ctl_enabled",
+    "rdma_verbs_tb5_requires_ibv_devices",
+    "fallback_to_tcp_worker_frame_when_any_requirement_is_missing",
+    "record_fallback_reason_in_evidence"
+  ],
+  "payload_rules": [
+    "chunk_payloads_over_max_message_bytes",
+    "preserve_worker_frame_request_id",
+    "preserve_stage_id_and_step_index",
+    "preserve_hidden_state_metadata_shape_dtype_and_byte_count",
+    "do_not_retry_forward_after_partial_send",
+    "fail_request_on_transport_disconnect_or_timeout"
+  ],
+  "kv_rules": [
+    "kv_stays_on_stage_owner",
+    "no_mid_request_kv_migration",
+    "recovery_requires_reprefill_from_token_zero"
+  ],
+  "manifest_future_fields": [
+    "transport_requirements",
+    "transport_preference",
+    "transport_capabilities",
+    "selected_transport_evidence"
+  ],
+  "claim_rules": [
+    "no_rdma_claim_without_tb5_pair_and_captured_negotiation",
+    "no_decode_speedup_claim_without_token_accurate_raw_evidence",
+    "no_tensor_parallel_claim_until_collectives_are_implemented_and_tested",
+    "tb4_tcp_stage_sharding_remains_capacity_or_transport_evidence_only"
+  ]
+}

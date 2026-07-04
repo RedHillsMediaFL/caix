@@ -182,6 +182,7 @@
   .btn:hover{background:hsl(var(--accent));color:hsl(var(--accent-foreground))}
   .btn.primary{background:hsl(var(--primary));color:hsl(var(--primary-foreground));border-color:hsl(var(--primary))}
   .btn.primary:hover{filter:brightness(.95)}
+  .btn.ghost{background:transparent}
   .btn.warn{border-color:hsl(var(--warning)/.55);color:hsl(var(--warning))}
   .btn.danger{border-color:hsl(var(--destructive)/.55);color:hsl(var(--destructive))}
   .iconbtn{width:auto;min-width:36px;padding:0 10px}
@@ -278,6 +279,26 @@
   .bar i{display:block;height:100%;width:0;background:hsl(var(--caix))}
   .logpath{font:11px var(--mono);color:hsl(var(--muted-foreground));white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .notice{background:hsl(var(--muted)/.45);border-radius:7px;padding:10px;font:12px var(--mono);color:hsl(var(--muted-foreground));overflow-wrap:anywhere}
+  .skeleton-list{display:grid;gap:8px;padding:12px 14px}
+  .skeleton-row{display:flex;align-items:center;gap:10px;min-height:34px}
+  .skel-dot{width:7px;height:7px;border-radius:50%;background:hsl(var(--border));flex:none}
+  .skel-main{height:12px;flex:1;max-width:210px;border-radius:4px;background:hsl(var(--border))}
+  .skel-sub{height:10px;flex:.55;max-width:120px;border-radius:4px;background:hsl(var(--border))}
+  @media(prefers-reduced-motion:no-preference){
+    .advanced-only:not([hidden]){animation:advIn 180ms ease-out}
+    .skel-dot,.skel-main,.skel-sub{background:linear-gradient(90deg,hsl(var(--border)) 25%,hsl(var(--muted)) 50%,hsl(var(--border)) 75%);background-size:200% 100%;animation:shimmer 1.4s ease-in-out infinite}
+  }
+  @keyframes advIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+  @keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+  .approve-card{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:60;width:min(430px,calc(100% - 32px));
+    background:hsl(var(--card));color:hsl(var(--card-foreground));border:1px solid hsl(var(--border));border-radius:8px;
+    padding:14px 16px;box-shadow:var(--shadow-md)}
+  .approve-msg{font-size:13px;line-height:1.5;margin-bottom:12px}
+  .approve-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:60;max-width:min(430px,calc(100% - 32px));
+    background:hsl(var(--card));color:hsl(var(--card-foreground));border:1px solid hsl(var(--border));border-radius:8px;
+    padding:10px 14px;font-size:12.5px;box-shadow:var(--shadow-md)}
+  .toast.bad{border-color:hsl(var(--destructive)/.5);color:hsl(var(--destructive))}
   .empty{padding:18px;color:hsl(var(--muted-foreground));font:12px var(--mono)}
   .muted{color:hsl(var(--muted-foreground))}
   .faint{color:hsl(var(--muted-foreground))}
@@ -433,7 +454,13 @@
               <div class="panel-body">
                 <input class="search" id="modelFilter" placeholder="Filter local models" aria-label="Filter local models"/>
               </div>
-              <div class="models-list" id="models"><div class="empty">loading models...</div></div>
+              <div class="models-list" id="models">
+                <div class="skeleton-list" aria-hidden="true">
+                  <div class="skeleton-row"><span class="skel-dot"></span><span class="skel-main"></span><span class="skel-sub"></span></div>
+                  <div class="skeleton-row"><span class="skel-dot"></span><span class="skel-main" style="max-width:170px"></span><span class="skel-sub" style="max-width:88px"></span></div>
+                  <div class="skeleton-row"><span class="skel-dot"></span><span class="skel-main" style="max-width:230px"></span><span class="skel-sub" style="max-width:104px"></span></div>
+                </div>
+              </div>
             </section>
 
             <section class="panel" id="usage">
@@ -466,7 +493,12 @@
                 <span class="meta" id="rhmMeta">-</span>
                 <button class="btn iconbtn" id="refreshRHM" type="button" title="Refresh RHM models">Refresh</button>
               </div>
-              <div class="panel-body rhm-list" id="rhmModels"><div class="empty">loading RHM models...</div></div>
+              <div class="panel-body rhm-list" id="rhmModels">
+                <div class="skeleton-list" aria-hidden="true" style="padding:0">
+                  <div class="skeleton-row"><span class="skel-main"></span><span class="skel-sub"></span></div>
+                  <div class="skeleton-row"><span class="skel-main" style="max-width:190px"></span><span class="skel-sub" style="max-width:96px"></span></div>
+                </div>
+              </div>
             </section>
 
             <section class="panel" id="hf">
@@ -526,9 +558,11 @@
               </div>
               <div class="panel-body server-grid">
                 <div class="notice"><span class="faint">Endpoint</span><br><span id="srvEndpoint">-</span></div>
+                <div class="notice"><span class="faint">Version</span><br><span id="srvVersion">-</span></div>
                 <div class="notice"><span class="faint">Runtime</span><br><span id="srvRuntime">-</span></div>
                 <div class="notice"><span class="faint">Exports</span><br><span id="srvExports">-</span></div>
                 <div class="notice advanced-only" hidden><span class="faint">Speculative runtime</span><br><span id="srvSpec">-</span></div>
+                <div class="notice advanced-only" hidden><span class="faint">Supported knobs</span><br><span id="srvSupported">-</span></div>
                 <div class="notice advanced-only" hidden><span class="faint">Registry</span><br><span id="srvRegistry">-</span></div>
                 <div class="notice advanced-only" hidden><span class="faint">Logs</span><br><span id="srvLogs">-</span></div>
               </div>
@@ -566,6 +600,32 @@ async function api(url,opt){
   let json={}; try{json=text?JSON.parse(text):{};}catch(e){json={raw:text};}
   if(!res.ok)throw new Error(json.error?.message||json.reason||res.statusText||res.status);
   return json;
+}
+function confirmCard(message,opts){
+  opts=opts||{};
+  const okLabel=opts.okLabel||'Confirm',cancelLabel=opts.cancelLabel||'Cancel',danger=!!opts.danger;
+  return new Promise(resolve=>{
+    const card=document.createElement('div');
+    card.className='approve-card';
+    card.innerHTML='<div class="approve-msg">'+esc(message)+'</div>'+
+      '<div class="approve-actions"><button class="btn ghost" type="button" data-cancel>'+esc(cancelLabel)+'</button>'+
+      '<button class="btn'+(danger?' danger':'')+'" type="button" data-ok>'+esc(okLabel)+'</button></div>';
+    document.body.appendChild(card);
+    const ok=card.querySelector('[data-ok]'),cancel=card.querySelector('[data-cancel]');
+    function onKey(e){if(e.key==='Escape')done(false);}
+    function done(value){card.remove();document.removeEventListener('keydown',onKey);resolve(value);}
+    document.addEventListener('keydown',onKey);
+    (danger?cancel:ok).focus();
+    ok.onclick=()=>done(true);
+    cancel.onclick=()=>done(false);
+  });
+}
+function toast(message,kind){
+  const card=document.createElement('div');
+  card.className='toast'+(kind?' '+kind:'');
+  card.textContent=message;
+  document.body.appendChild(card);
+  setTimeout(()=>card.remove(),3400);
 }
 function setConn(ok,msg){
   $('conn').classList.toggle('live',ok);
@@ -623,6 +683,7 @@ async function pollServer(){
     const s=await api('/api/server');
     $('serverMeta').textContent=s.name||'caix';
     $('srvEndpoint').textContent=reachableURL(s.baseURL||location.origin);
+    $('srvVersion').textContent=s.caixVersion||s.caix_version||'-';
     $('srvRuntime').textContent=(s.runtimeLinked?'Core AI linked':'runtime unavailable')+' / '+(s.computeUnit||'gpu')+' / pid '+(s.pid||'-');
     $('srvExports').textContent=s.exportsDir||'-';
     const e=s.eagle||{};
@@ -634,6 +695,22 @@ async function pollServer(){
   }catch(e){
     $('serverMeta').textContent='metadata unavailable';
     $('srvEndpoint').textContent=location.origin;
+    $('srvVersion').textContent='-';
+  }
+}
+function supportedSummary(s){
+  const parts=[];
+  if(s.compression)parts.push('compression '+s.compression);
+  if(s.compute_precision)parts.push('precision '+s.compute_precision);
+  if(s.context_default)parts.push('ctx '+s.context_default);
+  if(s.generation)parts.push('gen '+s.generation);
+  return parts.join(' / ')||'-';
+}
+async function pollSupported(){
+  try{
+    $('srvSupported').textContent=supportedSummary(await api('/api/supported'));
+  }catch(e){
+    $('srvSupported').textContent='-';
   }
 }
 async function pollUsage(){
@@ -720,9 +797,9 @@ function renderModels(){
   }).join('')||'<div class="empty">no matching models</div>';
 }
 async function modelAction(action,name){
-  if(action==='delete'&&!confirm('Delete '+name+' from disk?'))return;
+  if(action==='delete' && !(await confirmCard('Delete '+name+' from disk?', {okLabel:'Delete', danger:true})))return;
   try{await api('/api/'+action,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:name})});}
-  catch(e){alert(action+' failed: '+e.message);}
+  catch(e){toast(action+' failed: '+e.message, 'bad');}
   await pollModels();
 }
 $('models').addEventListener('click',e=>{
@@ -732,8 +809,8 @@ $('models').addEventListener('click',e=>{
 $('loadActive').addEventListener('click',()=>{if($('activeModel').value)modelAction('load',$('activeModel').value);});
 $('offloadActive').addEventListener('click',()=>{if($('activeModel').value)modelAction('offload',$('activeModel').value);});
 $('offloadAll').addEventListener('click',async()=>{
-  if(!confirm('Offload every loaded model?'))return;
-  try{await api('/api/offload-all',{method:'POST'});}catch(e){alert(e.message);}
+  if(!(await confirmCard('Offload every loaded model?', {okLabel:'Offload all', danger:true})))return;
+  try{await api('/api/offload-all',{method:'POST'});}catch(e){toast(e.message, 'bad');}
   pollModels();
 });
 $('modelFilter').addEventListener('input',renderModels);
@@ -770,7 +847,7 @@ $('rhmModels').addEventListener('click',async e=>{
     const repo=dl.dataset.rhmDownload,name=dl.dataset.name;
     dl.disabled=true; dl.textContent='Starting';
     try{await api('/api/rhm-download',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({repo,name})});}
-    catch(err){alert('download failed: '+err.message);}
+    catch(err){toast('download failed: '+err.message, 'bad');}
     pollJobs(); pollRHM(); return;
   }
   const load=e.target.closest('button[data-load-installed]');
@@ -832,8 +909,9 @@ async function pollActivity(){
       const ok=(a.status||0)<400, cls=ok?'ok':((a.status||0)<500?'work':'bad');
       const when=a.at?new Date(a.at*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}):'';
       const tok=(a.inputTokens||a.outputTokens)?(' / '+k(a.inputTokens||0)+' in / '+k(a.outputTokens||0)+' out'):'';
+      const prefix=(a.prefixHitCount||a.prefix_hit_count)?(' / prefix '+(a.prefixHitCount||a.prefix_hit_count)):'';
       const model=a.model?(' / '+a.model):'';
-      return '<div class="activity-row"><div class="activity-top"><span class="pill '+cls+'">'+esc(a.status||'-')+'</span><b>'+esc(a.method||'-')+'</b><span class="path">'+esc(a.path||'-')+'</span><span style="margin-left:auto">'+esc(when)+'</span></div><span class="summary">'+esc(a.summary||'-')+'</span><div class="metrics">'+k(a.latencyMs||0)+' ms'+esc(model)+esc(tok)+'</div></div>';
+      return '<div class="activity-row"><div class="activity-top"><span class="pill '+cls+'">'+esc(a.status||'-')+'</span><b>'+esc(a.method||'-')+'</b><span class="path">'+esc(a.path||'-')+'</span><span style="margin-left:auto">'+esc(when)+'</span></div><span class="summary">'+esc(a.summary||'-')+'</span><div class="metrics">'+k(a.latencyMs||0)+' ms'+esc(model)+esc(tok)+esc(prefix)+'</div></div>';
     }).join('')||'<div class="empty">no recent activity</div>';
   }catch(e){
     $('activityMeta').textContent='activity unavailable';
@@ -842,7 +920,7 @@ async function pollActivity(){
 }
 
 loadPrefs();
-pollStats();pollServer();pollUsage();pollGen();pollModels();pollJobs();pollActivity();pollRHM();
+pollStats();pollServer();pollSupported();pollUsage();pollGen();pollModels();pollJobs();pollActivity();pollRHM();
 setInterval(pollStats,1500);
 setInterval(pollUsage,2500);
 setInterval(pollGen,2500);
@@ -850,6 +928,7 @@ setInterval(pollModels,3000);
 setInterval(pollJobs,1200);
 setInterval(pollActivity,1500);
 setInterval(pollServer,6000);
+setInterval(pollSupported,30000);
 setInterval(pollRHM,60000);
 </script>
 </body>

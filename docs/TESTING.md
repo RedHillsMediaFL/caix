@@ -6,6 +6,7 @@ Do not submit speed claims without raw logs. Do not compare runs that use differ
 budgets, temperature, seed, streaming mode, or chat-template mode.
 
 Catalog publication and submission rules are in [CATALOG_SUBMISSIONS.md](CATALOG_SUBMISSIONS.md).
+Quality promotion gates are in [QUALITY_GATES.md](QUALITY_GATES.md).
 
 ## Pick a Target
 
@@ -24,10 +25,17 @@ scripts/check-tester-requests.sh \
   --revisions benchmarks/revisions.tsv
 ```
 
+For final publication review with distributed parity evidence, add `--strict-evidence` to
+`scripts/check-publication-gates.sh`; `--distributed` enables the same strict evidence check
+automatically. It requires distributed evidence summaries and raw logs to be tracked instead of
+merely present in the working tree.
+
 Draft repos are components. Test them only with the matching target repo and the command documented
 on the model card.
 
 MTP repos are target-plus-draft packages. Report target-only and MTP/speculative results separately.
+The generated tester request sheet must carry that warning whenever the manifest has speculative or
+EAGLE/MTP rows; `scripts/check-tester-requests.sh` enforces it before publication.
 
 ## Record the Exact Revision
 
@@ -156,6 +164,7 @@ For a suite run, write or collect a TSV with exact revisions:
 ```bash
 printf '%s\t%s\n' "$REPO" "$REVISION" > benchmarks/revisions.tsv
 scripts/collect-model-revisions.sh --out benchmarks/revisions.tsv
+scripts/check-dependency-evidence.sh
 scripts/benchmark-suite.sh \
   --exports models/exports \
   --revisions benchmarks/revisions.tsv \
@@ -193,10 +202,95 @@ scripts/check-public-copy.sh README.md docs web Formula
 ```
 
 For a model card draft, pass its `README.md` path to the same script.
+The public-copy guard allows only the narrow prefix-cache wording that exact continuation reuse may
+apply in loaded CoreAILM fast handles. General prompt caching is unsupported in public copy, and
+partial or semantic prefix reuse is blocked. Cross-session caches and SSD-persistent KV snapshots
+are blocked until a release gate proves them.
+The same guard blocks positive multimodal, vision, image, audio, or video serving claims. Public copy
+may say multimodal requests are parsed but unsupported and return HTTP 400 until a verified runtime
+bundle plus serving evidence exists.
+Serving-path labels are also guarded: `<model>-staged` is the distributed artifact, not the
+single-device fast path, and 4-bit monolithic bundles must not claim fp16 1:1.
+Markdown-wrapped speed numbers and `x faster` wording are guarded too. They must either cite
+publishable raw benchmark evidence or be explicitly framed as internal/not-publishable evidence.
+Distributed ready-to-test and staged upload-ready copy is blocked until two-machine hardware
+evidence and sign-off exist; Studio-only parity evidence is not enough for those claims.
+RDMA/TB5 support, speedup, or tensor-parallel copy is blocked until a Thunderbolt 5 pair produces
+captured negotiation evidence and token-accurate raw evidence.
 For live RHM cards, run:
 
 ```bash
 scripts/check-hf-model-cards.sh
+```
+
+For live collection notes, use `scripts/check-hf-collections.sh`. The local fixture regression
+`scripts/check-hf-collections-contract.sh` proves manifest coverage and stale-note cleanup without
+touching the Hub.
+
+That check reads only card `README.md` files from the Hub. It does not download model payloads.
+Cards must carry the support link, card-v2 evidence table, and any required `caix-status-label`
+block for `needs-test`, component-only, blocked, or instability labels before publication. Use
+`scripts/check-hf-model-cards.sh --cards-dir <dir>` to run the same contract against local
+`${repo//\//__}.README.md` fixtures without touching the Hub.
+The local fixture regression is `scripts/check-hf-model-card-contract.sh`.
+
+Structured-output capability claims need real CoreAILM constrained-decoding smoke evidence, not
+only request parsing or typecheck evidence:
+
+```bash
+CAIX_STRUCTURED_OUTPUT_MODEL=/path/to/coreai-language-bundle \
+  scripts/check-structured-output-smoke.sh --output .tmp/structured-output-smoke.json
+```
+
+The smoke loads the supplied bundle through the persistent model handle, sends a tiny `json_schema`
+request through CoreAILM constrained decoding, parses the generated text as JSON, and verifies it
+matches the schema. The current implementation uses CoreAILM's sequential engine variant for
+constrained decoding because the pipelined engine samples on GPU and does not expose logits. Keep
+public docs and card copy silent until this evidence exists for the release target and publication
+gates pass.
+
+Validate captured smoke evidence without loading a model:
+
+```bash
+scripts/check-structured-output-evidence.sh .tmp/structured-output-smoke.json
+scripts/check-structured-output-evidence-contract.sh
+```
+
+The no-load validator parses the captured schema and generated text, verifies that the text is JSON,
+checks the generated object against the schema subset used by the smoke, and is exercised by a local
+contract fixture inside `scripts/check-publication-gates.sh`. Passing this validator records evidence
+shape only; public capability copy still needs release review and explicit sign-off.
+
+Before lifting public `response_format` copy, run the stricter readiness check:
+
+```bash
+scripts/check-structured-output-release-readiness.sh \
+  --evidence .tmp/structured-output-smoke.json
+```
+
+Strict mode also checks dependency provenance and fails while `xgrammar` is still tracked as a branch
+dependency. `--allow-branch-dependencies` is only a development/report mode; it is not release
+readiness. Release evidence must stop by `eos` or `stopSequence` and record a positive decode rate;
+a schema-valid object truncated by `maxTokens` or `contextLimit` is diagnostic evidence, not public
+readiness. `scripts/check-structured-output-release-readiness-contract.sh` fixture-tests strict and
+development modes inside publication gates without using the live dependency state.
+
+Before a quantized language bundle can move from `needs-test` to a quality claim, run the fixed task
+fixture from `quality/quant_tasks_v0.tsv` in the heavy evaluator window and validate the resulting
+`quality/raw/<run>/` directory with:
+
+```bash
+scripts/quant-eval/validate-run.py --run quality/raw/<run>
+```
+
+Diffusion bundles have a separate API contract in `quality/diffusion_api_contract_v0.json`. Until
+committed-block SSE is implemented and tested, diffusion serving is non-streaming-only and streaming
+requests must not be described as supported.
+For diffusion quality evidence, run the fixed prompt fixture from `quality/diffusion_prompts_v0.tsv`
+in the heavy evaluator window and validate the resulting `quality/raw/<run>/` directory with:
+
+```bash
+scripts/diffusion-eval/validate-run.py --run quality/raw/<run>
 ```
 
 ## Cleanup
@@ -206,6 +300,17 @@ After testing, remove only the payload you installed:
 ```bash
 scripts/remove-export.sh "$NAME"
 ```
+
+Before publication review, `models/exports` must contain only the tracked `.gitkeep`. Use the
+non-destructive report first:
+
+```bash
+scripts/check-export-cleanliness.sh --report
+```
+
+Publication gates run `scripts/check-export-cleanliness-contract.sh` with temporary fixtures and a
+temporary Git index so clean, local-payload, tracked-payload, missing-`.gitkeep`, and report-mode
+behavior stay pinned without touching real model payloads.
 
 Check free disk before starting another test:
 

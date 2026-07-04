@@ -19,6 +19,8 @@ public final class PersistentModel {
     public let maxContextLength: Int
     /// Approximate on-disk footprint of the `.aimodel` package (used for memory accounting).
     public let bundleByteSize: UInt64
+    /// Whether this hot handle can honor `CoreAIPipeline.Options.constrainedJSONSchema`.
+    public let supportsConstrainedDecoding: Bool
     /// Seconds spent loading the graph + tokenizer.
     public let loadSeconds: Double
 
@@ -28,6 +30,7 @@ public final class PersistentModel {
     private init(
         bundle: ResolvedBundle,
         loadSeconds: Double,
+        supportsConstrainedDecoding: Bool,
         generate: @escaping PipelinedLanguageHandle.Generate
     ) {
         self.generateImpl = generate
@@ -36,6 +39,7 @@ public final class PersistentModel {
         self.vocabSize = bundle.vocabSize
         self.maxContextLength = bundle.maxContextLength
         self.bundleByteSize = Self.directorySize(bundle.aimodelURL)
+        self.supportsConstrainedDecoding = supportsConstrainedDecoding
         self.loadSeconds = loadSeconds
     }
     #else
@@ -47,6 +51,7 @@ public final class PersistentModel {
         self.vocabSize = 0
         self.maxContextLength = 0
         self.bundleByteSize = 0
+        self.supportsConstrainedDecoding = false
         self.loadSeconds = 0
     }
     #endif
@@ -62,12 +67,17 @@ public final class PersistentModel {
            fastCompatible,
            let fast = try await PipelinedLLM.loadPersistent(bundlePath: bundlePath, verbose: verbose)
         {
-            return PersistentModel(bundle: bundle, loadSeconds: fast.loadSeconds, generate: fast.generate)
+            return PersistentModel(
+                bundle: bundle,
+                loadSeconds: fast.loadSeconds,
+                supportsConstrainedDecoding: fast.supportsConstrainedDecoding,
+                generate: fast.generate)
         }
         if env["COREAI_LEGACY_ENGINE"] == nil {
             return PersistentModel(
                 bundle: bundle,
                 loadSeconds: 0,
+                supportsConstrainedDecoding: false,
                 generate: { messages, options, tools, onToken in
                     if fastCompatible, let fast = try await PipelinedLLM.runIfLanguageMessages(
                         modelPath: bundlePath,
@@ -77,6 +87,10 @@ public final class PersistentModel {
                         onToken: onToken)
                     {
                         return fast
+                    }
+                    if options.constrainedJSONSchema != nil {
+                        throw CoreAIPipeline.RuntimeError.unsupportedFeature(
+                            "JSON-schema constrained decoding requires the CoreAILM pipelined language engine")
                     }
                     let engine = try await LLMEngine.load(bundle: bundle, verbose: options.verbose)
                     let promptTokens = try engine.encodePrompt(
@@ -89,7 +103,12 @@ public final class PersistentModel {
         return PersistentModel(
             bundle: bundle,
             loadSeconds: engine.loadSeconds,
+            supportsConstrainedDecoding: false,
             generate: { messages, options, tools, onToken in
+                if options.constrainedJSONSchema != nil {
+                    throw CoreAIPipeline.RuntimeError.unsupportedFeature(
+                        "JSON-schema constrained decoding requires the CoreAILM pipelined language engine")
+                }
                 let promptTokens = try engine.encodePrompt(
                     messages: messages, tools: tools, applyChatTemplate: options.applyChatTemplate)
                 return try await engine.generate(

@@ -209,6 +209,10 @@ final class LLMEngine {
         options: CoreAIPipeline.Options,
         onToken: ((String) -> Void)?
     ) async throws -> CoreAIPipeline.Result {
+        guard options.constrainedJSONSchema == nil else {
+            throw CoreAIPipeline.RuntimeError.unsupportedFeature(
+                "JSON-schema constrained decoding requires the CoreAILM pipelined language engine")
+        }
         func log(_ s: @autoclosure () -> String) {
             if options.verbose { FileHandle.standardError.write(Data(("[coreai] " + s() + "\n").utf8)) }
         }
@@ -349,7 +353,8 @@ final class LLMEngine {
             stopReason: stopReason,
             modelLoadSeconds: loadSeconds,
             prefillSeconds: prefillSeconds,
-            decodeSeconds: decodeSeconds)
+            decodeSeconds: decodeSeconds,
+            generatedTokenIDs: generated.map(Int32.init))
     }
 
     // MARK: - Init / model contract validation
@@ -521,21 +526,16 @@ final class LLMEngine {
 
     // MARK: - KV cache
 
-    /// Diagnostic prefill chunking for hybrid qwen3_5/qwen3_5_moe graph-shape work. Smaller
-    /// chunks reduce query-width changes at the decode boundary, but can be slow for large Core AI
-    /// bundles, so the default remains the standard single batched prefill.
+    /// Prefill chunking policy for stateful monolithic Core AI LLMs.
+    ///
+    /// macOS monolithic exports bake the implicit causal SDPA query geometry at the trace width
+    /// (currently 16). Keeping default prefill chunks at or below that width avoids the >16-token
+    /// nondeterminism seen in stateful monolithic bundles while preserving explicit overrides for
+    /// diagnostics.
     func resolvedPrefillChunkSize(promptCount: Int) -> Int {
-        if let raw = ProcessInfo.processInfo.environment["COREAI_PREFILL_CHUNK"],
-            let parsed = Int(raw.trimmingCharacters(in: .whitespacesAndNewlines)),
-            parsed > 0
-        {
-            return min(parsed, max(1, promptCount))
-        }
-        switch ProcessInfo.processInfo.environment["COREAI_PREFILL_MODE"]?.lowercased() {
-        case "token", "tokenwise", "single", "1", "true", "yes": return 1
-        case "batch", "batched", "0", "false", "no", "off": return max(1, promptCount)
-        default: return max(1, promptCount)
-        }
+        MonolithicPrefillPolicy.resolvedChunkSize(
+            promptCount: promptCount,
+            isStatefulMonolithic: cacheContract == .stateful)
     }
 
     /// The fixed KV-cache capacity (tokens) to allocate for a request: the larger of the

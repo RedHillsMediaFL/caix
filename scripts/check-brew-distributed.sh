@@ -98,7 +98,16 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(404)
         self.end_headers()
 
-server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+class FastLocalHTTPServer(ThreadingHTTPServer):
+    def server_bind(self):
+        # http.server.HTTPServer.server_bind resolves socket.getfqdn(host),
+        # which can stall on local DNS and make this readiness probe flaky.
+        self.socket.bind(self.server_address)
+        self.server_address = self.socket.getsockname()
+        self.server_name = "127.0.0.1"
+        self.server_port = self.server_address[1]
+
+server = FastLocalHTTPServer(("127.0.0.1", 0), Handler)
 with open(os.environ["CAIX_TEST_PORT_FILE"], "w", encoding="utf-8") as fh:
     fh.write(str(server.server_address[1]))
     fh.write("\n")

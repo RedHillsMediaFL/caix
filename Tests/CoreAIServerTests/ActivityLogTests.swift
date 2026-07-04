@@ -40,7 +40,8 @@ final class ActivityLogTests: XCTestCase {
             firstTokenSeconds: 0.42,
             loadSeconds: 1.25,
             prefillSeconds: 0.2,
-            decodeSeconds: 2.0)
+            decodeSeconds: 2.0,
+            prefixHitCount: 11)
 
         let event = await log.snapshot(limit: 1)[0]
         XCTAssertEqual(event.firstTokenMs, 420)
@@ -48,5 +49,6 @@ final class ActivityLogTests: XCTestCase {
         XCTAssertEqual(event.prefillMs, 200)
         XCTAssertEqual(event.decodeMs, 2000)
         XCTAssertEqual(event.decodeTokensPerSecond, 4.0)
+        XCTAssertEqual(event.prefixHitCount, 11)
     }
 }

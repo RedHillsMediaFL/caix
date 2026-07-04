@@ -17,6 +17,23 @@ A model can go in the catalog only as one of these states:
 For `needs-test`, state the exact gap: memory ceiling, missing second machine, missing Thunderbolt
 test, or Core AI/runtime issue. Do not imply runtime success.
 
+Every public RHM card must satisfy the card-v2 metadata contract before catalog promotion:
+`library_name: caix`, `## Download`, `## License`, the support link, and evidence rows for Base
+model, Format, Quant, Context, Runtime, and License. Component, staged, blocked, and
+instability-gated cards must include a `caix-status-label` block and must not claim ready-to-run or
+verified status. A card that does claim ready-to-run or verified-in-caix status must cite parity
+evidence and speed/benchmark evidence.
+MTP/speculative package cards must also include a `caix-status-label` block that identifies the
+target+draft package and names the matching standalone target context; publish target-only and
+target+draft results separately.
+Use `<model>-staged` for the artifact that can run all stages locally or split them across workers,
+and `<model>-monolithic` for a separate single-machine fused fast path. A monolithic card needs a
+determinism/parity status block. The reviewed qwen3-4b monolithic fix makes stateful prefill
+deterministic by default with a `<=16` chunk cap, but it remains a 4bit path and must not claim
+fp16 1:1; keep it unpublished/unrelabelled until the fix is accepted and release-gated.
+`scripts/check-publication-gates.sh --hub` enforces this through `scripts/check-hf-model-cards.sh`
+without downloading model payloads.
+
 ## Submit a Model
 
 Open a GitHub issue with:
@@ -38,8 +55,20 @@ caix cluster plan --manifest <bundle>/stage-manifest.json --workers studio=64,ma
 caix deploy verify --endpoint <host-a>:1237 --endpoint <host-b>:1237 --min-mbps <floor>
 ```
 
+If the second machine is unavailable, keep the staged package in `needs-test`; do not promote it
+from Studio-only `cluster plan`, loopback/socket smoke, or diagnostic HF parity evidence.
+
 Attach raw logs for failures and benchmarks. Speed claims need the raw benchmark directory, exact
 model repo revision, caix commit, prompt, token budget, temperature, warmup count, and measured runs.
+Release and capability claims also need `benchmarks/DEPENDENCY_EVIDENCE.tsv` to match the current
+resolved Core AI dependency set.
+Quality claims need the relevant gate evidence from [QUALITY_GATES.md](QUALITY_GATES.md), including
+raw `quality/raw/<run>/` artifacts for the exact model revision.
+Diffusion cards also need the API contract state from [DIFFUSION_API.md](DIFFUSION_API.md): v1 is
+non-streaming-only, and committed-block SSE is not a supported claim until separately implemented and
+tested.
+Diffusion quality evidence must also validate against `quality/diffusion_prompts_v0.tsv` and include
+`quality/raw/<run>/diffusion_quality.tsv`.
 
 ## Submit Test Results
 

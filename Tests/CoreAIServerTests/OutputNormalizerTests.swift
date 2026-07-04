@@ -56,6 +56,27 @@ final class OutputNormalizerTests: XCTestCase {
         XCTAssertEqual(r.toolCalls[1].name, "b")
     }
 
+    func testMistralBracketToolCallArray() {
+        let mistral = OutputFormat(
+            family: .passthrough,
+            toolStarts: ["[TOOL_CALLS]"],
+            toolEnds: ["\n"])
+        let raw = """
+        [TOOL_CALLS][{"name":"lookup","arguments":{"q":"x"}},{"name":"calc","arguments":{"n":2}}]
+        Final text.
+        """
+
+        let r = StreamingNormalizer.normalizeComplete(raw, format: mistral)
+        XCTAssertEqual(r.text, "Final text.")
+        XCTAssertEqual(r.toolCalls.count, 2)
+        XCTAssertEqual(r.toolCalls[0].id, "call_0")
+        XCTAssertEqual(r.toolCalls[0].name, "lookup")
+        XCTAssertEqual(r.toolCalls[0].arguments, #"{"q":"x"}"#)
+        XCTAssertEqual(r.toolCalls[1].id, "call_1")
+        XCTAssertEqual(r.toolCalls[1].name, "calc")
+        XCTAssertEqual(r.toolCalls[1].arguments, #"{"n":2}"#)
+    }
+
     func testPassthroughNoMarkers() {
         let raw = "Just a normal answer, no markers here."
         let r = StreamingNormalizer.normalizeComplete(raw, format: .passthrough)

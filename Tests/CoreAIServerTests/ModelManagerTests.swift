@@ -98,6 +98,31 @@ final class ModelManagerTests: XCTestCase {
         XCTAssertTrue(row.bundle)
     }
 
+    func testReasoningSupportIsReportedFromBundleTokenizer() async throws {
+        let root = try makeTempDir()
+        let exports = root.appendingPathComponent("exports", isDirectory: true)
+        let registry = root.appendingPathComponent("models/registry.json")
+        try FileManager.default.createDirectory(
+            at: registry.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try #"{"models":{}}"#.write(to: registry, atomically: true, encoding: .utf8)
+
+        try writeBundle(
+            at: exports.appendingPathComponent("qwen3-4b-instruct-coreai", isDirectory: true),
+            name: "qwen3-4b-instruct-coreai",
+            chatTemplate: "<|im_start|>assistant\n<think>\n</think>")
+        try writeBundle(
+            at: exports.appendingPathComponent("plain-coreai", isDirectory: true),
+            name: "plain-coreai")
+
+        let manager = ModelManager(exportsDir: exports, registryPath: registry)
+        let rows = await manager.listModels()
+
+        let qwen = try XCTUnwrap(rows.first { $0.name == "qwen3-4b-instruct-coreai" })
+        let plain = try XCTUnwrap(rows.first { $0.name == "plain-coreai" })
+        XCTAssertEqual(qwen.reasoningSupported, true)
+        XCTAssertEqual(plain.reasoningSupported, false)
+    }
+
     func testEagleTargetDraftPackageIsListedAsEagle() async throws {
         let root = try makeTempDir()
         let exports = root.appendingPathComponent("exports", isDirectory: true)
@@ -164,7 +189,8 @@ final class ModelManagerTests: XCTestCase {
         at root: URL,
         name: String,
         sourceModelID: String? = nil,
-        tokenizer: String? = nil
+        tokenizer: String? = nil,
+        chatTemplate: String? = nil
     ) throws {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let tokenizerName = tokenizer ?? name
@@ -190,6 +216,14 @@ final class ModelManagerTests: XCTestCase {
               }
             }
             """.write(to: root.appendingPathComponent("metadata.json"), atomically: true, encoding: .utf8)
+        if let chatTemplate {
+            let tokenizerDir = root.appendingPathComponent("tokenizer", isDirectory: true)
+            try FileManager.default.createDirectory(at: tokenizerDir, withIntermediateDirectories: true)
+            try chatTemplate.write(
+                to: tokenizerDir.appendingPathComponent("chat_template.jinja"),
+                atomically: true,
+                encoding: .utf8)
+        }
     }
 
     private func makeTempDir() throws -> URL {

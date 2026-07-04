@@ -1,0 +1,41 @@
+{
+  "schema": "caix.diffusion_api_contract.v0",
+  "selected_api_mode": "nonstreaming_only_v1",
+  "applies_to": [
+    "kind:diffusion",
+    "block_diffusion_language_bundle"
+  ],
+  "request_contract": {
+    "openai_chat_completions_nonstreaming": "allowed_after_diffusion_block_quality_passes",
+    "openai_chat_completions_stream": "reject_until_committed_block_sse_exists",
+    "anthropic_messages_nonstreaming": "allowed_after_diffusion_block_quality_passes",
+    "anthropic_messages_stream": "reject_until_committed_block_sse_exists"
+  },
+  "streaming_contract": {
+    "token_delta_streaming": false,
+    "committed_block_sse": "deferred",
+    "committed_block_event_name": "diffusion.block",
+    "minimum_block_payload_fields": [
+      "block_index",
+      "text",
+      "accepted_token_count",
+      "denoise_step_count",
+      "stop_reason"
+    ]
+  },
+  "required_rejection": {
+    "http_status": 400,
+    "message_must_contain": [
+      "block diffusion",
+      "streaming",
+      "not supported"
+    ]
+  },
+  "real_run_artifacts": [
+    "quality/raw/<run>/metadata.json",
+    "quality/raw/<run>/diffusion_quality.tsv",
+    "quality/raw/<run>/diffusion_api.json",
+    "quality/raw/<run>/summary.json"
+  ],
+  "claim_rule": "Do not claim diffusion token streaming or OpenAI-style streaming parity. Non-streaming diffusion serving still requires diffusion_block_quality and diffusion_api_contract raw evidence for the exact model revision."
+}

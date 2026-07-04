@@ -117,6 +117,7 @@ extension ServerRuntime {
     static func openAIStream(
         handle: ModelHandle, messages: [[String: String]], options: CoreAIPipeline.Options,
         tools: [[String: any Sendable]]?, format: OutputFormat,
+        generationRequest: GenerationRequest? = nil,
         model: String, id: String, created: Int,
         includeUsage: Bool = false,
         activity: ActivityLog? = nil, startedAt: Date? = nil
@@ -125,8 +126,18 @@ extension ServerRuntime {
         let (stream, continuation) = AsyncStream<String>.makeStream()
         let genTask = Task<CoreAIPipeline.Result, Error> {
             defer { continuation.finish() }
-            return try await handle.generate(messages: messages, options: options, tools: tools) { delta in
-                continuation.yield(delta)
+            if let generationRequest {
+                return try await handle.generateMultimodal(
+                    request: generationRequest,
+                    options: options,
+                    tools: tools,
+                    onToken: { delta in
+                    continuation.yield(delta)
+                    })
+            } else {
+                return try await handle.generate(messages: messages, options: options, tools: tools) { delta in
+                    continuation.yield(delta)
+                }
             }
         }
 
@@ -188,7 +199,8 @@ extension ServerRuntime {
                 firstTokenSeconds: firstDeltaAt?.timeIntervalSince(requestStart),
                 loadSeconds: result?.modelLoadSeconds,
                 prefillSeconds: result?.prefillSeconds,
-                decodeSeconds: result?.decodeSeconds)
+                decodeSeconds: result?.decodeSeconds,
+                prefixHitCount: result?.prefixHitCount)
             try await writer.write(
                 sseData(OpenAIChatChunk(
                     id: id,
@@ -208,6 +220,7 @@ extension ServerRuntime {
     static func anthropicStream(
         handle: ModelHandle, messages: [[String: String]], options: CoreAIPipeline.Options,
         tools: [[String: any Sendable]]?, format: OutputFormat,
+        generationRequest: GenerationRequest? = nil,
         model: String, id: String,
         activity: ActivityLog? = nil, startedAt: Date? = nil
     ) -> Response {
@@ -215,8 +228,18 @@ extension ServerRuntime {
         let (stream, continuation) = AsyncStream<String>.makeStream()
         let genTask = Task<CoreAIPipeline.Result, Error> {
             defer { continuation.finish() }
-            return try await handle.generate(messages: messages, options: options, tools: tools) { delta in
-                continuation.yield(delta)
+            if let generationRequest {
+                return try await handle.generateMultimodal(
+                    request: generationRequest,
+                    options: options,
+                    tools: tools,
+                    onToken: { delta in
+                    continuation.yield(delta)
+                    })
+            } else {
+                return try await handle.generate(messages: messages, options: options, tools: tools) { delta in
+                    continuation.yield(delta)
+                }
             }
         }
 
@@ -321,7 +344,8 @@ extension ServerRuntime {
                 firstTokenSeconds: firstDeltaAt?.timeIntervalSince(requestStart),
                 loadSeconds: result?.modelLoadSeconds,
                 prefillSeconds: result?.prefillSeconds,
-                decodeSeconds: result?.decodeSeconds)
+                decodeSeconds: result?.decodeSeconds,
+                prefixHitCount: result?.prefixHitCount)
             try await writer.write(
                 sseEvent(
                     "message_delta",

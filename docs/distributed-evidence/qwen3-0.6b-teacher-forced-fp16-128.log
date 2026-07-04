@@ -1,0 +1,15 @@
+Test Suite 'Selected tests' started at 2026-07-03 11:28:55.902.
+Test Suite 'PipelineRuntimeTests.xctest' started at 2026-07-03 11:28:55.903.
+Test Suite 'DistributedCoreAIStageAssetIntegrationTests' started at 2026-07-03 11:28:55.903.
+Test Case '-[PipelineRuntimeTests.DistributedCoreAIStageAssetIntegrationTests testRealStageAssetsMatchExpectedGreedyTokenSequences]' started.
+[caix-token-tie] prompt=2 step=1 expected=2750 staged=4718 margin=0.015625 expected_logit=17.9375 staged_logit=17.9531 top={4718:17.9531,2750:17.9375,897:17.2812,15592:16.9688,330:16.8594,6894:16.5312,4128:16.3125,1156:15.8594}
+[caix-token-tie] prompt=2 step=13 expected=7281 staged=576 margin=0 expected_logit=18.5781 staged_logit=18.5781 top={576:18.5781,7281:18.5781,4710:17.2031,1416:16.4844,22406:16.2812,7405:16.1094,5005:16.0938,2585:15.9297}
+[caix-token-tie] prompt=4 step=80 expected=438 staged=1447 margin=0.015625 expected_logit=21.625 staged_logit=21.6406 top={1447:21.6406,438:21.625,4512:18.2656,3897:17.8281,510:17.7656,5326:16.9062,2661:16.7188,11136:16.4219}
+[caix-token-tie] prompt=4 step=90 expected=2877 staged=2490 margin=0 expected_logit=26.3594 staged_logit=26.3594 top={2490:26.3594,2877:26.3594,1548:23.9219,368:23.8906,3679:21.4844,2075:20.8125,34520:20.6406,1072:20.5938}
+Test Case '-[PipelineRuntimeTests.DistributedCoreAIStageAssetIntegrationTests testRealStageAssetsMatchExpectedGreedyTokenSequences]' passed (58.655 seconds).
+Test Suite 'DistributedCoreAIStageAssetIntegrationTests' passed at 2026-07-03 11:29:54.558.
+	 Executed 1 test, with 0 failures (0 unexpected) in 58.655 (58.655) seconds
+Test Suite 'PipelineRuntimeTests.xctest' passed at 2026-07-03 11:29:54.558.
+	 Executed 1 test, with 0 failures (0 unexpected) in 58.655 (58.655) seconds
+Test Suite 'Selected tests' passed at 2026-07-03 11:29:54.558.
+	 Executed 1 test, with 0 failures (0 unexpected) in 58.655 (58.656) seconds

@@ -20,9 +20,12 @@ elif [[ "$#" -ne 0 ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/caix-cleanup-safety.XXXXXX")"
-trap 'rm -rf "$tmpdir"' EXIT
+mkdir -p "$REPO_DIR/.tmp"
+report_tmp="$(mktemp -d "$REPO_DIR/.tmp/caix-export-cleanliness.XXXXXX")"
+trap 'rm -rf "$tmpdir" "$report_tmp"' EXIT
 
 exports="$tmpdir/exports"
 lock="$tmpdir/.agent-heavy-task.lock"
@@ -69,5 +72,31 @@ env caix_heavy_task_lock="$lock" \
   echo "error: unlocked remove touched keep-bundle" >&2
   exit 1
 }
+
+report_exports="$report_tmp/exports"
+mkdir -p "$report_exports/demo-report"
+printf 'demo\n' > "$report_exports/demo-report/marker.txt"
+
+report_output="$("$SCRIPT_DIR/check-export-cleanliness.sh" --exports "$report_exports" --report)"
+[[ -d "$report_exports/demo-report" ]] || {
+  echo "error: export-cleanliness report removed demo-report" >&2
+  exit 1
+}
+case "$report_output" in
+  *"scripts/remove-export.sh --exports"*" --dry-run demo-report"*) ;;
+  *)
+    echo "error: export-cleanliness report omitted dry-run cleanup command" >&2
+    printf '%s\n' "$report_output" >&2
+    exit 1
+    ;;
+esac
+case "$report_output" in
+  *"report only; no files removed"*) ;;
+  *)
+    echo "error: export-cleanliness report omitted non-destructive footer" >&2
+    printf '%s\n' "$report_output" >&2
+    exit 1
+    ;;
+esac
 
 echo "cleanup safety ok"

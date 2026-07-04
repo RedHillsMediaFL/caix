@@ -23,6 +23,8 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 RAW_DIR="$REPO_DIR/benchmarks/raw"
 REPO_REAL="$(cd "$REPO_DIR" && pwd -P)"
 REQUIRE_TRACKED=0
+EXPECTED_SUITE_SUMMARY_HEADER=$'repo\tlocal_dir\tkind\tbenchmark_mode\tstatus\treason\tbundle\toutput'
+EXPECTED_MODEL_SUMMARY_HEADER=$'phase\trun\tstatus\tgenerated\tload_s\tprefill_s\tdecode_s\tdecode_tps\tstdout\tstderr'
 EXPECTED_REPORT_HEADER=$'repo\trepo_revision\tlocal_dir\tkind\tbenchmark_mode\tstatus\tpublishable\treason\tmeasured_runs\tmedian_generated\tmedian_load_s\tmedian_prefill_s\tmedian_decode_s\tmedian_decode_tps\tmin_decode_tps\tmax_decode_tps\tcaix_commit\tmachine\tmemory_bytes\tos\tmax_tokens\ttemperature\tseed\traw\tprompt\traw_dir'
 
 while [[ $# -gt 0 ]]; do
@@ -212,6 +214,22 @@ summary_count() {
   awk -F '\t' "$expr" "$file"
 }
 
+require_header() {
+  local label="$1"
+  local file="$2"
+  local expected="$3"
+  local header
+
+  IFS= read -r header < "$file" || {
+    echo "error: $label is empty: $file" >&2
+    return 1
+  }
+  if [[ "$header" != "$expected" ]]; then
+    echo "error: $label schema is stale: $file" >&2
+    return 1
+  fi
+}
+
 check_model_dir() {
   local suite="$1"
   local repo="$2"
@@ -224,6 +242,7 @@ check_model_dir() {
   [[ -d "$output" ]] || { echo "error: raw output directory missing for $repo: $output_label" >&2; return 1; }
   [[ -f "$output/metadata.txt" ]] || { echo "error: raw metadata missing for $repo: $output/metadata.txt" >&2; return 1; }
   [[ -f "$output/summary.tsv" ]] || { echo "error: raw summary missing for $repo: $output/summary.tsv" >&2; return 1; }
+  require_header "raw summary" "$output/summary.tsv" "$EXPECTED_MODEL_SUMMARY_HEADER" || return 1
   require_path_under_dir "$repo raw output" "$output" "$RAW_REAL" || return 1
   local output_real
   output_real="$(canonical_existing_path "$output")" || return 1
@@ -342,6 +361,7 @@ model_count=0
 while IFS= read -r suite; do
   [[ -f "$suite/metadata.txt" ]] || { echo "error: suite metadata missing: $suite/metadata.txt" >&2; exit 1; }
   [[ -f "$suite/summary.tsv" ]] || { echo "error: suite summary missing: $suite/summary.tsv" >&2; exit 1; }
+  require_header "suite summary" "$suite/summary.tsv" "$EXPECTED_SUITE_SUMMARY_HEADER" || exit 1
   if [[ "$REQUIRE_TRACKED" == "1" ]]; then
     require_tracked_file "$suite/metadata.txt" "$suite metadata"
     require_tracked_file "$suite/summary.tsv" "$suite summary"

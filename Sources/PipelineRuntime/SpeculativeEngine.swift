@@ -101,6 +101,10 @@ final class SpeculativeEngine {
         options: CoreAIPipeline.Options,
         onToken: ((String) -> Void)?
     ) async throws -> CoreAIPipeline.SpeculativeResult {
+        guard options.constrainedJSONSchema == nil else {
+            throw CoreAIPipeline.RuntimeError.unsupportedFeature(
+                "JSON-schema constrained decoding is not supported on speculative decoding backends")
+        }
         func log(_ s: @autoclosure () -> String) {
             if options.verbose { FileHandle.standardError.write(Data(("[coreai] " + s() + "\n").utf8)) }
         }

@@ -118,6 +118,7 @@ struct ChatTUI {
         var reasoning: String
         var toolCalls: [ToolCall]
         var finishReason: String?
+        var streamedOutput = false
     }
 
     var options: Options
@@ -393,9 +394,11 @@ struct ChatTUI {
             let path = row["path"] as? String ?? "-"
             let ms = intFromNumber(row["latencyMs"]) ?? intFromNumber(row["latency_ms"]) ?? 0
             let timing = activityTiming(row)
+            let prefix = (intFromNumber(row["prefixHitCount"]) ?? intFromNumber(row["prefix_hit_count"]))
+                .map { " prefix=\($0)" } ?? ""
             let model = (row["model"] as? String).map { "  \($0)" } ?? ""
             let summary = row["summary"] as? String ?? "-"
-            print("\(status) \(method) \(path) \(ms)ms\(timing)\(model) - \(summary)")
+            print("\(status) \(method) \(path) \(ms)ms\(timing)\(prefix)\(model) - \(summary)")
         }
     }
 
@@ -407,11 +410,15 @@ struct ChatTUI {
             log(String(format: "turn hop=%d finish=%@ seconds=%.2f chars=%d tools=%d",
                        hop + 1, turn.finishReason ?? "unknown", elapsed, turn.content.count, turn.toolCalls.count))
 
-            if !turn.reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if !turn.streamedOutput,
+               !turn.reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 print("\nthinking:\n\(turn.reasoning)")
             }
-            if !turn.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if !turn.streamedOutput,
+               !turn.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 print("\ncaix:\n\(turn.content)")
+            }
+            if !turn.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 history.append(Message(role: "assistant", content: turn.content))
             }
             guard !turn.toolCalls.isEmpty else { return }
@@ -463,7 +470,7 @@ struct ChatTUI {
     }
 
     private func chatCompletion() throws -> AssistantTurn {
-        let body = requestBody()
+        let body = requestBody(stream: true)
         let data = try JSONSerialization.data(withJSONObject: body, options: [])
         var request = URLRequest(url: endpoint.appendingPathComponent("v1/chat/completions"), timeoutInterval: 600)
         request.httpMethod = "POST"
@@ -471,6 +478,10 @@ struct ChatTUI {
         request.setValue("caix/\(CaixBuildInfo.version)", forHTTPHeaderField: "User-Agent")
         request.httpBody = data
 
+        return try streamingChatCompletion(for: request)
+    }
+
+    private func nonStreamingChatCompletion(for request: URLRequest) throws -> AssistantTurn {
         let (responseData, response) = try synchronousData(for: request, progress: "thinking")
         guard let http = response as? HTTPURLResponse else {
             throw ChatTUIError("invalid response")
@@ -505,13 +516,84 @@ struct ChatTUI {
             finishReason: choice["finish_reason"] as? String)
     }
 
-    private func requestBody() -> [String: Any] {
+    private func streamingChatCompletion(for request: URLRequest) throws -> AssistantTurn {
+        let semaphore = DispatchSemaphore(value: 0)
+        final class Box: @unchecked Sendable {
+            var result: Result<AssistantTurn, Error>?
+        }
+        let box = Box()
+        Task {
+            do {
+                box.result = .success(try await performStreamingChatCompletion(for: request))
+            } catch {
+                box.result = .failure(error)
+            }
+            semaphore.signal()
+        }
+        while semaphore.wait(timeout: .now()) == .timedOut {
+            RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02))
+        }
+        return try box.result?.get() ?? { throw ChatTUIError("empty response") }()
+    }
+
+    private func performStreamingChatCompletion(for request: URLRequest) async throws -> AssistantTurn {
+        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw ChatTUIError("invalid response")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            var body = ""
+            for try await line in bytes.lines {
+                if body.count < 4_000 {
+                    body += line + "\n"
+                }
+            }
+            throw ChatTUIError("HTTP \(http.statusCode): \(redact(body))")
+        }
+
+        var accumulator = ChatStreamingAccumulator()
+        var printedThinking = false
+        var printedContent = false
+        for try await line in bytes.lines {
+            guard line.hasPrefix("data:") else { continue }
+            let payload = line.dropFirst("data:".count).trimmingCharacters(in: .whitespaces)
+            if payload == "[DONE]" { break }
+            let events = try accumulator.consume(payload)
+            for event in events {
+                switch event {
+                case .reasoning(let text):
+                    if !printedThinking {
+                        print("\nthinking:")
+                        printedThinking = true
+                    }
+                    print(text, terminator: "")
+                    fflush(stdout)
+                case .content(let text):
+                    if !printedContent {
+                        if printedThinking { print("") }
+                        print("\ncaix:")
+                        printedContent = true
+                    }
+                    print(text, terminator: "")
+                    fflush(stdout)
+                }
+            }
+        }
+        if printedThinking || printedContent {
+            print("")
+        }
+        var turn = accumulator.turn()
+        turn.streamedOutput = printedThinking || printedContent
+        return turn
+    }
+
+    private func requestBody(stream: Bool = false) -> [String: Any] {
         var body: [String: Any] = [
             "model": model,
             "messages": history.map { ["role": $0.role, "content": $0.content] },
             "max_tokens": options.maxTokens,
             "temperature": options.temperature,
-            "stream": false,
+            "stream": stream,
         ]
         if let topP = options.topP {
             body["top_p"] = topP
@@ -707,6 +789,85 @@ private func parseJSONObject(_ text: String) -> [String: Any] {
           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     else { return [:] }
     return object
+}
+
+private enum ChatStreamingEvent {
+    case reasoning(String)
+    case content(String)
+}
+
+private struct ChatStreamingToolDraft {
+    var id: String?
+    var name = ""
+    var arguments = ""
+}
+
+private struct ChatStreamingAccumulator {
+    private var content = ""
+    private var reasoning = ""
+    private var finishReason: String?
+    private var toolDrafts: [Int: ChatStreamingToolDraft] = [:]
+
+    mutating func consume(_ payload: String) throws -> [ChatStreamingEvent] {
+        guard let data = payload.data(using: .utf8),
+              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            throw ChatTUIError("invalid streaming chunk")
+        }
+        guard let choices = object["choices"] as? [[String: Any]] else { return [] }
+
+        var events: [ChatStreamingEvent] = []
+        for choice in choices {
+            if let finish = choice["finish_reason"] as? String, !finish.isEmpty {
+                finishReason = finish
+            }
+            guard let delta = choice["delta"] as? [String: Any] else { continue }
+            if let text = delta["reasoning_content"] as? String, !text.isEmpty {
+                reasoning += text
+                events.append(.reasoning(text))
+            }
+            if let text = delta["content"] as? String, !text.isEmpty {
+                content += text
+                events.append(.content(text))
+            }
+            for row in delta["tool_calls"] as? [[String: Any]] ?? [] {
+                let index = intFromNumber(row["index"]) ?? toolDrafts.count
+                var draft = toolDrafts[index] ?? ChatStreamingToolDraft()
+                if let id = row["id"] as? String, !id.isEmpty {
+                    draft.id = id
+                }
+                if let function = row["function"] as? [String: Any] {
+                    if let name = function["name"] as? String, !name.isEmpty {
+                        if draft.name.isEmpty || draft.name == name {
+                            draft.name = name
+                        } else {
+                            draft.name += name
+                        }
+                    }
+                    if let arguments = function["arguments"] as? String {
+                        draft.arguments += arguments
+                    }
+                }
+                toolDrafts[index] = draft
+            }
+        }
+        return events
+    }
+
+    func turn() -> ChatTUI.AssistantTurn {
+        let calls = toolDrafts.keys.sorted().compactMap { index -> ChatTUI.ToolCall? in
+            guard let draft = toolDrafts[index], !draft.name.isEmpty else { return nil }
+            return ChatTUI.ToolCall(
+                id: draft.id ?? "call_\(UUID().uuidString.prefix(8))",
+                name: draft.name,
+                arguments: draft.arguments.isEmpty ? "{}" : draft.arguments)
+        }
+        return ChatTUI.AssistantTurn(
+            content: content,
+            reasoning: reasoning,
+            toolCalls: calls,
+            finishReason: finishReason)
+    }
 }
 
 private func intFromNumber(_ value: Any?) -> Int? {

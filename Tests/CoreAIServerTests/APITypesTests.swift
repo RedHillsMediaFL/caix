@@ -102,6 +102,75 @@ final class APITypesTests: XCTestCase {
         XCTAssertEqual(request.stream_options?.include_usage, true)
     }
 
+    func testOpenAIResponseFormatJsonObjectMapsToGeneration() throws {
+        let data = Data(
+            """
+            {
+              "model": "local",
+              "messages": [
+                {"role": "user", "content": "Return JSON."}
+              ],
+              "response_format": {"type": "json_object"}
+            }
+            """.utf8)
+
+        let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+        XCTAssertEqual(request.response_format, .jsonObject)
+
+        let generation = request.toGeneration()
+        XCTAssertEqual(generation.responseFormat, .jsonObject)
+        XCTAssertEqual(generation.responseFormat?.requiresConstrainedDecoding, true)
+        XCTAssertEqual(generation.responseFormat?.constrainedJSONSchema, #"{"type":"object"}"#)
+    }
+
+    func testOpenAIResponseFormatJsonSchemaMapsToGeneration() throws {
+        let data = Data(
+            """
+            {
+              "model": "local",
+              "messages": [
+                {"role": "user", "content": "Extract the answer."}
+              ],
+              "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                  "name": "answer",
+                  "description": "A final answer wrapper.",
+                  "schema": {
+                    "type": "object",
+                    "properties": {
+                      "answer": {"type": "string"}
+                    },
+                    "required": ["answer"],
+                    "additionalProperties": false
+                  },
+                  "strict": true
+                }
+              }
+            }
+            """.utf8)
+
+        let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+        let responseFormat = try XCTUnwrap(request.response_format)
+        guard case .jsonSchema(let schema) = responseFormat else {
+            XCTFail("expected json_schema response_format")
+            return
+        }
+        XCTAssertEqual(schema.name, "answer")
+        XCTAssertEqual(schema.description, "A final answer wrapper.")
+        XCTAssertEqual(schema.strict, true)
+        XCTAssertEqual(responseFormat.requiresConstrainedDecoding, true)
+        XCTAssertEqual(
+            responseFormat.constrainedJSONSchema,
+            #"{"additionalProperties":false,"properties":{"answer":{"type":"string"}},"required":["answer"],"type":"object"}"#)
+
+        let generation = request.toGeneration()
+        XCTAssertEqual(generation.responseFormat, request.response_format)
+
+        let options = ServerRuntime.options(from: generation)
+        XCTAssertEqual(options.constrainedJSONSchema, responseFormat.constrainedJSONSchema)
+    }
+
     func testOpenAIStreamChunkCanEncodeUsage() throws {
         let chunk = OpenAIChatChunk(
             id: "chatcmpl-test",
@@ -121,7 +190,7 @@ final class APITypesTests: XCTestCase {
         XCTAssertEqual(usage["total_tokens"] as? Int, 8)
     }
 
-    func testServerRejectsMultimodalGenerationBeforeRuntime() throws {
+    func testServerRejectsMultimodalGenerationOnTextOnlyBackend() throws {
         let generation = GenerationRequest(
             model: "local",
             messages: [
@@ -133,13 +202,99 @@ final class APITypesTests: XCTestCase {
                             type: "image_url",
                             payload: .object([
                                 "type": .string("image_url"),
-                                "image_url": .object(["url": .string("data:image/png;base64,abc")]),
+                                "image_url": .object(["url": .string("data:image/png;base64,aGVsbG8=")]),
                             ]))
                     ])
             ])
 
-        let response = try XCTUnwrap(ServerRuntime.rejectMultimodalIfNeeded(generation))
+        let response = try XCTUnwrap(
+            ServerRuntime.rejectMultimodalIfNeeded(
+                generation,
+                backendSupportsMultimodalInput: false))
         XCTAssertEqual(response.status.code, 400)
+    }
+
+    func testServerAllowsSingleImageGenerationOnMultimodalBackend() {
+        let generation = GenerationRequest(
+            model: "local",
+            messages: [
+                ChatMessage(
+                    role: "user",
+                    content: "Describe this.",
+                    media: [
+                        MediaPart(
+                            type: "image_url",
+                            payload: .object([
+                                "type": .string("image_url"),
+                                "image_url": .object(["url": .string("data:image/png;base64,aGVsbG8=")]),
+                            ]))
+                    ])
+            ])
+
+        XCTAssertNil(
+            ServerRuntime.rejectMultimodalIfNeeded(
+                generation,
+                backendSupportsMultimodalInput: true))
+    }
+
+    func testServerRejectsStructuredResponseFormatBeforeRuntime() throws {
+        let generation = GenerationRequest(
+            model: "local",
+            messages: [ChatMessage(role: "user", content: "Return JSON.")],
+            responseFormat: .jsonSchema(
+                OpenAIResponseFormat.JSONSchema(
+                    name: "answer",
+                    schema: .object(["type": .string("object")]),
+                    strict: true)))
+
+        #if COREAI_RUNTIME
+        XCTAssertNil(ServerRuntime.rejectUnsupportedResponseFormatIfNeeded(generation))
+        #else
+        let response = try XCTUnwrap(ServerRuntime.rejectUnsupportedResponseFormatIfNeeded(generation))
+        XCTAssertEqual(response.status.code, 400)
+        #endif
+    }
+
+    func testServerRejectsStructuredResponseFormatOnUnsupportedBackend() throws {
+        let generation = GenerationRequest(
+            model: "local",
+            messages: [ChatMessage(role: "user", content: "Return JSON.")],
+            responseFormat: .jsonSchema(
+                OpenAIResponseFormat.JSONSchema(
+                    name: "answer",
+                    schema: .object(["type": .string("object")]),
+                    strict: true)))
+
+        let response = try XCTUnwrap(
+            ServerRuntime.rejectUnsupportedResponseFormatIfNeeded(
+                generation,
+                backendSupportsConstrainedDecoding: false))
+        XCTAssertEqual(response.status.code, 400)
+    }
+
+    func testServerAllowsStructuredResponseFormatOnSupportedBackend() {
+        let generation = GenerationRequest(
+            model: "local",
+            messages: [ChatMessage(role: "user", content: "Return JSON.")],
+            responseFormat: .jsonObject)
+
+        XCTAssertNil(
+            ServerRuntime.rejectUnsupportedResponseFormatIfNeeded(
+                generation,
+                backendSupportsConstrainedDecoding: true))
+    }
+
+    func testServerAllowsTextResponseFormatToRuntime() {
+        let defaultGeneration = GenerationRequest(
+            model: "local",
+            messages: [ChatMessage(role: "user", content: "Plain text.")])
+        let textGeneration = GenerationRequest(
+            model: "local",
+            messages: [ChatMessage(role: "user", content: "Plain text.")],
+            responseFormat: .text)
+
+        XCTAssertNil(ServerRuntime.rejectUnsupportedResponseFormatIfNeeded(defaultGeneration))
+        XCTAssertNil(ServerRuntime.rejectUnsupportedResponseFormatIfNeeded(textGeneration))
     }
 
     func testServerAllowsTextOnlyGenerationToRuntime() {
@@ -147,6 +302,9 @@ final class APITypesTests: XCTestCase {
             model: "local",
             messages: [ChatMessage(role: "user", content: "Plain text.")])
 
-        XCTAssertNil(ServerRuntime.rejectMultimodalIfNeeded(generation))
+        XCTAssertNil(
+            ServerRuntime.rejectMultimodalIfNeeded(
+                generation,
+                backendSupportsMultimodalInput: false))
     }
 }

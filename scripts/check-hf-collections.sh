@@ -10,6 +10,8 @@ Options:
   --manifest <path>  TSV manifest. Default: benchmarks/MANIFEST.tsv.
   --owner <name>     Hugging Face owner. Default: redhillsmediafl.
   --limit <n>        Max collections to inspect. Default: 50.
+  --items-file <tsv> Read local collection item fixtures instead of the Hub. Columns:
+                     collection_slug, repo_id, note.
 
 Reads Hugging Face metadata only. Does not download model files.
 Fails when a manifest repo is missing from live family collections or a collection note contains
@@ -23,12 +25,14 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MANIFEST="$REPO_DIR/benchmarks/MANIFEST.tsv"
 OWNER="redhillsmediafl"
 LIMIT=50
+ITEMS_FILE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --manifest) MANIFEST="${2:?}"; shift 2 ;;
     --owner) OWNER="${2:?}"; shift 2 ;;
     --limit) LIMIT="${2:?}"; shift 2 ;;
+    --items-file) ITEMS_FILE="${2:?}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -36,9 +40,13 @@ done
 
 [[ -f "$MANIFEST" ]] || { echo "error: manifest not found: $MANIFEST" >&2; exit 2; }
 [[ "$LIMIT" =~ ^[1-9][0-9]*$ ]] || { echo "error: --limit must be a positive integer" >&2; exit 2; }
-command -v curl >/dev/null 2>&1 || { echo "error: curl is required" >&2; exit 2; }
-command -v hf >/dev/null 2>&1 || { echo "error: hf CLI not found" >&2; exit 2; }
-command -v jq >/dev/null 2>&1 || { echo "error: jq is required to parse Hub JSON" >&2; exit 2; }
+if [[ -n "$ITEMS_FILE" ]]; then
+  [[ -f "$ITEMS_FILE" ]] || { echo "error: collection items file not found: $ITEMS_FILE" >&2; exit 2; }
+else
+  command -v curl >/dev/null 2>&1 || { echo "error: curl is required" >&2; exit 2; }
+  command -v hf >/dev/null 2>&1 || { echo "error: hf CLI not found" >&2; exit 2; }
+  command -v jq >/dev/null 2>&1 || { echo "error: jq is required to parse Hub JSON" >&2; exit 2; }
+fi
 
 export HF_HOME="${HF_HOME:-/Volumes/SSD/hf-cache}"
 
@@ -51,34 +59,51 @@ items="$tmpdir/items.tsv"
 manifest_repos="$tmpdir/manifest-repos.txt"
 collection_repos="$tmpdir/collection-repos.txt"
 
-HF_HUB_DISABLE_PROGRESS_BARS=1 hf collections list \
-  --owner "$OWNER" \
-  --limit "$LIMIT" \
-  --format json > "$collections_json"
+if [[ -n "$ITEMS_FILE" ]]; then
+  awk -F '\t' '
+    $1 != "" && $1 !~ /^#/ {
+      if (NF < 2 || $2 == "") {
+        printf "error: invalid collection fixture row: %s\n", $0 > "/dev/stderr"
+        exit 1
+      }
+      note = $3
+      for (i = 4; i <= NF; i++) note = note "\t" $i
+      printf "%s\t%s\t%s\n", $1, $2, note
+    }
+  ' "$ITEMS_FILE" > "$items"
+  awk -F '\t' '$1 != "" { print $1 }' "$items" | sort -u > "$slugs"
+else
+  HF_HUB_DISABLE_PROGRESS_BARS=1 hf collections list \
+    --owner "$OWNER" \
+    --limit "$LIMIT" \
+    --format json > "$collections_json"
 
-jq -r '.[] | select((.slug // "") | test("-caix-")) | .slug' "$collections_json" | sort -u > "$slugs"
+  jq -r '.[] | select((.slug // "") | test("-caix-")) | .slug' "$collections_json" | sort -u > "$slugs"
+fi
 
 if [[ ! -s "$slugs" ]]; then
   echo "error: no live $OWNER/*-caix-* collections found" >&2
   exit 1
 fi
 
-: > "$items"
-while IFS= read -r slug; do
-  [[ -z "$slug" ]] && continue
-  curl -fsSL "https://huggingface.co/api/collections/$slug" \
-    | jq -r --arg slug "$slug" --arg prefix "$OWNER/rhm-" '
-        .items[]?
-        | (.id // .item.id // .item_id // "") as $id
-        | select(($id | startswith($prefix)) and ($id | endswith("-caix")))
-        | [
-            $slug,
-            $id,
-            ((.note.text // .note // "") | tostring | gsub("[\t\r\n]"; " "))
-          ]
-        | @tsv
-      ' >> "$items"
-done < "$slugs"
+if [[ -z "$ITEMS_FILE" ]]; then
+  : > "$items"
+  while IFS= read -r slug; do
+    [[ -z "$slug" ]] && continue
+    curl -fsSL "https://huggingface.co/api/collections/$slug" \
+      | jq -r --arg slug "$slug" --arg prefix "$OWNER/rhm-" '
+          .items[]?
+          | (.id // .item.id // .item_id // "") as $id
+          | select(($id | startswith($prefix)) and ($id | endswith("-caix")))
+          | [
+              $slug,
+              $id,
+              ((.note.text // .note // "") | tostring | gsub("[\t\r\n]"; " "))
+            ]
+          | @tsv
+        ' >> "$items"
+  done < "$slugs"
+fi
 
 if [[ ! -s "$items" ]]; then
   echo "error: no $OWNER/rhm-*-caix model items found in live caix collections" >&2

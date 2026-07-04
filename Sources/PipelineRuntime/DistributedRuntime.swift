@@ -200,6 +200,7 @@ public struct DistributedStageDescriptor: Codable, Hashable, Sendable {
     public let decodeAssetName: String?
     public let functionMap: DistributedStageFunctionMap?
     public let vocabSize: Int?
+    public let prefillExtraInputs: [String]
     public let workerID: String?
     public let rope: DistributedStageRoPEInputSpec?
 
@@ -211,6 +212,7 @@ public struct DistributedStageDescriptor: Codable, Hashable, Sendable {
         case decodeAssetName = "decode_asset_name"
         case functionMap = "function_map"
         case vocabSize = "vocab_size"
+        case prefillExtraInputs = "prefill_extra_inputs"
         case workerID = "worker_id"
         case rope
     }
@@ -223,6 +225,7 @@ public struct DistributedStageDescriptor: Codable, Hashable, Sendable {
         decodeAssetName: String? = nil,
         functionMap: DistributedStageFunctionMap? = nil,
         vocabSize: Int? = nil,
+        prefillExtraInputs: [String] = [],
         workerID: String? = nil,
         rope: DistributedStageRoPEInputSpec? = nil
     ) {
@@ -233,8 +236,43 @@ public struct DistributedStageDescriptor: Codable, Hashable, Sendable {
         self.decodeAssetName = decodeAssetName
         self.functionMap = functionMap
         self.vocabSize = vocabSize
+        self.prefillExtraInputs = prefillExtraInputs
         self.workerID = workerID
         self.rope = rope
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(String.self, forKey: .id)
+        self.role = try c.decode(DistributedStageRole.self, forKey: .role)
+        self.layerRange = try c.decodeIfPresent(DistributedLayerRange.self, forKey: .layerRange)
+        self.assetName = try c.decode(String.self, forKey: .assetName)
+        self.decodeAssetName = try c.decodeIfPresent(String.self, forKey: .decodeAssetName)
+        self.functionMap = try c.decodeIfPresent(
+            DistributedStageFunctionMap.self,
+            forKey: .functionMap)
+        self.vocabSize = try c.decodeIfPresent(Int.self, forKey: .vocabSize)
+        self.prefillExtraInputs = try c.decodeIfPresent(
+            [String].self,
+            forKey: .prefillExtraInputs) ?? []
+        self.workerID = try c.decodeIfPresent(String.self, forKey: .workerID)
+        self.rope = try c.decodeIfPresent(DistributedStageRoPEInputSpec.self, forKey: .rope)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(role, forKey: .role)
+        try c.encodeIfPresent(layerRange, forKey: .layerRange)
+        try c.encode(assetName, forKey: .assetName)
+        try c.encodeIfPresent(decodeAssetName, forKey: .decodeAssetName)
+        try c.encodeIfPresent(functionMap, forKey: .functionMap)
+        try c.encodeIfPresent(vocabSize, forKey: .vocabSize)
+        if !prefillExtraInputs.isEmpty {
+            try c.encode(prefillExtraInputs, forKey: .prefillExtraInputs)
+        }
+        try c.encodeIfPresent(workerID, forKey: .workerID)
+        try c.encodeIfPresent(rope, forKey: .rope)
     }
 }
 
@@ -357,6 +395,7 @@ public struct DistributedStageManifestStage: Codable, Hashable, Sendable {
     public let resolvedDecodeAssetPath: String?
     public let functionMap: DistributedStageFunctionMap?
     public let vocabSize: Int?
+    public let prefillExtraInputs: [String]
     public let memoryGB: Double
     public let rope: DistributedStageRoPEInputSpec?
 
@@ -370,6 +409,7 @@ public struct DistributedStageManifestStage: Codable, Hashable, Sendable {
         case resolvedDecodeAssetPath = "resolved_decode_asset_path"
         case functionMap = "function_map"
         case vocabSize = "vocab_size"
+        case prefillExtraInputs = "prefill_extra_inputs"
         case memoryGB = "memory_gb"
         case rope
     }
@@ -384,6 +424,7 @@ public struct DistributedStageManifestStage: Codable, Hashable, Sendable {
         resolvedDecodeAssetPath: String? = nil,
         functionMap: DistributedStageFunctionMap? = nil,
         vocabSize: Int? = nil,
+        prefillExtraInputs: [String] = [],
         memoryGB: Double,
         rope: DistributedStageRoPEInputSpec? = nil
     ) {
@@ -396,8 +437,49 @@ public struct DistributedStageManifestStage: Codable, Hashable, Sendable {
         self.resolvedDecodeAssetPath = resolvedDecodeAssetPath
         self.functionMap = functionMap
         self.vocabSize = vocabSize
+        self.prefillExtraInputs = prefillExtraInputs
         self.memoryGB = memoryGB
         self.rope = rope
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(String.self, forKey: .id)
+        self.role = try c.decode(DistributedStageRole.self, forKey: .role)
+        self.layerSpec = try c.decode(DistributedStageLayerSpec.self, forKey: .layerSpec)
+        self.assetName = try c.decode(String.self, forKey: .assetName)
+        self.resolvedAssetPath = try c.decodeIfPresent(String.self, forKey: .resolvedAssetPath)
+        self.decodeAssetName = try c.decodeIfPresent(String.self, forKey: .decodeAssetName)
+        self.resolvedDecodeAssetPath = try c.decodeIfPresent(
+            String.self,
+            forKey: .resolvedDecodeAssetPath)
+        self.functionMap = try c.decodeIfPresent(
+            DistributedStageFunctionMap.self,
+            forKey: .functionMap)
+        self.vocabSize = try c.decodeIfPresent(Int.self, forKey: .vocabSize)
+        self.prefillExtraInputs = try c.decodeIfPresent(
+            [String].self,
+            forKey: .prefillExtraInputs) ?? []
+        self.memoryGB = try c.decode(Double.self, forKey: .memoryGB)
+        self.rope = try c.decodeIfPresent(DistributedStageRoPEInputSpec.self, forKey: .rope)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(role, forKey: .role)
+        try c.encode(layerSpec, forKey: .layerSpec)
+        try c.encode(assetName, forKey: .assetName)
+        try c.encodeIfPresent(resolvedAssetPath, forKey: .resolvedAssetPath)
+        try c.encodeIfPresent(decodeAssetName, forKey: .decodeAssetName)
+        try c.encodeIfPresent(resolvedDecodeAssetPath, forKey: .resolvedDecodeAssetPath)
+        try c.encodeIfPresent(functionMap, forKey: .functionMap)
+        try c.encodeIfPresent(vocabSize, forKey: .vocabSize)
+        if !prefillExtraInputs.isEmpty {
+            try c.encode(prefillExtraInputs, forKey: .prefillExtraInputs)
+        }
+        try c.encode(memoryGB, forKey: .memoryGB)
+        try c.encodeIfPresent(rope, forKey: .rope)
     }
 
     public var layerRange: DistributedLayerRange? {
@@ -421,6 +503,7 @@ public struct DistributedStageManifestStage: Codable, Hashable, Sendable {
             decodeAssetName: decodeAssetName,
             functionMap: functionMap,
             vocabSize: vocabSize,
+            prefillExtraInputs: prefillExtraInputs,
             workerID: workerID,
             rope: rope)
     }
@@ -471,6 +554,119 @@ public struct DistributedBoundaryTensorSpec: Codable, Hashable, Sendable {
     }
 }
 
+/// Optional state-cache groups declared by a staged export.
+///
+/// Dense legacy exports use one unnamed KV capacity. Split-cache exports declare named groups, such
+/// as a bounded sliding-window ring plus a full-length global cache, so the runtime can allocate each
+/// Core AI state tensor at the capacity the exported graph expects.
+public struct DistributedStageCacheGroups: Codable, Hashable, Sendable {
+    public let strategy: String?
+    public let prefillChunk: Int?
+    public let groups: [String: DistributedStageCacheGroup]
+
+    enum CodingKeys: String, CodingKey {
+        case strategy
+        case prefillChunk = "prefill_chunk"
+        case groups
+    }
+
+    public init(
+        strategy: String? = nil,
+        prefillChunk: Int? = nil,
+        groups: [String: DistributedStageCacheGroup]
+    ) {
+        self.strategy = strategy
+        self.prefillChunk = prefillChunk
+        self.groups = groups
+    }
+
+    public var capacities: [String: Int] {
+        Dictionary(uniqueKeysWithValues: groups.map { ($0.key, $0.value.capacity) })
+    }
+
+    public var validationErrorMessage: String? {
+        if let strategy,
+            strategy.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            return "cache_groups strategy is empty"
+        }
+        if let prefillChunk, prefillChunk <= 0 {
+            return "cache_groups prefill_chunk must be positive"
+        }
+        guard !groups.isEmpty else {
+            return "cache_groups groups must not be empty"
+        }
+        for (name, group) in groups {
+            let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedName.isEmpty else {
+                return "cache_groups contains an empty group name"
+            }
+            if let message = group.validationErrorMessage(groupName: trimmedName) {
+                return message
+            }
+            if let prefillChunk,
+                let slidingWindow = group.slidingWindow,
+                prefillChunk > group.capacity - slidingWindow
+            {
+                return
+                    "cache_groups \(trimmedName) capacity \(group.capacity) is too small for sliding_window \(slidingWindow) plus prefill_chunk \(prefillChunk)"
+            }
+        }
+        return nil
+    }
+
+    public func validate() throws {
+        if let message = validationErrorMessage {
+            throw DistributedStageManifestError.invalidManifest(message)
+        }
+    }
+}
+
+public struct DistributedStageCacheGroup: Codable, Hashable, Sendable {
+    public let stateNames: [String]
+    public let capacity: Int
+    public let slidingWindow: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case stateNames = "state_names"
+        case capacity
+        case slidingWindow = "sliding_window"
+    }
+
+    public init(
+        stateNames: [String],
+        capacity: Int,
+        slidingWindow: Int? = nil
+    ) {
+        self.stateNames = stateNames
+        self.capacity = capacity
+        self.slidingWindow = slidingWindow
+    }
+
+    fileprivate func validationErrorMessage(groupName: String) -> String? {
+        guard capacity > 0 else {
+            return "cache_groups \(groupName) capacity must be positive"
+        }
+        if let slidingWindow, slidingWindow <= 0 {
+            return "cache_groups \(groupName) sliding_window must be positive"
+        }
+        guard !stateNames.isEmpty else {
+            return "cache_groups \(groupName) state_names must not be empty"
+        }
+        var seen = Set<String>()
+        for stateName in stateNames {
+            let trimmed = stateName.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                return "cache_groups \(groupName) contains an empty state name"
+            }
+            guard seen.insert(trimmed).inserted else {
+                return "cache_groups \(groupName) duplicate state name \(trimmed)"
+            }
+        }
+        return nil
+    }
+}
+
 /// Scalar types allowed in declared stage function inputs and outputs.
 ///
 /// Boundary packets stay limited to ``DistributedTensorScalarType`` because those bytes must be
@@ -514,6 +710,8 @@ public enum DistributedStageIOTensorName: String, Codable, CaseIterable, Sendabl
     case inputIDs = "input_ids"
     case positionIDs = "position_ids"
     case hiddenStates = "hidden_states"
+    case blockIDsQ = "block_ids_q"
+    case blockIDsKV = "block_ids_kv"
     case logits
 }
 
@@ -637,6 +835,8 @@ public struct DistributedStageIOContract: Codable, Hashable, Sendable {
                 DistributedStageIOTensorName.hiddenStates.rawValue,
                 DistributedStageIOTensorName.positionIDs.rawValue,
                 DistributedStageIOTensorName.inputIDs.rawValue,
+                DistributedStageIOTensorName.blockIDsQ.rawValue,
+                DistributedStageIOTensorName.blockIDsKV.rawValue,
             ])
             if let rope = stage.rope {
                 allowedInputs.insert(rope.cosInputName)
@@ -664,6 +864,20 @@ public struct DistributedStageIOContract: Codable, Hashable, Sendable {
                 stageID: stage.id)
             if let inputIDs = inputByName[DistributedStageIOTensorName.inputIDs.rawValue] {
                 try Self.validateInputIDsTensor(inputIDs, kind: "input", stageID: stage.id)
+            }
+            let blockIDsQ = inputByName[DistributedStageIOTensorName.blockIDsQ.rawValue]
+            let blockIDsKV = inputByName[DistributedStageIOTensorName.blockIDsKV.rawValue]
+            if blockIDsQ != nil || blockIDsKV != nil
+                || stage.prefillExtraInputs.contains(DistributedStageIOTensorName.blockIDsQ.rawValue)
+                || stage.prefillExtraInputs.contains(DistributedStageIOTensorName.blockIDsKV.rawValue)
+            {
+                guard let blockIDsQ, let blockIDsKV else {
+                    throw Self.error(
+                        stageID: stage.id,
+                        "block_ids_q and block_ids_kv must be declared together")
+                }
+                try Self.validateBlockIDsTensor(blockIDsQ, kind: "input", stageID: stage.id)
+                try Self.validateBlockIDsTensor(blockIDsKV, kind: "input", stageID: stage.id)
             }
             try Self.validateHiddenStateTensor(
                 hiddenInput,
@@ -767,6 +981,23 @@ public struct DistributedStageIOContract: Codable, Hashable, Sendable {
             throw error(
                 stageID: stageID,
                 "\(kind) input_ids shape \(tensor.shape) does not match [1, -1]")
+        }
+    }
+
+    private static func validateBlockIDsTensor(
+        _ tensor: DistributedStageIOTensor,
+        kind: String,
+        stageID: String
+    ) throws {
+        guard tensor.scalarType == .int32 else {
+            throw Self.error(
+                stageID: stageID,
+                "\(kind) \(tensor.name) scalar_type \(tensor.scalarType.rawValue) does not match int32")
+        }
+        guard tensor.shape == [1, -1] else {
+            throw Self.error(
+                stageID: stageID,
+                "\(kind) \(tensor.name) shape \(tensor.shape) does not match [1, -1]")
         }
     }
 
@@ -949,6 +1180,7 @@ public struct DistributedStageManifest: Hashable, Sendable {
     public let stages: [DistributedStageManifestStage]
     public let boundaryTensor: DistributedBoundaryTensorSpec?
     public let positionMode: DistributedPositionMode
+    public let cacheGroups: DistributedStageCacheGroups?
     public let runtimePlan: DistributedStagePlan
 
     public init(
@@ -958,7 +1190,8 @@ public struct DistributedStageManifest: Hashable, Sendable {
         totalLayerCountDerived: Bool = false,
         stages: [DistributedStageManifestStage],
         boundaryTensor: DistributedBoundaryTensorSpec? = nil,
-        positionMode: DistributedPositionMode = .current
+        positionMode: DistributedPositionMode = .current,
+        cacheGroups: DistributedStageCacheGroups? = nil
     ) throws {
         self.schema = schema
         self.modelName = modelName
@@ -967,7 +1200,9 @@ public struct DistributedStageManifest: Hashable, Sendable {
         self.stages = stages
         self.boundaryTensor = boundaryTensor
         self.positionMode = positionMode
+        self.cacheGroups = cacheGroups
         try boundaryTensor?.validate()
+        try cacheGroups?.validate()
         self.runtimePlan = DistributedStagePlan(
             modelName: modelName,
             totalLayerCount: totalLayerCount,
@@ -1066,7 +1301,8 @@ public struct DistributedStageManifest: Hashable, Sendable {
             boundaryTensor: body.boundary?.hiddenState ?? body.boundaryTensor
                 ?? root.boundary?.hiddenState ?? root.boundaryTensor,
             positionMode: body.positionMode ?? body.positionModeCamel ?? root.positionMode
-                ?? root.positionModeCamel ?? .current)
+                ?? root.positionModeCamel ?? .current,
+            cacheGroups: body.cacheGroups ?? root.cacheGroups)
     }
 
     private static func normalizeStage(
@@ -1157,6 +1393,10 @@ public struct DistributedStageManifest: Hashable, Sendable {
             throw DistributedStageManifestError.invalidStageField(
                 stageID: id, field: "vocab_size", reason: "must be positive")
         }
+        let prefillExtraInputs = try validatePrefillExtraInputs(
+            rawStage.prefillExtraInputs ?? [],
+            role: role,
+            stageID: id)
 
         return DistributedStageManifestStage(
             id: id,
@@ -1170,8 +1410,60 @@ public struct DistributedStageManifest: Hashable, Sendable {
             },
             functionMap: rawStage.functionMap,
             vocabSize: vocabSize,
+            prefillExtraInputs: prefillExtraInputs,
             memoryGB: memoryGB,
             rope: rawStage.rope)
+    }
+
+    private static func validatePrefillExtraInputs(
+        _ values: [String],
+        role: DistributedStageRole,
+        stageID: String
+    ) throws -> [String] {
+        guard !values.isEmpty else { return [] }
+        guard role == .transformerLayers else {
+            throw DistributedStageManifestError.invalidStageField(
+                stageID: stageID,
+                field: "prefill_extra_inputs",
+                reason: "prefill_extra_inputs are only valid for transformer_layers stages")
+        }
+
+        let supported = Set([
+            DistributedStageIOTensorName.blockIDsQ.rawValue,
+            DistributedStageIOTensorName.blockIDsKV.rawValue,
+        ])
+        var seen = Set<String>()
+        var normalized: [String] = []
+        for value in values {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                throw DistributedStageManifestError.invalidStageField(
+                    stageID: stageID,
+                    field: "prefill_extra_inputs",
+                    reason: "names must be non-empty")
+            }
+            guard supported.contains(trimmed) else {
+                throw DistributedStageManifestError.invalidStageField(
+                    stageID: stageID,
+                    field: "prefill_extra_inputs",
+                    reason: "unsupported prefill input \(trimmed)")
+            }
+            guard seen.insert(trimmed).inserted else {
+                throw DistributedStageManifestError.invalidStageField(
+                    stageID: stageID,
+                    field: "prefill_extra_inputs",
+                    reason: "names must be unique")
+            }
+            normalized.append(trimmed)
+        }
+        let required = supported
+        guard Set(normalized) == required else {
+            throw DistributedStageManifestError.invalidStageField(
+                stageID: stageID,
+                field: "prefill_extra_inputs",
+                reason: "block_ids_q and block_ids_kv must be listed together")
+        }
+        return normalized
     }
 
     private static func deriveTotalLayerCount(
@@ -1253,6 +1545,7 @@ private struct RawDistributedStageManifestRoot: Decodable {
     let boundaryTensor: DistributedBoundaryTensorSpec?
     let positionMode: DistributedPositionMode?
     let positionModeCamel: DistributedPositionMode?
+    let cacheGroups: DistributedStageCacheGroups?
 
     enum CodingKeys: String, CodingKey {
         case schema
@@ -1267,6 +1560,7 @@ private struct RawDistributedStageManifestRoot: Decodable {
         case boundaryTensor = "boundary_tensor"
         case positionMode = "position_mode"
         case positionModeCamel = "positionMode"
+        case cacheGroups = "cache_groups"
     }
 
     var asBody: RawDistributedStageManifestBody {
@@ -1280,7 +1574,8 @@ private struct RawDistributedStageManifestRoot: Decodable {
             boundary: boundary,
             boundaryTensor: boundaryTensor,
             positionMode: positionMode,
-            positionModeCamel: positionModeCamel)
+            positionModeCamel: positionModeCamel,
+            cacheGroups: cacheGroups)
     }
 }
 
@@ -1295,6 +1590,7 @@ private struct RawDistributedStageManifestBody: Decodable {
     let boundaryTensor: DistributedBoundaryTensorSpec?
     let positionMode: DistributedPositionMode?
     let positionModeCamel: DistributedPositionMode?
+    let cacheGroups: DistributedStageCacheGroups?
 
     enum CodingKeys: String, CodingKey {
         case schema
@@ -1307,6 +1603,7 @@ private struct RawDistributedStageManifestBody: Decodable {
         case boundaryTensor = "boundary_tensor"
         case positionMode = "position_mode"
         case positionModeCamel = "positionMode"
+        case cacheGroups = "cache_groups"
     }
 }
 
@@ -1340,6 +1637,7 @@ private struct RawDistributedStageManifestStage: Decodable {
     let decodeBundle: String?
     let functionMap: DistributedStageFunctionMap?
     let vocabSize: FlexibleInt?
+    let prefillExtraInputs: [String]?
     let rope: DistributedStageRoPEInputSpec?
 
     enum CodingKeys: String, CodingKey {
@@ -1364,6 +1662,7 @@ private struct RawDistributedStageManifestStage: Decodable {
         case decodeBundle = "decode_bundle"
         case functionMap = "function_map"
         case vocabSize = "vocab_size"
+        case prefillExtraInputs = "prefill_extra_inputs"
         case rope
     }
 }
@@ -1719,6 +2018,107 @@ public struct DistributedHiddenStatePacket: Hashable, Sendable {
     }
 }
 
+/// Soft-token rows to overwrite into an embedding-stage hidden-state output.
+///
+/// `positionStart` is an absolute token position in the request. `shape` is `[rows, hidden]`.
+/// Values are assumed to already be in model hidden-state scale; the runtime copies them as-is.
+public struct DistributedSoftTokenSplice: Codable, Hashable, Sendable {
+    public let positionStart: Int
+    public let shape: [Int]
+    public let scalarType: DistributedTensorScalarType
+    public let payload: [UInt8]
+
+    enum CodingKeys: String, CodingKey {
+        case positionStart = "position_start"
+        case shape
+        case scalarType = "scalar_type"
+        case payload
+    }
+
+    public init(
+        positionStart: Int,
+        shape: [Int],
+        scalarType: DistributedTensorScalarType,
+        payload: [UInt8]
+    ) throws {
+        self.positionStart = positionStart
+        self.shape = shape
+        self.scalarType = scalarType
+        self.payload = payload
+        try validate()
+    }
+
+    public init(
+        positionStart: Int,
+        rows: Int,
+        hiddenSize: Int,
+        float16Values: [Float16]
+    ) throws {
+        try self.init(
+            positionStart: positionStart,
+            shape: [rows, hiddenSize],
+            scalarType: .float16,
+            payload: DistributedHiddenStatePacket.encodeFloat16Payload(float16Values))
+    }
+
+    public init(
+        positionStart: Int,
+        rows: Int,
+        hiddenSize: Int,
+        float32Values: [Float]
+    ) throws {
+        try self.init(
+            positionStart: positionStart,
+            shape: [rows, hiddenSize],
+            scalarType: .float32,
+            payload: DistributedHiddenStatePacket.encodeFloat32Payload(float32Values))
+    }
+
+    public var rowCount: Int { shape.count == 2 ? shape[0] : 0 }
+    public var hiddenSize: Int { shape.count == 2 ? shape[1] : 0 }
+    public var positionEnd: Int { positionStart + rowCount }
+
+    public func float16Values() throws -> [Float16] {
+        guard scalarType == .float16 else {
+            throw DistributedRuntimeValidationError.invalidPacket(
+                "soft_token_splice float16 decode requires scalar_type float16")
+        }
+        return try DistributedHiddenStatePacket.decodeFloat16Payload(payload)
+    }
+
+    public func float32Values() throws -> [Float] {
+        guard scalarType == .float32 else {
+            throw DistributedRuntimeValidationError.invalidPacket(
+                "soft_token_splice float32 decode requires scalar_type float32")
+        }
+        return try DistributedHiddenStatePacket.decodeFloat32Payload(payload)
+    }
+
+    private func validate() throws {
+        guard positionStart >= 0 else {
+            throw DistributedRuntimeValidationError.invalidPacket(
+                "soft_token_splice position_start must be non-negative")
+        }
+        guard shape.count == 2, shape[0] > 0, shape[1] > 0 else {
+            throw DistributedRuntimeValidationError.invalidPacket(
+                "soft_token_splice shape must be [rows, hidden] with positive dimensions")
+        }
+        var expectedBytes = scalarType.byteWidth
+        for dimension in shape {
+            let next = expectedBytes.multipliedReportingOverflow(by: dimension)
+            guard !next.overflow else {
+                throw DistributedRuntimeValidationError.invalidPacket(
+                    "soft_token_splice byte count overflow")
+            }
+            expectedBytes = next.partialValue
+        }
+        guard payload.count == expectedBytes else {
+            throw DistributedRuntimeValidationError.invalidPacket(
+                "soft_token_splice payload byte count does not match shape")
+        }
+    }
+}
+
 private extension UInt16 {
     init(littleEndianBytes bytes: ArraySlice<UInt8>) {
         self = bytes.enumerated().reduce(0) { partial, byte in
@@ -2035,15 +2435,22 @@ public struct DistributedWorkerErrorFrame: Codable, Hashable, Sendable {
 public struct DistributedStageAllocation: Codable, Hashable, Sendable {
     public let requestID: String
     public let kvCapacity: Int
+    public let cacheCapacities: [String: Int]?
 
     enum CodingKeys: String, CodingKey {
         case requestID = "request_id"
         case kvCapacity = "kv_capacity"
+        case cacheCapacities = "cache_capacities"
     }
 
-    public init(requestID: String, kvCapacity: Int) {
+    public init(
+        requestID: String,
+        kvCapacity: Int,
+        cacheCapacities: [String: Int]? = nil
+    ) {
         self.requestID = requestID
         self.kvCapacity = kvCapacity
+        self.cacheCapacities = cacheCapacities
     }
 
     public func validate() throws {
@@ -2053,6 +2460,20 @@ public struct DistributedStageAllocation: Codable, Hashable, Sendable {
         guard kvCapacity > 0 else {
             throw DistributedStageExecutionError.invalidControlFrame("kv_capacity must be positive")
         }
+        for (name, capacity) in cacheCapacities ?? [:] {
+            guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw DistributedStageExecutionError.invalidControlFrame(
+                    "cache_capacities group name is empty")
+            }
+            guard capacity > 0 else {
+                throw DistributedStageExecutionError.invalidControlFrame(
+                    "cache_capacities[\(name)] must be positive")
+            }
+        }
+    }
+
+    public func capacity(forCacheGroup groupName: String) -> Int {
+        cacheCapacities?[groupName] ?? kvCapacity
     }
 }
 
@@ -2063,6 +2484,9 @@ public struct DistributedStageForwardFrame: Codable, Hashable, Sendable {
     public let positionRange: DistributedSequenceRange
     public let positionIDs: [Int32]
     public let tokenIDs: [Int32]
+    public let blockIDsQ: [Int32]?
+    public let blockIDsKV: [Int32]?
+    public let softTokenSplice: DistributedSoftTokenSplice?
     public let hiddenState: DistributedHiddenStatePacketMetadata?
 
     enum CodingKeys: String, CodingKey {
@@ -2072,6 +2496,9 @@ public struct DistributedStageForwardFrame: Codable, Hashable, Sendable {
         case positionRange = "position_range"
         case positionIDs = "position_ids"
         case tokenIDs = "token_ids"
+        case blockIDsQ = "block_ids_q"
+        case blockIDsKV = "block_ids_kv"
+        case softTokenSplice = "soft_token_splice"
         case hiddenState = "hidden_state"
     }
 
@@ -2082,6 +2509,9 @@ public struct DistributedStageForwardFrame: Codable, Hashable, Sendable {
         positionRange: DistributedSequenceRange,
         positionIDs: [Int32],
         tokenIDs: [Int32] = [],
+        blockIDsQ: [Int32]? = nil,
+        blockIDsKV: [Int32]? = nil,
+        softTokenSplice: DistributedSoftTokenSplice? = nil,
         hiddenState: DistributedHiddenStatePacketMetadata? = nil
     ) {
         self.stageID = stageID
@@ -2090,6 +2520,9 @@ public struct DistributedStageForwardFrame: Codable, Hashable, Sendable {
         self.positionRange = positionRange
         self.positionIDs = positionIDs
         self.tokenIDs = tokenIDs
+        self.blockIDsQ = blockIDsQ
+        self.blockIDsKV = blockIDsKV
+        self.softTokenSplice = softTokenSplice
         self.hiddenState = hiddenState
     }
 
@@ -2114,15 +2547,32 @@ public struct DistributedStageForwardFrame: Codable, Hashable, Sendable {
 
         switch descriptor.role {
         case .embeddings:
+            guard blockIDsQ == nil && blockIDsKV == nil else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "embeddings stage must not receive block_ids")
+            }
             guard tokenIDs.count == positionRange.count else {
                 throw DistributedStageExecutionError.invalidForwardInput(
                     "token_ids count must match position_range")
             }
+            try Self.validateSoftTokenSplice(
+                softTokenSplice,
+                positionRange: positionRange,
+                boundaryTensor: plan.boundaryTensor)
             guard hiddenState == nil else {
                 throw DistributedStageExecutionError.invalidForwardInput(
                     "embeddings stage must not receive a hidden state")
             }
-        case .transformerLayers, .finalNormHead:
+        case .transformerLayers:
+            guard softTokenSplice == nil else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "transformer_layers stage must not receive soft_token_splice")
+            }
+            try Self.validateBlockIDs(
+                blockIDsQ: blockIDsQ,
+                blockIDsKV: blockIDsKV,
+                positionRange: positionRange,
+                positionIDs: positionIDs)
             guard tokenIDs.isEmpty || tokenIDs.count == positionRange.count else {
                 throw DistributedStageExecutionError.invalidForwardInput(
                     "token_ids count must match position_range")
@@ -2147,6 +2597,85 @@ public struct DistributedStageForwardFrame: Codable, Hashable, Sendable {
             guard hiddenState.destinationStageID == stageID else {
                 throw DistributedStageExecutionError.invalidForwardInput(
                     "hidden_state destination_stage_id does not match stage_id")
+            }
+        case .finalNormHead:
+            guard blockIDsQ == nil && blockIDsKV == nil else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "final_norm_head stage must not receive block_ids")
+            }
+            guard softTokenSplice == nil else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "final_norm_head stage must not receive soft_token_splice")
+            }
+            guard tokenIDs.isEmpty || tokenIDs.count == positionRange.count else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "token_ids count must match position_range")
+            }
+            guard let hiddenState else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "\(descriptor.role.rawValue) stage requires a hidden state")
+            }
+            try plan.validate(hiddenStatePacket: hiddenState)
+            guard hiddenState.requestID == requestID else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "hidden_state request_id does not match request")
+            }
+            guard hiddenState.stepIndex == stepIndex else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "hidden_state step_index does not match request")
+            }
+            guard hiddenState.positionRange == positionRange else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "hidden_state position_range does not match request")
+            }
+            guard hiddenState.destinationStageID == stageID else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "hidden_state destination_stage_id does not match stage_id")
+            }
+        }
+    }
+
+    private static func validateBlockIDs(
+        blockIDsQ: [Int32]?,
+        blockIDsKV: [Int32]?,
+        positionRange: DistributedSequenceRange,
+        positionIDs: [Int32]
+    ) throws {
+        guard blockIDsQ != nil || blockIDsKV != nil else { return }
+        guard let blockIDsQ, let blockIDsKV else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "block_ids_q and block_ids_kv must be supplied together")
+        }
+        guard blockIDsQ.count == positionRange.count else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "block_ids_q count must match position_range")
+        }
+        guard blockIDsKV.count == positionIDs.count else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "block_ids_kv count must match position_ids")
+        }
+    }
+
+    private static func validateSoftTokenSplice(
+        _ splice: DistributedSoftTokenSplice?,
+        positionRange: DistributedSequenceRange,
+        boundaryTensor: DistributedBoundaryTensorSpec?
+    ) throws {
+        guard let splice else { return }
+        guard positionRange.count > 1 else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "decode stage must not receive soft_token_splice")
+        }
+        guard splice.positionStart >= positionRange.lowerBound
+            && splice.positionEnd <= positionRange.upperBound
+        else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "soft_token_splice position range must be inside position_range")
+        }
+        if let hiddenSize = boundaryTensor?.shape.last, hiddenSize > 0 {
+            guard splice.hiddenSize == hiddenSize else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "soft_token_splice hidden size must match boundary tensor")
             }
         }
     }
@@ -2720,6 +3249,9 @@ public final class DistributedWorkerFrameExecutor {
                 positionRange: frame.positionRange,
                 positionIDs: frame.positionIDs,
                 tokenIDs: frame.tokenIDs,
+                blockIDsQ: frame.blockIDsQ,
+                blockIDsKV: frame.blockIDsKV,
+                softTokenSplice: frame.softTokenSplice,
                 hiddenState: hiddenState))
             guard output.stageID == handle.descriptor.id else {
                 throw DistributedStageExecutionError.invalidStageOutput(
@@ -2976,6 +3508,9 @@ public struct DistributedStageForwardInput: Hashable, Sendable {
     public let positionRange: DistributedSequenceRange
     public let positionIDs: [Int32]
     public let tokenIDs: [Int32]
+    public let blockIDsQ: [Int32]?
+    public let blockIDsKV: [Int32]?
+    public let softTokenSplice: DistributedSoftTokenSplice?
     public let hiddenState: DistributedHiddenStatePacket?
 
     public init(
@@ -2984,6 +3519,9 @@ public struct DistributedStageForwardInput: Hashable, Sendable {
         positionRange: DistributedSequenceRange,
         positionIDs: [Int32],
         tokenIDs: [Int32] = [],
+        blockIDsQ: [Int32]? = nil,
+        blockIDsKV: [Int32]? = nil,
+        softTokenSplice: DistributedSoftTokenSplice? = nil,
         hiddenState: DistributedHiddenStatePacket? = nil
     ) {
         self.requestID = requestID
@@ -2991,6 +3529,9 @@ public struct DistributedStageForwardInput: Hashable, Sendable {
         self.positionRange = positionRange
         self.positionIDs = positionIDs
         self.tokenIDs = tokenIDs
+        self.blockIDsQ = blockIDsQ
+        self.blockIDsKV = blockIDsKV
+        self.softTokenSplice = softTokenSplice
         self.hiddenState = hiddenState
     }
 }
@@ -3041,6 +3582,9 @@ public final class DistributedRemoteStageHandle: DistributedStageHandle {
                 positionRange: input.positionRange,
                 positionIDs: input.positionIDs,
                 tokenIDs: input.tokenIDs,
+                blockIDsQ: input.blockIDsQ,
+                blockIDsKV: input.blockIDsKV,
+                softTokenSplice: input.softTokenSplice,
                 hiddenState: input.hiddenState?.metadata)),
             payload: input.hiddenState?.payload ?? [])
         try request.validate(against: plan)
@@ -3124,22 +3668,35 @@ public final class DistributedRemoteStageHandle: DistributedStageHandle {
     }
 }
 
+public struct DistributedLogitScore: Hashable, Sendable {
+    public let tokenID: Int32
+    public let logit: Float
+
+    public init(tokenID: Int32, logit: Float) {
+        self.tokenID = tokenID
+        self.logit = logit
+    }
+}
+
 public struct DistributedStageForwardOutput: Hashable, Sendable {
     public let stageID: String
     public let stepIndex: Int
     public let hiddenState: DistributedHiddenStatePacket?
     public let tokenID: Int32?
+    public let topLogits: [DistributedLogitScore]
 
     public init(
         stageID: String,
         stepIndex: Int,
         hiddenState: DistributedHiddenStatePacket? = nil,
-        tokenID: Int32? = nil
+        tokenID: Int32? = nil,
+        topLogits: [DistributedLogitScore] = []
     ) {
         self.stageID = stageID
         self.stepIndex = stepIndex
         self.hiddenState = hiddenState
         self.tokenID = tokenID
+        self.topLogits = topLogits
     }
 }
 
@@ -3347,14 +3904,21 @@ public final class DistributedSameMachinePipeline {
         return try DistributedSameMachinePipeline(plan: manifest.runtimePlan, stages: handles)
     }
 
-    public func allocate(requestID: String, kvCapacity: Int) async throws {
+    public func allocate(
+        requestID: String,
+        kvCapacity: Int,
+        cacheCapacities: [String: Int]? = nil
+    ) async throws {
         guard !requestID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw DistributedStageExecutionError.invalidForwardInput("request_id is empty")
         }
         guard kvCapacity > 0 else {
             throw DistributedStageExecutionError.invalidForwardInput("kv_capacity must be positive")
         }
-        let allocation = DistributedStageAllocation(requestID: requestID, kvCapacity: kvCapacity)
+        let allocation = DistributedStageAllocation(
+            requestID: requestID,
+            kvCapacity: kvCapacity,
+            cacheCapacities: cacheCapacities)
         try requestTracker.validateAllocate(allocation)
         for stage in stages {
             try await stage.allocate(allocation)
@@ -3366,7 +3930,11 @@ public final class DistributedSameMachinePipeline {
         requestID: String,
         stepIndex: Int,
         positionRange: DistributedSequenceRange,
-        tokenIDs: [Int32]
+        tokenIDs: [Int32],
+        transformerTokenIDs: [Int32]? = nil,
+        blockIDsQ: [Int32]? = nil,
+        blockIDsKV: [Int32]? = nil,
+        softTokenSplice: DistributedSoftTokenSplice? = nil
     ) async throws -> DistributedStageForwardOutput {
         guard !requestID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw DistributedStageExecutionError.invalidForwardInput("request_id is empty")
@@ -3381,36 +3949,88 @@ public final class DistributedSameMachinePipeline {
             throw DistributedStageExecutionError.invalidForwardInput(
                 "token_ids count must match position_range")
         }
+        if let transformerTokenIDs {
+            guard transformerTokenIDs.count == positionRange.count else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "transformer_token_ids count must match position_range")
+            }
+        }
         guard stepIndex >= 0 else {
             throw DistributedStageExecutionError.invalidForwardInput(
                 "step_index must be non-negative")
         }
+        let positionIDs = try plan.positionMode.positionIDs(for: positionRange)
+        if blockIDsQ != nil || blockIDsKV != nil {
+            guard let blockIDsQ, let blockIDsKV else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "block_ids_q and block_ids_kv must be supplied together")
+            }
+            guard blockIDsQ.count == positionRange.count else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "block_ids_q count must match position_range")
+            }
+            guard blockIDsKV.count == positionIDs.count else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "block_ids_kv count must match position_ids")
+            }
+        }
+        if let softTokenSplice {
+            guard positionRange.count > 1 else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "decode stage must not receive soft_token_splice")
+            }
+            guard softTokenSplice.positionStart >= positionRange.lowerBound
+                && softTokenSplice.positionEnd <= positionRange.upperBound
+            else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "soft_token_splice position range must be inside position_range")
+            }
+            if let hiddenSize = plan.boundaryTensor?.shape.last, hiddenSize > 0 {
+                guard softTokenSplice.hiddenSize == hiddenSize else {
+                    throw DistributedStageExecutionError.invalidForwardInput(
+                        "soft_token_splice hidden size must match boundary tensor")
+                }
+            }
+        }
 
         var hiddenState: DistributedHiddenStatePacket?
         var tokenID: Int32?
-        let positionIDs = try plan.positionMode.positionIDs(for: positionRange)
+        var topLogits: [DistributedLogitScore] = []
         let firstFrame = DistributedStageForwardFrame(
             stageID: stages.first!.descriptor.id,
             requestID: requestID,
             stepIndex: stepIndex,
             positionRange: positionRange,
             positionIDs: positionIDs,
-            tokenIDs: tokenIDs)
+            tokenIDs: tokenIDs,
+            softTokenSplice: softTokenSplice)
         try firstFrame.validate(against: plan)
         try requestTracker.validateForward(firstFrame)
 
         for (index, stage) in stages.enumerated() {
+            let stageTokenIDs: [Int32]
+            if stage.acceptsTokenIDs {
+                stageTokenIDs = stage.descriptor.role == .transformerLayers
+                    ? (transformerTokenIDs ?? tokenIDs)
+                    : tokenIDs
+            } else {
+                stageTokenIDs = []
+            }
             let input = DistributedStageForwardInput(
                 requestID: requestID,
                 stepIndex: stepIndex,
                 positionRange: positionRange,
                 positionIDs: positionIDs,
-                tokenIDs: stage.acceptsTokenIDs ? tokenIDs : [],
+                tokenIDs: stageTokenIDs,
+                blockIDsQ: stage.descriptor.role == .transformerLayers ? blockIDsQ : nil,
+                blockIDsKV: stage.descriptor.role == .transformerLayers ? blockIDsKV : nil,
+                softTokenSplice: stage.descriptor.role == .embeddings ? softTokenSplice : nil,
                 hiddenState: hiddenState)
             let output = try await stage.forward(input)
             try validate(output: output, from: stage, at: index, stepIndex: stepIndex)
             hiddenState = output.hiddenState
             tokenID = output.tokenID
+            topLogits = output.topLogits
         }
 
         guard tokenID != nil else {
@@ -3422,7 +4042,8 @@ public final class DistributedSameMachinePipeline {
             stageID: stages.last!.descriptor.id,
             stepIndex: stepIndex,
             hiddenState: hiddenState,
-            tokenID: tokenID)
+            tokenID: tokenID,
+            topLogits: topLogits)
     }
 
     public func reset(requestID: String) async throws {
@@ -3773,6 +4394,7 @@ public enum DistributedRuntimeValidation {
         if stage.functionMap?.validationErrorMessage != nil {
             throw DistributedRuntimeValidationError.invalidIdentifier(field: "stage.function_map")
         }
+        try validatePrefillExtraInputs(stage.prefillExtraInputs, role: stage.role)
         if let workerID = stage.workerID, trimmed(workerID).isEmpty {
             throw DistributedRuntimeValidationError.invalidIdentifier(field: "stage.worker_id")
         }
@@ -3788,6 +4410,25 @@ public enum DistributedRuntimeValidation {
         } else if stage.layerRange != nil {
             throw DistributedRuntimeValidationError.layerRangeNotAllowed(
                 stageID: stage.id, role: stage.role)
+        }
+    }
+
+    private static func validatePrefillExtraInputs(
+        _ values: [String],
+        role: DistributedStageRole
+    ) throws {
+        guard !values.isEmpty else { return }
+        guard role == .transformerLayers else {
+            throw DistributedRuntimeValidationError.invalidIdentifier(
+                field: "stage.prefill_extra_inputs")
+        }
+        let supported = Set([
+            DistributedStageIOTensorName.blockIDsQ.rawValue,
+            DistributedStageIOTensorName.blockIDsKV.rawValue,
+        ])
+        guard Set(values) == supported, values.count == supported.count else {
+            throw DistributedRuntimeValidationError.invalidIdentifier(
+                field: "stage.prefill_extra_inputs")
         }
     }
 

@@ -364,6 +364,7 @@ private func localStageOverride(
         resolvedDecodeAssetPath: decodeURL?.path,
         functionMap: stage.functionMap,
         vocabSize: stage.vocabSize,
+        prefillExtraInputs: stage.prefillExtraInputs,
         memoryGB: stage.memoryGB,
         rope: stage.rope)
 }

@@ -1,0 +1,78 @@
+name: CaixChat
+options:
+  minimumXcodeGenVersion: 2.42.0
+  deploymentTarget:
+    iOS: "27.0"
+settings:
+  base:
+    SWIFT_VERSION: 5.0
+    IPHONEOS_DEPLOYMENT_TARGET: 27.0
+    ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: NO
+targets:
+  CaixChat:
+    type: application
+    platform: iOS
+    deploymentTarget: "27.0"
+    sources:
+      - path: CaixChat
+    info:
+      path: CaixChat/Info.plist
+      properties:
+        CFBundleDisplayName: CAIX Chat
+        CFBundleShortVersionString: "0.1"
+        CFBundleVersion: "1"
+        LSRequiresIPhoneOS: true
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+          NSAllowsArbitraryLoadsInLocalNetworking: true
+        NSBonjourServices:
+          - _caix._tcp
+          - _http._tcp
+          - _https._tcp
+        NSLocalNetworkUsageDescription: CAIX Chat looks for CAIX servers on your local network.
+        NSPhotoLibraryUsageDescription: CAIX Chat can attach a selected image to multimodal model requests.
+        UIApplicationSupportsIndirectInputEvents: true
+        UILaunchStoryboardName: LaunchScreen
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.redhillsmediafl.CaixChat
+        PRODUCT_NAME: CaixChat
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_STYLE: Automatic
+        SDKROOT: iphoneos
+        SUPPORTED_PLATFORMS: iphoneos iphonesimulator
+  CaixChatTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "27.0"
+    sources:
+      - path: CaixChatTests
+    dependencies:
+      - target: CaixChat
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.redhillsmediafl.CaixChatTests
+        SDKROOT: iphoneos
+        SUPPORTED_PLATFORMS: iphoneos iphonesimulator
+schemes:
+  CaixChat:
+    build:
+      targets:
+        CaixChat: all
+        CaixChatTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - CaixChatTests

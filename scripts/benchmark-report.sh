@@ -38,6 +38,8 @@ done
 [[ -f "$SUITE/metadata.txt" ]] || { echo "error: suite metadata not found: $SUITE/metadata.txt" >&2; exit 2; }
 SUITE_REAL="$(cd "$SUITE" && pwd -P)"
 RAW_REAL="$(dirname "$SUITE_REAL")"
+EXPECTED_SUITE_SUMMARY_HEADER=$'repo\tlocal_dir\tkind\tbenchmark_mode\tstatus\treason\tbundle\toutput'
+EXPECTED_MODEL_SUMMARY_HEADER=$'phase\trun\tstatus\tgenerated\tload_s\tprefill_s\tdecode_s\tdecode_tps\tstdout\tstderr'
 
 if [[ -z "$OUT" ]]; then
   OUT="$SUITE/report.tsv"
@@ -104,6 +106,22 @@ require_path_under_dir() {
       exit 1
       ;;
   esac
+}
+
+require_header() {
+  local label="$1"
+  local file="$2"
+  local expected="$3"
+  local header
+
+  IFS= read -r header < "$file" || {
+    echo "error: $label is empty: $file" >&2
+    exit 1
+  }
+  if [[ "$header" != "$expected" ]]; then
+    echo "error: $label schema is stale: $file" >&2
+    exit 1
+  fi
 }
 
 count_measured_ok() {
@@ -187,6 +205,7 @@ suite_seed="$(metadata_value seed "$SUITE/metadata.txt")"
 suite_raw="$(metadata_value raw "$SUITE/metadata.txt")"
 
 require_repo_commit "suite metadata" "$suite_caix_commit"
+require_header "suite summary" "$SUITE/summary.tsv" "$EXPECTED_SUITE_SUMMARY_HEADER"
 
 printf 'repo\trepo_revision\tlocal_dir\tkind\tbenchmark_mode\tstatus\tpublishable\treason\tmeasured_runs\tmedian_generated\tmedian_load_s\tmedian_prefill_s\tmedian_decode_s\tmedian_decode_tps\tmin_decode_tps\tmax_decode_tps\tcaix_commit\tmachine\tmemory_bytes\tos\tmax_tokens\ttemperature\tseed\traw\tprompt\traw_dir\n' > "$TMP"
 
@@ -237,6 +256,7 @@ while IFS=$'\t' read -r repo local_dir kind col4 col5 col6 col7 col8; do
     [[ -d "$output_path" ]] || { echo "error: raw output directory missing for $repo: $output" >&2; exit 1; }
     [[ -f "$output_path/summary.tsv" ]] || { echo "error: raw summary missing for $repo: $output/summary.tsv" >&2; exit 1; }
     [[ -f "$output_path/metadata.txt" ]] || { echo "error: raw metadata missing for $repo: $output/metadata.txt" >&2; exit 1; }
+    require_header "raw summary" "$output_path/summary.tsv" "$EXPECTED_MODEL_SUMMARY_HEADER"
     require_path_under_dir "$repo raw output" "$output" "$RAW_REAL"
     output_real="$(canonical_existing_path "$output")"
 

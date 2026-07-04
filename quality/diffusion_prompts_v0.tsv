@@ -1,0 +1,31 @@
+prompt_id	slice	rubric	prompt	acceptance_criteria	notes
+dq-t-001	text_completion	semantic	Complete this sentence in one concise paragraph: The lab notebook was useful because	it explains a practical reason the notebook helped	recordkeeping prompt
+dq-t-002	text_completion	semantic	Complete this sentence in one concise paragraph: The deployment checklist prevented	it describes avoiding an error or missed step	operations prompt
+dq-t-003	text_completion	semantic	Complete this sentence in one concise paragraph: The backup plan mattered when	it describes a failure or unexpected condition	reliability prompt
+dq-t-004	text_completion	semantic	Complete this sentence in one concise paragraph: The reviewer asked for evidence because	it explains a need for proof or verification	review prompt
+dq-t-005	text_completion	semantic	Complete this sentence in one concise paragraph: The status report was clearer after	it describes adding facts, dates, or results	reporting prompt
+dq-t-006	text_completion	semantic	Complete this sentence in one concise paragraph: The technician paused the rollout because	it gives a plausible technical or safety reason	rollout prompt
+dq-t-007	text_completion	semantic	Complete this sentence in one concise paragraph: The fixed fixture helped the evaluator by	it describes repeatability or comparison	evaluation prompt
+dq-t-008	text_completion	semantic	Complete this sentence in one concise paragraph: The versioned artifact made debugging easier because	it describes traceability or reproduction	debugging prompt
+dq-t-009	text_completion	semantic	Complete this sentence in one concise paragraph: The offline check was valuable because	it describes a no-network or no-runtime advantage	offline prompt
+dq-t-010	text_completion	semantic	Complete this sentence in one concise paragraph: The final decision waited until	it describes waiting for evidence or a gate	decision prompt
+dq-m-001	math_reasoning	numeric	There are 18 files in one folder and 7 files in another. How many files are there total?	25	addition
+dq-m-002	math_reasoning	numeric	A command starts at 10:15 and ends at 10:42. How many minutes did it run?	27	time arithmetic
+dq-m-003	math_reasoning	numeric	A buffer holds 64 units. If 19 units are used, how many remain?	45	subtraction
+dq-m-004	math_reasoning	numeric	Four workers each process 6 chunks. How many chunks are processed total?	24	multiplication
+dq-m-005	math_reasoning	numeric	A log has 90 lines and is split into 3 equal parts. How many lines are in each part?	30	division
+dq-m-006	math_reasoning	numeric	If a test passes 28 cases and fails 2, how many cases ran?	30	addition
+dq-m-007	math_reasoning	numeric	A process uses 12 units twice and 5 units once. What is the total?	29	mixed arithmetic
+dq-m-008	math_reasoning	numeric	A queue drops from 41 items to 16 items. How many items were removed?	25	subtraction
+dq-m-009	math_reasoning	numeric	If 5 batches contain 8 prompts each, how many prompts are there?	40	multiplication
+dq-m-010	math_reasoning	numeric	A report has scores 6, 8, and 10. What is their average?	8	mean
+dq-i-001	instruction_following	format	Reply with exactly the word ready.	ready	exact text
+dq-i-002	instruction_following	format	Reply with exactly the uppercase word PASS.	PASS	exact text
+dq-i-003	instruction_following	format	Reply with exactly the lowercase word wait.	wait	exact text
+dq-i-004	instruction_following	format	Reply with only the number 17.	17	exact text
+dq-i-005	instruction_following	format	Return JSON with key status and value ok.	{"status":"ok"}	json object
+dq-i-006	instruction_following	format	Return JSON with key checked and value true.	{"checked":true}	json object
+dq-i-007	instruction_following	format	Write one sentence containing both words evidence and gate.	evidence;gate	contains both terms
+dq-i-008	instruction_following	format	Write one sentence containing both words reference and candidate.	reference;candidate	contains both terms
+dq-i-009	instruction_following	format	Reply with exactly this text: non-streaming	non-streaming	exact text
+dq-i-010	instruction_following	format	Reply with exactly this text: block event	block event	exact text

@@ -68,6 +68,48 @@ speculative/MTP numbers separately; do not average them.
 `--seed` applies to standalone and classic speculative `caix run` rows. Do not use it for EAGLE/MTP
 suite rows.
 
+## Decode Ceiling Model
+
+Use the no-load ceiling calculator before interpreting speed work:
+
+```bash
+scripts/perf/ceiling.py --out benchmarks/CEILINGS.md
+scripts/check-ceilings.sh
+```
+
+The calculator reads `benchmarks/CEILING_ASSUMPTIONS.tsv` plus `benchmarks/MANIFEST.tsv` and writes
+`benchmarks/CEILINGS.md`. It does not load models, benchmark, download, or contact external services.
+The default usable-bandwidth assumption is 550 GiB/s, matching the current planning midpoint for the
+M1 Ultra. Rows without reviewed active-weight bytes remain `missing_estimate`; do not quote
+percent-of-ceiling for those rows. The checker rejects stale generated output, assumption rows that
+drift from the manifest's repo/local-dir/kind/mode tuple, duplicate assumptions, invalid evidence
+labels, non-positive active-weight values, and missing priority estimates for Qwen3-4B and
+Gemma-26B-A4B.
+
+To join a completed benchmark report and see utilization against the ceiling:
+
+```bash
+scripts/perf/ceiling.py \
+  --benchmark-report benchmarks/raw/<timestamp>-suite/report.tsv \
+  --format tsv
+```
+
+Treat the output as a planning denominator. It becomes publishable only when the underlying active
+weight estimate is measured or otherwise reviewed and the benchmark report itself satisfies the raw
+evidence gates.
+
+To add no-load local bundle-size context, pass a bundle root:
+
+```bash
+scripts/perf/ceiling.py \
+  --bundle-root models/exports \
+  --format tsv
+```
+
+This reports logical sizes for discovered `.aimodel` packages while keeping them separate from
+`active_weight_gib`. For MoE and speculative packages, total asset size is not active bytes per
+decode token.
+
 Run `scripts/check-benchmark-coverage.sh` before assigning tests or collecting revisions. It compares
 the manifest with live `redhillsmediafl/rhm-*-caix` Hub metadata and fails if a converted repo is
 missing from benchmark coverage. It also rejects non-canonical manifest modes; use `decode`,
@@ -75,18 +117,79 @@ missing from benchmark coverage. It also rejects non-canonical manifest modes; u
 
 Run `scripts/check-hf-collections.sh` after changing the manifest or Hugging Face collections. It
 fails if a manifest repo is missing from the public family collections or if a collection note uses
-speed/fluff wording.
+speed/fluff wording. The no-network fixture regression is `scripts/check-hf-collections-contract.sh`;
+publication gates run it so stale collection-note wording such as `pending` cannot re-enter local
+release inputs without using the Hub.
 
 Run `scripts/check-hf-model-cards.sh` before uploading card edits. It fetches only live
-`README.md` files for manifest repos, requires the plain support link, and applies the
-public-copy guard.
+`README.md` files for manifest repos, requires the plain support link, applies the
+public-copy guard, and enforces the card-v2 contract: `library_name: caix`, `## Download`,
+`## License`, evidence rows for Base model, Format, Quant, Context, Runtime, and License, plus
+clear `caix-status-label` blocks for component, staged, MTP/speculative, blocked, or
+instability-gated rows. MTP/speculative cards must identify the target+draft package and matching
+standalone target context. Any ready-to-run or verified-in-caix claim must also cite parity evidence
+and speed/benchmark evidence.
+The public-copy guard rejects positive structured-output support claims until release-reviewed model
+smoke evidence deliberately lifts that copy gate, and the publication gate runs local fixtures that
+prove the positive-claim and raw-speed copy checks still fail closed. Structured-output smoke
+artifacts are validated by `scripts/check-structured-output-evidence.sh`; the publication gate runs
+`scripts/check-structured-output-evidence-contract.sh` so the validator fails closed without requiring
+a model load. It also runs `scripts/check-structured-output-release-readiness-contract.sh`, which
+self-tests the strict xgrammar pin/vendor blocker without making current development dependencies a
+publication-gate failure, and now rejects release evidence that only succeeds by `maxTokens` or
+`contextLimit` truncation.
+The same public-copy contract also fixture-tests prefix-cache wording. Exact continuation reuse may
+apply in loaded CoreAILM fast handles, but general prompt caching is unsupported in public copy, and
+partial or semantic prefix reuse is blocked until a release gate proves it.
+It also blocks positive multimodal serving claims. The admissible wording is that multimodal requests
+are parsed but unsupported and return HTTP 400 until a verified runtime bundle plus serving evidence
+exists.
+Serving-path label drift is blocked in the same fixture: staged artifacts are distributed artifacts,
+not the single-device fast path, and 4-bit monolithic bundles must not claim fp16 1:1.
+Markdown-wrapped speed numbers and `x faster` wording are covered by the public-copy fixture as well;
+they need publishable raw benchmark evidence or explicit internal/not-publishable framing.
+Tester request sheets are checked before export-cleanliness and must distinguish target-only from
+target+draft speculative/EAGLE evidence whenever the manifest contains those rows.
+Distributed ready-to-test and staged upload-ready copy is blocked until two-machine hardware evidence
+and sign-off exist; Studio-only parity evidence is not enough for those claims.
+RDMA/TB5 support, speedup, or tensor-parallel copy is also blocked until a Thunderbolt 5 pair
+produces captured negotiation evidence and token-accurate raw evidence.
+Use `--cards-dir <dir>` with `${repo//\//__}.README.md` fixtures for local contract tests.
+The local publication gate runs `scripts/check-hf-model-card-contract.sh`, which exercises this
+contract without touching the Hub.
+It also runs `scripts/check-publication-gates-contract.sh`, a no-load self-test that keeps
+`--distributed` wired to strict tracked distributed evidence.
 
 Run `scripts/check-token-handling.sh` before committing Hub automation or docs. It rejects direct
 HF token env reads, Bearer auth headers, and token argv patterns.
 
+Run `scripts/check-quality-gates.sh` after changing quality-gate docs or benchmark metadata. It keeps
+`docs/QUALITY_GATES.md` and `benchmarks/QUALITY_GATES.tsv` aligned with the required quant and
+diffusion promotion gates. This is a no-load static check; real quality runs write evidence under
+`quality/raw/<run>/`.
+
+Run `scripts/check-quant-eval-contract.sh` after changing the fixed quant task fixture or quant raw
+evidence contract. It validates `quality/quant_tasks_v0.tsv`, the synthetic raw-run shape, and the
+no-load validator under `scripts/quant-eval/`.
+
+Run `scripts/check-diffusion-api-contract.sh` after changing diffusion serving docs or quality-gate
+metadata. The v1 contract is non-streaming-only and lives in `quality/diffusion_api_contract_v0.json`;
+block SSE remains a separate future implementation and evidence item.
+
+Run `scripts/check-diffusion-quality-contract.sh` after changing the fixed diffusion prompt fixture or
+raw evidence contract. It validates `quality/diffusion_prompts_v0.tsv`, the synthetic raw-run shape,
+and the no-load validator under `scripts/diffusion-eval/`.
+
+Run `scripts/check-pipelined-kv-guardrail.sh` after changing the CoreAILM fast path. It keeps
+`PipelinedLLM` on `.auto`/growing KV behavior and rejects blanket `.fixedSize` or ad hoc `kvCacheSize`
+changes until a request-bounded prompt+max+headroom policy is reviewed.
+
 Run `scripts/check-conversion-ledger.sh` after changing `models/registry.json`,
 `docs/CONVERSION_LEDGER.tsv`, or the benchmark manifest. It keeps active conversion lanes explicit:
-published, component-only, or blocked with a next step.
+published, component-only, or blocked with a next step. Published staged repos must name the staged
+or distributed hardware follow-up, MTP/speculative repos must name the target/draft benchmark or
+rebuild action, and draft repos must stay labeled as components that require a matching target. Run
+`scripts/check-conversion-ledger-contract.sh` when changing that ledger contract.
 
 Run `scripts/audit-conversion-gaps.sh --out docs/CONVERSION_GAP_AUDIT.tsv` to refresh source
 metadata for active conversion lanes. It reads Hub metadata only.
@@ -95,6 +198,11 @@ Run `scripts/check-conversion-gap-audit.sh` before committing the refreshed TSV.
 Run `scripts/check-tester-requests.sh` after changing the manifest, raw benchmark logs, or
 `docs/TESTER_REQUESTS.md`. It regenerates the request sheet and fails if the committed sheet is
 stale.
+The publication gate also runs `scripts/check-tester-requests-contract.sh`, which fixture-tests that
+valid raw evidence suppresses tester requests only when it is admissible: out-of-tree raw fixtures
+count, but untracked in-repo raw folders do not. The fixture also pins staged rows to distributed
+hardware smoke, blocked rows to do-not-test wording, draft rows to component-only wording, and MTP
+rows to target+draft benchmark wording.
 
 Create `benchmarks/revisions.tsv` before a publishable run:
 
@@ -112,6 +220,23 @@ redhillsmediafl/rhm-qwen3-4b-caix<TAB><model-repo-commit>
 
 Non-dry-run suite rows refuse to measure without a 40-character model repo revision. Re-run the
 collection step immediately before measuring if any model repo was updated.
+
+Runtime dependency evidence is tracked separately from model repo revisions:
+
+```bash
+scripts/collect-dependency-evidence.sh --out benchmarks/DEPENDENCY_EVIDENCE.tsv
+scripts/check-dependency-evidence.sh
+```
+
+This records the exact resolved `coreai-models` and `xgrammar` SwiftPM revisions plus the Core AI
+Python export dependency versions declared by the checked-out `coreai-models` package. Update it
+before public benchmark tables, release notes, or structured-output capability claims. For structured
+output, `scripts/check-structured-output-release-readiness.sh --evidence <smoke.json>` additionally
+rejects public-readiness mode while `xgrammar` remains branch-based; `--allow-branch-dependencies` is
+development reporting only.
+The publication gate runs `scripts/check-dependency-evidence-contract.sh`, which fixture-tests
+collector/checker behavior for current evidence, stale evidence, missing SwiftPM pins, and ranged
+instead of exact Core AI Python dependencies without using live dependency state.
 
 ## Report Gate
 
@@ -133,19 +258,33 @@ settings match.
 Run `scripts/check-benchmark-raw.sh` before committing raw benchmark logs. It checks clean run-start
 git status for new or changed raw dirs, pinned model repo revisions, recorded caix commits,
 raw output path containment, suite/model metadata consistency, measured row counts, failed rows, and
-deterministic measured stdout.
+deterministic measured stdout. It also pins the suite and model `summary.tsv` schemas before reading
+positional fields; `scripts/check-benchmark-raw-contract.sh` fixture-tests that stale or reordered
+summary schemas fail closed without loading a model.
 Publication gates run it with `--require-tracked` so public checks cannot pass from local probe logs
 that were not committed.
 
 Run `scripts/check-benchmark-gaps.sh` to list eligible manifest rows that still lack committed
 measured raw evidence. Use `--strict` only when the current release must have no eligible benchmark
-gaps.
+gaps. The publication gate runs `scripts/check-benchmark-gaps-contract.sh`, which fixture-tests the
+non-strict report path, strict failure path, all-clear path, and repo+benchmark-mode matching so
+decode evidence cannot satisfy a speculative/MTP row.
+
+Export cleanup is checked after local evidence gates. `scripts/check-export-cleanliness.sh --report`
+prints the non-destructive cleanup plan, and `scripts/check-export-cleanliness-contract.sh`
+fixture-tests clean, local-payload, tracked-payload, missing-`.gitkeep`, and report-mode behavior
+without touching real bundles.
 
 Before publishing docs, model cards, or benchmark reports, run:
 
 ```bash
 scripts/check-publication-gates.sh --hub
 ```
+
+Use `--strict-evidence` for final publication review when distributed parity evidence is part of the
+claim set. It requires distributed evidence summaries and raw logs to be tracked, mirroring the raw
+benchmark `--require-tracked` gate. `--distributed` enables the same strict evidence check
+automatically.
 
 ## Public Table Fields
 
@@ -172,6 +311,8 @@ Use these fields for any published benchmark table:
 ## Current Gaps
 
 - RHM model cards intentionally omit benchmark rows until measured public numbers exist.
+- RHM model cards must also avoid quality claims until the relevant gates in
+  [QUALITY_GATES.md](QUALITY_GATES.md) have exact raw evidence.
 - `benchmarks/MANIFEST.tsv` is the current RHM caix benchmark coverage list.
 - `docs/CONVERSION_LEDGER.tsv` is the current conversion lane status list.
 - Gemma 3 is blocked until Hugging Face access is approved.

@@ -69,14 +69,17 @@ public struct GenerationRequest: Sendable {
     /// Tool/function specs (already normalized to OpenAI `{type:"function", function:{…}}` form)
     /// to render into the model's chat template. Empty/nil ⇒ no tools.
     public var tools: [JSONAny]?
+    /// OpenAI structured-output request. Parsed and preserved so the HTTP layer can gate unsupported
+    /// constrained decoding explicitly instead of silently ignoring the request.
+    public var responseFormat: OpenAIResponseFormat?
     public init(model: String, messages: [ChatMessage], maxTokens: Int = 512, temperature: Double = 0.7,
                 topP: Double? = nil, topK: Int? = nil, stop: [String] = [], stream: Bool = false,
                 applyChatTemplate: Bool = true, kvCapacity: Int? = nil, seed: UInt64? = nil,
-                tools: [JSONAny]? = nil) {
+                tools: [JSONAny]? = nil, responseFormat: OpenAIResponseFormat? = nil) {
         self.model = model; self.messages = messages; self.maxTokens = maxTokens
         self.temperature = temperature; self.topP = topP; self.topK = topK; self.stop = stop
         self.stream = stream; self.applyChatTemplate = applyChatTemplate; self.kvCapacity = kvCapacity
-        self.seed = seed; self.tools = tools
+        self.seed = seed; self.tools = tools; self.responseFormat = responseFormat
     }
 
     public var media: [MediaPart] { messages.flatMap(\.media) }
@@ -94,6 +97,89 @@ public struct GenerationRequest: Sendable {
 }
 
 // MARK: - OpenAI: /v1/chat/completions
+
+public enum OpenAIResponseFormat: Codable, Sendable, Equatable {
+    public struct JSONSchema: Codable, Sendable, Equatable {
+        public var name: String
+        public var description: String?
+        public var schema: JSONAny
+        public var strict: Bool?
+
+        public init(name: String, description: String? = nil, schema: JSONAny, strict: Bool? = nil) {
+            self.name = name
+            self.description = description
+            self.schema = schema
+            self.strict = strict
+        }
+    }
+
+    case text
+    case jsonObject
+    case jsonSchema(JSONSchema)
+
+    private enum CodingKeys: String, CodingKey { case type, json_schema }
+    private enum FormatType: String, Codable {
+        case text
+        case jsonObject = "json_object"
+        case jsonSchema = "json_schema"
+    }
+
+    public var requiresConstrainedDecoding: Bool {
+        switch self {
+        case .text:
+            return false
+        case .jsonObject, .jsonSchema:
+            return true
+        }
+    }
+
+    public var diagnosticName: String {
+        switch self {
+        case .text:
+            return "text"
+        case .jsonObject:
+            return "json_object"
+        case .jsonSchema(let schema):
+            return "json_schema(\(schema.name))"
+        }
+    }
+
+    public var constrainedJSONSchema: String? {
+        switch self {
+        case .text:
+            return nil
+        case .jsonObject:
+            return #"{"type":"object"}"#
+        case .jsonSchema(let schema):
+            return schema.schema.compactJSONString
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        switch try c.decode(FormatType.self, forKey: .type) {
+        case .text:
+            self = .text
+        case .jsonObject:
+            self = .jsonObject
+        case .jsonSchema:
+            self = .jsonSchema(try c.decode(JSONSchema.self, forKey: .json_schema))
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .text:
+            try c.encode(FormatType.text, forKey: .type)
+        case .jsonObject:
+            try c.encode(FormatType.jsonObject, forKey: .type)
+        case .jsonSchema(let schema):
+            try c.encode(FormatType.jsonSchema, forKey: .type)
+            try c.encode(schema, forKey: .json_schema)
+        }
+    }
+}
 
 public struct OpenAIChatRequest: Codable, Sendable {
     public struct StreamOptions: Codable, Sendable {
@@ -114,12 +200,15 @@ public struct OpenAIChatRequest: Codable, Sendable {
     public var seed: Int?
     /// Function/tool definitions (`[{type:"function", function:{name, description, parameters}}]`).
     public var tools: [JSONAny]?
+    /// OpenAI structured-output hint (`text`, `json_object`, or `json_schema`).
+    public var response_format: OpenAIResponseFormat?
     public func toGeneration() -> GenerationRequest {
         GenerationRequest(model: model, messages: messages, maxTokens: max_tokens ?? max_completion_tokens ?? 512,
                           temperature: temperature ?? 0.7, topP: top_p, topK: top_k,
                           stop: stop?.values ?? [], stream: stream ?? false,
                           applyChatTemplate: apply_chat_template ?? true, kvCapacity: kv_capacity,
-                          seed: seed.map { UInt64(bitPattern: Int64($0)) }, tools: tools)
+                          seed: seed.map { UInt64(bitPattern: Int64($0)) }, tools: tools,
+                          responseFormat: response_format)
     }
 }
 

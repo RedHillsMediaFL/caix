@@ -1,0 +1,101 @@
+prompt_id	slice	grader	prompt	expected_answer	notes
+qt-k-001	knowledge	exact	What is the chemical symbol for oxygen?	O	basic science
+qt-k-002	knowledge	exact	What planet is known as the Red Planet?	Mars	basic astronomy
+qt-k-003	knowledge	exact	How many days are in a leap year?	366	calendar fact
+qt-k-004	knowledge	exact	What gas do plants primarily absorb for photosynthesis?	carbon dioxide	basic biology
+qt-k-005	knowledge	exact	What is the capital of Japan?	Tokyo	geography
+qt-k-006	knowledge	exact	What instrument measures temperature?	thermometer	basic instrument
+qt-k-007	knowledge	exact	What is H2O commonly called?	water	basic chemistry
+qt-k-008	knowledge	exact	Which continent contains Brazil?	South America	geography
+qt-k-009	knowledge	exact	How many sides does a hexagon have?	6	geometry fact
+qt-k-010	knowledge	exact	What is the primary language of Spain?	Spanish	language fact
+qt-k-011	knowledge	exact	What force pulls objects toward Earth?	gravity	basic physics
+qt-k-012	knowledge	exact	What is the freezing point of water in Celsius?	0	degrees Celsius
+qt-k-013	knowledge	exact	Which organ pumps blood through the body?	heart	basic anatomy
+qt-k-014	knowledge	exact	What color do you get by mixing red and blue paint?	purple	color mixing
+qt-k-015	knowledge	exact	How many hours are in two days?	48	time arithmetic
+qt-k-016	knowledge	exact	What is the largest ocean on Earth?	Pacific Ocean	geography
+qt-k-017	knowledge	exact	What is the opposite direction of east?	west	direction
+qt-k-018	knowledge	exact	How many letters are in the English alphabet?	26	language fact
+qt-k-019	knowledge	exact	What is the square root of 81?	9	arithmetic fact
+qt-k-020	knowledge	exact	Which metal is liquid at room temperature?	mercury	chemistry fact
+qt-k-021	knowledge	exact	What is the process of water turning into vapor called?	evaporation	basic science
+qt-k-022	knowledge	exact	Which animal is known for black and white stripes?	zebra	common knowledge
+qt-k-023	knowledge	exact	What is the main ingredient in bread?	flour	food fact
+qt-k-024	knowledge	exact	What is the currency of the United States?	dollar	currency
+qt-k-025	knowledge	exact	How many months are in a year?	12	calendar fact
+qt-k-026	knowledge	exact	What shape has three sides?	triangle	geometry fact
+qt-k-027	knowledge	exact	Which star is at the center of the Solar System?	Sun	astronomy
+qt-k-028	knowledge	exact	What sense uses the nose?	smell	basic anatomy
+qt-k-029	knowledge	exact	What is the young form of a frog called?	tadpole	biology
+qt-k-030	knowledge	exact	What do bees make from nectar?	honey	basic nature
+qt-k-031	knowledge	exact	What is the chemical symbol for gold?	Au	chemistry fact
+qt-k-032	knowledge	exact	What is the capital of Canada?	Ottawa	geography
+qt-k-033	knowledge	exact	What tool is used to tighten a screw?	screwdriver	tool fact
+qt-k-034	knowledge	exact	What is the opposite of empty?	full	antonym
+qt-k-035	knowledge	exact	How many wheels does a standard bicycle have?	2	common object
+qt-k-036	knowledge	exact	What is the primary gas humans breathe in for respiration?	oxygen	basic biology
+qt-k-037	knowledge	exact	What is the first month of the year?	January	calendar fact
+qt-k-038	knowledge	exact	Which device is used to tell time on a wall?	clock	common object
+qt-k-039	knowledge	exact	What is the result of boiling water becoming steam called?	vaporization	basic science
+qt-k-040	knowledge	exact	What is the color of a clear daytime sky?	blue	common observation
+qt-m-001	math_reasoning	numeric_exact	A box has 7 red balls and 5 blue balls. How many balls are in the box?	12	addition
+qt-m-002	math_reasoning	numeric_exact	What is 18 minus 9?	9	subtraction
+qt-m-003	math_reasoning	numeric_exact	If 4 bags each hold 6 apples, how many apples are there?	24	multiplication
+qt-m-004	math_reasoning	numeric_exact	A train leaves at 3:00 and arrives at 5:30. How many minutes is the trip?	150	time reasoning
+qt-m-005	math_reasoning	numeric_exact	What is half of 46?	23	division
+qt-m-006	math_reasoning	numeric_exact	If a pen costs 3 dollars, how much do 8 pens cost?	24	unit price
+qt-m-007	math_reasoning	numeric_exact	What is 15 percent of 200?	30	percentage
+qt-m-008	math_reasoning	numeric_exact	A rectangle is 8 by 5. What is its area?	40	area
+qt-m-009	math_reasoning	numeric_exact	What number comes next: 2, 4, 8, 16?	32	pattern
+qt-m-010	math_reasoning	numeric_exact	If you have 30 candies and give away 11, how many remain?	19	subtraction
+qt-m-011	math_reasoning	numeric_exact	What is 9 times 7?	63	multiplication
+qt-m-012	math_reasoning	numeric_exact	A dozen eggs plus half a dozen eggs equals how many eggs?	18	units
+qt-m-013	math_reasoning	numeric_exact	What is 144 divided by 12?	12	division
+qt-m-014	math_reasoning	numeric_exact	If a car travels 60 miles in 2 hours, what is its speed in miles per hour?	30	rate
+qt-m-015	math_reasoning	numeric_exact	What is the perimeter of a square with side length 6?	24	perimeter
+qt-m-016	math_reasoning	numeric_exact	What is 5 squared plus 3?	28	order of operations
+qt-m-017	math_reasoning	numeric_exact	If three notebooks cost 12 dollars total, what is the cost per notebook?	4	unit price
+qt-m-018	math_reasoning	numeric_exact	What is 100 minus 37?	63	subtraction
+qt-m-019	math_reasoning	numeric_exact	What is the average of 4, 8, and 12?	8	mean
+qt-m-020	math_reasoning	numeric_exact	If 2x equals 18, what is x?	9	algebra
+qt-i-001	instruction_following	exact	Reply with exactly one word: ready	ready	exact format
+qt-i-002	instruction_following	exact	Reply with exactly the uppercase word YES.	YES	exact format
+qt-i-003	instruction_following	exact	Reply with exactly the lowercase word no.	no	exact format
+qt-i-004	instruction_following	exact	Reply only with the number 42.	42	exact format
+qt-i-005	instruction_following	exact	Write the word alpha and nothing else.	alpha	exact format
+qt-i-006	instruction_following	exact	Write the word beta and nothing else.	beta	exact format
+qt-i-007	instruction_following	exact	Answer with the single letter C.	C	exact format
+qt-i-008	instruction_following	exact	Answer with the single letter d.	d	exact format
+qt-i-009	instruction_following	contains	In one sentence, mention the words apple and banana.	apple;banana	contains both terms
+qt-i-010	instruction_following	contains	In one sentence, mention the words rain and cloud.	rain;cloud	contains both terms
+qt-i-011	instruction_following	contains	Write a sentence that includes the exact phrase safe test.	safe test	contains phrase
+qt-i-012	instruction_following	contains	Write a sentence that includes the exact phrase local evidence.	local evidence	contains phrase
+qt-i-013	instruction_following	json_exact	Return JSON with key status and value ok.	{"status":"ok"}	json object
+qt-i-014	instruction_following	json_exact	Return JSON with key count and value 3.	{"count":3}	json object
+qt-i-015	instruction_following	json_exact	Return JSON with key enabled and value true.	{"enabled":true}	json object
+qt-i-016	instruction_following	exact	Reply with exactly two letters: ab	ab	exact format
+qt-i-017	instruction_following	exact	Reply with exactly two letters: XY	XY	exact format
+qt-i-018	instruction_following	exact	Reply with the word done followed by a period.	done.	exact punctuation
+qt-i-019	instruction_following	exact	Reply with the word stop followed by an exclamation mark.	stop!	exact punctuation
+qt-i-020	instruction_following	exact	Reply with exactly three characters: 7-9	7-9	exact format
+qt-i-021	instruction_following	exact	Reply with exactly this text: red, green, blue	red, green, blue	exact list
+qt-i-022	instruction_following	exact	Reply with exactly this text: one/two	one/two	exact format
+qt-i-023	instruction_following	contains	Write a sentence containing the exact word checksum.	checksum	contains term
+qt-i-024	instruction_following	contains	Write a sentence containing the exact word manifest.	manifest	contains term
+qt-i-025	instruction_following	contains	Write a sentence containing the exact word tokenizer.	tokenizer	contains term
+qt-i-026	instruction_following	contains	Write a sentence containing the exact word context.	context	contains term
+qt-i-027	instruction_following	json_exact	Return JSON with key mode and value test.	{"mode":"test"}	json object
+qt-i-028	instruction_following	json_exact	Return JSON with key retry and value false.	{"retry":false}	json object
+qt-i-029	instruction_following	json_exact	Return JSON with key name and value caix.	{"name":"caix"}	json object
+qt-i-030	instruction_following	exact	Reply with exactly the phrase: fixed fixture	fixed fixture	exact phrase
+qt-i-031	instruction_following	exact	Reply with exactly the phrase: no load	no load	exact phrase
+qt-i-032	instruction_following	exact	Reply with exactly the phrase: pass gate	pass gate	exact phrase
+qt-i-033	instruction_following	exact	Reply with the lowercase alphabet letters from a to e with no separators.	abcde	exact sequence
+qt-i-034	instruction_following	exact	Reply with the digits from 1 to 5 with no separators.	12345	exact sequence
+qt-i-035	instruction_following	exact	Reply with the word left, a slash, and the word right.	left/right	exact format
+qt-i-036	instruction_following	exact	Reply with the word up, a hyphen, and the word down.	up-down	exact format
+qt-i-037	instruction_following	contains	In one sentence, include both terms latency and memory.	latency;memory	contains both terms
+qt-i-038	instruction_following	contains	In one sentence, include both terms prompt and answer.	prompt;answer	contains both terms
+qt-i-039	instruction_following	contains	In one sentence, include both terms reference and candidate.	reference;candidate	contains both terms
+qt-i-040	instruction_following	exact	Reply with exactly the word complete.	complete	exact format

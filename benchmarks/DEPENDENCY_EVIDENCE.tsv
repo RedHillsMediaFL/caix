@@ -1,0 +1,6 @@
+component	ecosystem	version_kind	version_or_branch	revision	location	evidence_source	notes
+coreai-models	swiftpm	branch	main	e203a0da1f847041d7d28036fcc9b484495359bb	https://github.com/apple/coreai-models.git	Package.resolved	CoreAILM runtime package; development tracks main, release evidence records this SHA.
+xgrammar	swiftpm	branch	main	557becfb64c503ae9c04344b0047661f43f44320	https://github.com/mlc-ai/xgrammar	Package.resolved	Constrained decoding dependency in the caix Swift build graph.
+coreai-torch	python	exact	0.4.1		https://pypi.org/project/coreai-torch/	.build/checkouts/coreai-models/python/pyproject.toml	Python export/conversion dependency declared by the resolved coreai-models checkout.
+coreai-core	python	exact	1.0.0b2		https://pypi.org/project/coreai-core/	.build/checkouts/coreai-models/python/pyproject.toml	Python Core AI base dependency declared by the resolved coreai-models checkout.
+coreai-opt	python	exact	0.2.1		https://pypi.org/project/coreai-opt/	.build/checkouts/coreai-models/python/pyproject.toml	Python Core AI optimization dependency declared by the resolved coreai-models checkout.

@@ -5,6 +5,20 @@ Do not add an evidence file until the test has passed. The readiness gate reads 
 - `same-machine-qwen3-0.6b-token-match.txt`
 - `loopback-qwen3-0.6b-token-match.txt`
 
+The local same-machine parity evidence that closed the Qwen3-0.6B staged math gate is separate:
+
+- `qwen3-0.6b-teacher-forced-fp16-128.txt`
+
+That file records the teacher-forced HF-fp16 oracle gate for the Qwen3-0.6B noopt-first3 staged
+asset: 8 prompts, 128 decode steps, 1020 exact matches, 4 accepted fp16 ties, and 0 real
+divergences. The contract pins the caix commit, CoreAI Models commit, prompt set, raw XCTest log,
+tie tolerance, exact-match count, accepted-tie count, and `upload_ready=false`. It is not loopback,
+two-machine, load, speed, or upload-readiness evidence.
+Use `scripts/check-distributed-evidence-contract.sh --require-tracked` for final publication review
+so untracked local evidence files cannot satisfy the contract. The publication gate exposes the same
+strict path as `scripts/check-publication-gates.sh --strict-evidence`; distributed publication review
+with `scripts/check-publication-gates.sh --distributed` also enables it automatically.
+
 Each file is line-oriented `key=value` text. Required fields:
 
 ```text

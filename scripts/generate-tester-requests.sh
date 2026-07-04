@@ -153,6 +153,9 @@ Raw evidence source: \`$raw_label\`.
 
 No speed claims without raw logs. Use the exact revision in the table. Keep prompts, token budget,
 temperature, seed, streaming mode, warmup count, measured run count, and chat-template mode unchanged.
+Speculative and EAGLE/MTP rows are target+draft package evidence, not standalone target evidence.
+Report target-only and target+draft results separately, and do not average or substitute one for the
+other.
 
 ## Ready Benchmark Requests
 
@@ -245,6 +248,10 @@ EOF
   cat <<'EOF'
 
 ## Manual Or Component Requests
+
+The staged distributed rows below remain `needs-test` while the second Mac is unavailable. They
+require installed-caix hardware evidence, not Studio-only loopback, plan dry-runs, or HF diagnostic
+parity.
 
 | repo | revision | local dir | request | notes |
 |---|---|---|---|---|

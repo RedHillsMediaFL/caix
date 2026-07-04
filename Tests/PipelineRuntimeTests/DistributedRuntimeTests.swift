@@ -2027,6 +2027,57 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertNoThrow(try contract.validate(for: descriptor, boundaryTensor: boundary))
     }
 
+    func testStageIOContractAllowsManifestDeclaredBlockIDInputs() throws {
+        let boundary = DistributedBoundaryTensorSpec(
+            name: "hidden_states", shape: [1, -1, 2], scalarType: .float16)
+        let descriptor = stage(
+            "layers-0-16", .transformerLayers,
+            range: DistributedLayerRange(lowerBound: 0, upperBound: 16),
+            assetName: "layers_0_16",
+            prefillExtraInputs: ["block_ids_q", "block_ids_kv"])
+        let contract = DistributedStageIOContract(
+            inputs: [
+                ioTensor(.hiddenStates, .float16, [1, -1, 2]),
+                ioTensor(.positionIDs, .int32, [1, -1]),
+                ioTensor(.blockIDsQ, .int32, [1, -1]),
+                ioTensor(.blockIDsKV, .int32, [1, -1]),
+            ],
+            outputs: [
+                ioTensor(.hiddenStates, .float16, [1, -1, 2])
+            ])
+
+        XCTAssertNoThrow(try contract.validate(for: descriptor, boundaryTensor: boundary))
+    }
+
+    func testStageIOContractRequiresBlockIDInputsTogether() {
+        let boundary = DistributedBoundaryTensorSpec(
+            name: "hidden_states", shape: [1, -1, 2], scalarType: .float16)
+        let descriptor = stage(
+            "layers-0-16", .transformerLayers,
+            range: DistributedLayerRange(lowerBound: 0, upperBound: 16),
+            assetName: "layers_0_16",
+            prefillExtraInputs: ["block_ids_q", "block_ids_kv"])
+        let contract = DistributedStageIOContract(
+            inputs: [
+                ioTensor(.hiddenStates, .float16, [1, -1, 2]),
+                ioTensor(.positionIDs, .int32, [1, -1]),
+                ioTensor(.blockIDsQ, .int32, [1, -1]),
+            ],
+            outputs: [
+                ioTensor(.hiddenStates, .float16, [1, -1, 2])
+            ])
+
+        XCTAssertThrowsError(
+            try contract.validate(for: descriptor, boundaryTensor: boundary)
+        ) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidStageIOContract(
+                    stageID: "layers-0-16",
+                    reason: "block_ids_q and block_ids_kv must be declared together"))
+        }
+    }
+
     func testStageIOContractAllowsOptionalInputIDsOnHiddenStages() throws {
         let boundary = DistributedBoundaryTensorSpec(
             name: "hidden_states", shape: [1, -1, 2], scalarType: .float16)
@@ -2748,6 +2799,90 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertNoThrow(try manifest.runtimePlan.validate())
     }
 
+    func testStageManifestLoadsSplitCacheGroups() throws {
+        let json =
+            """
+            {
+              "schema": "\(DistributedStageManifest.currentSchema)",
+              "model": "gemma-4-e4b-it-mm",
+              "total_layer_count": 42,
+              "position_mode": "full_prefix",
+              "cache_groups": {
+                "strategy": "gemma4_split_sliding_global_v0",
+                "prefill_chunk": 2048,
+                "groups": {
+                  "sliding": {
+                    "state_names": ["sliding_keyCache", "sliding_valueCache"],
+                    "capacity": 2560,
+                    "sliding_window": 512
+                  },
+                  "global": {
+                    "state_names": ["global_keyCache", "global_valueCache"],
+                    "capacity": 131072
+                  }
+                }
+              },
+              "boundary": {
+                "hidden_state": {
+                  "name": "hidden_states",
+                  "shape": [1, -1, 2560],
+                  "scalar_type": "float16"
+                }
+              },
+              "stages": [
+                {"id":"embed","role":"embeddings","layers":"embeddings","bundle":"stages/embed.aimodel","memory_gb":1.0},
+                {"id":"layers0","role":"transformer_layers","layers":[0,21],"bundle":"stages/layers0.aimodel","memory_gb":2.0},
+                {"id":"layers1","role":"transformer_layers","layers":[21,42],"bundle":"stages/layers1.aimodel","memory_gb":2.0},
+                {"id":"head","role":"final_norm_head","layers":"norm+lm_head","bundle":"stages/head.aimodel","memory_gb":1.0}
+              ]
+            }
+            """
+
+        let manifest = try DistributedStageManifest.decode(from: Data(json.utf8))
+        let cacheGroups = try XCTUnwrap(manifest.cacheGroups)
+        XCTAssertEqual(cacheGroups.strategy, "gemma4_split_sliding_global_v0")
+        XCTAssertEqual(cacheGroups.prefillChunk, 2048)
+        XCTAssertEqual(cacheGroups.capacities["sliding"], 2560)
+        XCTAssertEqual(cacheGroups.capacities["global"], 131072)
+        XCTAssertEqual(cacheGroups.groups["sliding"]?.slidingWindow, 512)
+        XCTAssertEqual(cacheGroups.groups["sliding"]?.stateNames, [
+            "sliding_keyCache", "sliding_valueCache",
+        ])
+    }
+
+    func testStageManifestRejectsSplitCacheGroupTooSmallForPrefillChunk() {
+        let json =
+            """
+            {
+              "schema": "\(DistributedStageManifest.currentSchema)",
+              "model": "gemma-4-e4b-it-mm",
+              "total_layer_count": 42,
+              "cache_groups": {
+                "prefill_chunk": 2048,
+                "groups": {
+                  "sliding": {
+                    "state_names": ["sliding_keyCache", "sliding_valueCache"],
+                    "capacity": 1024,
+                    "sliding_window": 512
+                  }
+                }
+              },
+              "stages": [
+                {"id":"embed","role":"embeddings","layers":"embeddings","bundle":"stages/embed.aimodel","memory_gb":1.0},
+                {"id":"layers","role":"transformer_layers","layers":[0,42],"bundle":"stages/layers.aimodel","memory_gb":2.0},
+                {"id":"head","role":"final_norm_head","layers":"norm+lm_head","bundle":"stages/head.aimodel","memory_gb":1.0}
+              ]
+            }
+            """
+
+        XCTAssertThrowsError(try DistributedStageManifest.decode(from: Data(json.utf8))) { error in
+            guard case .invalidManifest(let message) = error as? DistributedStageManifestError else {
+                return XCTFail("expected invalidManifest, got \(error)")
+            }
+            XCTAssertTrue(message.contains("too small"))
+        }
+    }
+
     func testStageManifestRejectsRoPEMetadataOnNonTransformerStage() {
         let json =
             """
@@ -2854,6 +2989,98 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertEqual(
             context.resolvedDecodeAssetURL?.path,
             "/tmp/caix-manifest/stages/00-embed-decode.aimodel")
+    }
+
+    func testStageManifestLoadsPrefillExtraInputs() throws {
+        let json =
+            """
+            {
+              "schema": "\(DistributedStageManifest.currentSchema)",
+              "model": "gemma4-12b-it-mm-staged-4bit-ctx32k-2x24",
+              "total_layer_count": 48,
+              "position_mode": "full_prefix",
+              "boundary": {
+                "hidden_state": {
+                  "name": "hidden_states",
+                  "shape": [1, -1, 3840],
+                  "scalar_type": "float16"
+                }
+              },
+              "stages": [
+                {"id":"embed","role":"embeddings","layers":"embeddings","bundle":"stages/00-embed.aimodel","decode_asset":"stages/00-embed-decode.aimodel","vocab_size":262144,"memory_gb":1},
+                {
+                  "id": "layers-00-24",
+                  "role": "transformer_layers",
+                  "layers": [0, 24],
+                  "bundle": "stages/01-layers-00-24.aimodel",
+                  "decode_asset": "stages/01-layers-00-24-decode.aimodel",
+                  "memory_gb": 2,
+                  "prefill_extra_inputs": ["block_ids_q", "block_ids_kv"]
+                },
+                {
+                  "id": "layers-24-48",
+                  "role": "transformer_layers",
+                  "layers": [24, 48],
+                  "bundle": "stages/02-layers-24-48.aimodel",
+                  "decode_asset": "stages/02-layers-24-48-decode.aimodel",
+                  "memory_gb": 2,
+                  "prefill_extra_inputs": ["block_ids_q", "block_ids_kv"]
+                },
+                {"id":"head","role":"final_norm_head","layers":"norm+lm_head","bundle":"stages/03-head.aimodel","decode_asset":"stages/03-head-decode.aimodel","vocab_size":262144,"memory_gb":1}
+              ]
+            }
+            """
+
+        let manifest = try DistributedStageManifest.decode(
+            from: Data(json.utf8),
+            baseURL: URL(fileURLWithPath: "/tmp/gemma-mm", isDirectory: true))
+        let firstLayer = try XCTUnwrap(manifest.runtimePlan.stage(id: "layers-00-24"))
+        let secondLayer = try XCTUnwrap(manifest.runtimePlan.stage(id: "layers-24-48"))
+
+        XCTAssertEqual(firstLayer.prefillExtraInputs, ["block_ids_q", "block_ids_kv"])
+        XCTAssertEqual(secondLayer.prefillExtraInputs, ["block_ids_q", "block_ids_kv"])
+        XCTAssertNoThrow(try manifest.runtimePlan.validate())
+    }
+
+    func testStageForwardFrameValidatesBlockIDLengths() throws {
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 2], scalarType: .float16),
+            positionMode: .fullPrefix)
+        let hidden = DistributedHiddenStatePacketMetadata(
+            requestID: "req-1",
+            sourceStageID: "embed",
+            destinationStageID: "layers-0-16",
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 3),
+            shape: [1, 3, 2],
+            scalarType: .float16,
+            byteCount: 12,
+            stepIndex: 0)
+        let frame = DistributedStageForwardFrame(
+            stageID: "layers-0-16",
+            requestID: "req-1",
+            stepIndex: 0,
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 3),
+            positionIDs: [0, 1, 2],
+            blockIDsQ: [-1, -1, -1],
+            blockIDsKV: [-1, -1, -1],
+            hiddenState: hidden)
+        XCTAssertNoThrow(try frame.validate(against: plan))
+
+        let badFrame = DistributedStageForwardFrame(
+            stageID: "layers-0-16",
+            requestID: "req-1",
+            stepIndex: 0,
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 3),
+            positionIDs: [0, 1, 2],
+            blockIDsQ: [-1, -1],
+            blockIDsKV: [-1, -1, -1],
+            hiddenState: hidden)
+        XCTAssertThrowsError(try badFrame.validate(against: plan)) { error in
+            XCTAssertEqual(
+                error as? DistributedStageExecutionError,
+                .invalidForwardInput("block_ids_q count must match position_range"))
+        }
     }
 
     func testStageManifestLoadsMetadataClusterBlockAndDerivesLayerCount() throws {
@@ -3026,6 +3253,47 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertEqual(handles[0].inputs.first?.tokenIDs, [5, 6])
         XCTAssertEqual(handles[1].inputs.first?.tokenIDs, [5, 6])
         XCTAssertEqual(handles[2].inputs.first?.tokenIDs, [])
+        XCTAssertEqual(handles[3].inputs.first?.tokenIDs, [])
+    }
+
+    func testSameMachinePipelineCanPadMaskTransformerTokenIDs() async throws {
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 2], scalarType: .float16))
+        var handles = makeFakeHandles(for: plan)
+        for index in [1, 2] {
+            let descriptor = handles[index].descriptor
+            let destination = index == 1 ? handles[2].descriptor.id : handles[3].descriptor.id
+            handles[index] = FakeDistributedStageHandle(
+                descriptor: descriptor,
+                acceptsTokenIDs: true
+            ) { input in
+                let packet = try self.hiddenPacket(
+                    requestID: input.requestID,
+                    source: descriptor.id,
+                    destination: destination,
+                    positionRange: input.positionRange,
+                    stepIndex: input.stepIndex,
+                    fill: UInt8(index + 1))
+                return DistributedStageForwardOutput(
+                    stageID: descriptor.id,
+                    stepIndex: input.stepIndex,
+                    hiddenState: packet)
+            }
+        }
+        let pipeline = try DistributedSameMachinePipeline(plan: plan, stages: handles)
+
+        try await pipeline.allocate(requestID: "req-ple-mask", kvCapacity: 16)
+        _ = try await pipeline.forward(
+            requestID: "req-ple-mask",
+            stepIndex: 0,
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 4),
+            tokenIDs: [255_999, 258_880, 258_880, 258_882],
+            transformerTokenIDs: [255_999, 0, 0, 258_882])
+
+        XCTAssertEqual(handles[0].inputs.first?.tokenIDs, [255_999, 258_880, 258_880, 258_882])
+        XCTAssertEqual(handles[1].inputs.first?.tokenIDs, [255_999, 0, 0, 258_882])
+        XCTAssertEqual(handles[2].inputs.first?.tokenIDs, [255_999, 0, 0, 258_882])
         XCTAssertEqual(handles[3].inputs.first?.tokenIDs, [])
     }
 
@@ -3634,6 +3902,7 @@ final class DistributedRuntimeTests: XCTestCase {
         range: DistributedLayerRange? = nil,
         assetName: String,
         workerID: String? = nil,
+        prefillExtraInputs: [String] = [],
         rope: DistributedStageRoPEInputSpec? = nil
     ) -> DistributedStageDescriptor {
         DistributedStageDescriptor(
@@ -3641,6 +3910,7 @@ final class DistributedRuntimeTests: XCTestCase {
             role: role,
             layerRange: range,
             assetName: assetName,
+            prefillExtraInputs: prefillExtraInputs,
             workerID: workerID,
             rope: rope)
     }

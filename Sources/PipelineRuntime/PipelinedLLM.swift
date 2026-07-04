@@ -8,6 +8,9 @@
 
 import CoreAI
 import CoreAILanguageModels
+#if canImport(Darwin)
+import Darwin
+#endif
 import Foundation
 import Tokenizers
 
@@ -23,6 +26,7 @@ struct PipelinedLanguageHandle {
     let vocabSize: Int
     let maxContextLength: Int
     let loadSeconds: Double
+    let supportsConstrainedDecoding: Bool
     let generate: Generate
 }
 
@@ -48,6 +52,7 @@ enum PipelinedLLM {
         }
 
         dbg("language bundle ok: \(bundle.name)")
+        installDefaultPrefillChunkThresholdIfNeeded(bundlePath: bundlePath, verbose: verbose)
         let loadStart = Date()
         let modelURL = try bundle.requireModelURL(for: ModelBundle.ComponentKey.main)
         let config = ModelConfig(
@@ -66,10 +71,12 @@ enum PipelinedLLM {
         let engine = try await engineResult
         let tokenizer = try await tokenizerResult
         dbg("engine type: \(String(reflecting: type(of: engine)))")
+        dbg("supports logits: \(engine.supportsLogits)")
         dbg("warming persistent engine ...")
         try await engine.warmup(queryLength: 0, sampling: .greedy)
         let loadSeconds = Date().timeIntervalSince(loadStart)
         dbg("persistent engine + tokenizer ready")
+        let additionalStopTokenIds = additionalStopTokenIDs(bundle: bundle, tokenizer: tokenizer)
 
         var warmedSamplingKeys: Set<String> = ["greedy"]
         let generate: PipelinedLanguageHandle.Generate = { messages, options, tools, onToken in
@@ -88,6 +95,32 @@ enum PipelinedLLM {
             let prepared = try makeInput(
                 messages: messages, tools: tools, options: options, tokenizer: tokenizer)
 
+            if options.constrainedJSONSchema != nil, !engine.supportsLogits {
+                requestDbg("creating sequential CoreAILM engine for constrained decoding ...")
+                let sequentialLoadStart = Date()
+                let sequentialEngine = try await EngineFactory.createEngine(
+                    config: configData,
+                    modelURL: modelURL,
+                    options: EngineOptions(variant: Self.sequentialVariant))
+                requestDbg("sequential engine type: \(String(reflecting: type(of: sequentialEngine)))")
+                requestDbg("sequential supports logits: \(sequentialEngine.supportsLogits)")
+                try await sequentialEngine.warmup(queryLength: 0, sampling: sampling)
+                let sequentialLoadSeconds = Date().timeIntervalSince(sequentialLoadStart)
+                let result = try await decodeWithVanillaStrategy(
+                    input: prepared.input,
+                    tokenizer: tokenizer,
+                    inferenceEngine: sequentialEngine,
+                    samplingConfiguration: sampling,
+                    options: options,
+                    promptTokenCount: prepared.promptTokenCount,
+                    vocabSize: bundle.vocabSize,
+                    modelLoadSeconds: loadSeconds + sequentialLoadSeconds,
+                    additionalStopTokenIds: additionalStopTokenIds,
+                    onToken: onToken)
+                requestDbg("constrained sequential generate done in \(String(format: "%.2f", result.decodeSeconds))s")
+                return result
+            }
+
             if !warmedSamplingKeys.contains(samplingKey) {
                 requestDbg("warming up engine ...")
                 try await engine.warmup(queryLength: 0, sampling: sampling)
@@ -104,7 +137,9 @@ enum PipelinedLLM {
                 samplingConfiguration: sampling,
                 options: options,
                 promptTokenCount: prepared.promptTokenCount,
+                vocabSize: bundle.vocabSize,
                 modelLoadSeconds: loadSeconds,
+                additionalStopTokenIds: additionalStopTokenIds,
                 onToken: onToken)
             requestDbg("generate done in \(String(format: "%.2f", result.decodeSeconds))s")
             return result
@@ -115,8 +150,11 @@ enum PipelinedLLM {
             vocabSize: bundle.vocabSize,
             maxContextLength: bundle.maxContextLength,
             loadSeconds: loadSeconds,
+            supportsConstrainedDecoding: true,
             generate: generate)
     }
+
+    private static let sequentialVariant = "coreai-sequential"
 
     private static func samplingWarmupKey(_ options: CoreAIPipeline.Options) -> String {
         let topK = options.topK.map(String.init) ?? "nil"
@@ -141,6 +179,14 @@ enum PipelinedLLM {
             ids = tokenizer.encode(text: text)
         }
         return (.tokens(ids), ids.count)
+    }
+
+    private static func additionalStopTokenIDs(
+        bundle: LanguageBundle,
+        tokenizer: any Tokenizer
+    ) -> [Int32] {
+        guard let tokenizerDir = bundle.tokenizerPath else { return [] }
+        return LanguageConfig.additionalStopTokenIds(from: tokenizerDir, tokenizer: tokenizer)
     }
 
     /// Generate via Apple's pipelined engine if `modelPath` is a language bundle. Returns `nil`
@@ -183,6 +229,7 @@ enum PipelinedLLM {
             }
         }
         dbg("language bundle ok: \(bundle.name)")
+        installDefaultPrefillChunkThresholdIfNeeded(bundlePath: modelPath, verbose: options.verbose)
         let loadStart = Date()
         let modelURL = try bundle.requireModelURL(for: ModelBundle.ComponentKey.main)
         let config = ModelConfig(
@@ -194,15 +241,24 @@ enum PipelinedLLM {
             function: bundle.language.functionMap?.name(for: "main") ?? "main")
         let configData = try JSONEncoder().encode(config)
 
-        // EngineFactory auto-detects: dynamic bundle → `.pipelined` (the fast engine).
+        // EngineFactory auto-detects normal text generation to the fast pipelined engine.
+        // Constrained decoding needs host-visible logits, so force the sequential engine for
+        // structured requests.
+        let engineOptions = EngineOptions(
+            variant: options.constrainedJSONSchema == nil ? nil : sequentialVariant)
         async let engineResult = EngineFactory.createEngine(
-            config: configData, modelURL: modelURL, options: EngineOptions())
+            config: configData, modelURL: modelURL, options: engineOptions)
         async let tokenizerResult = bundle.loadTokenizer()
-        dbg("creating engine (auto→pipelined) …")
+        dbg(
+            options.constrainedJSONSchema == nil
+                ? "creating engine (auto→pipelined) …"
+                : "creating engine (coreai-sequential for constrained decoding) …")
         let engine = try await engineResult
         let tokenizer = try await tokenizerResult
         dbg("engine type: \(String(reflecting: type(of: engine)))")
+        dbg("supports logits: \(engine.supportsLogits)")
         dbg("engine + tokenizer ready")
+        let additionalStopTokenIds = additionalStopTokenIDs(bundle: bundle, tokenizer: tokenizer)
 
         // The pipelined GPU sampler supports greedy + temperature + topK, but NOT topP — drop topP
         // so we stay on the fast engine (matches Apple's `validateSamplingStrategy`).
@@ -229,10 +285,33 @@ enum PipelinedLLM {
             samplingConfiguration: sampling,
             options: options,
             promptTokenCount: prepared.promptTokenCount,
+            vocabSize: bundle.vocabSize,
             modelLoadSeconds: modelLoadSeconds,
+            additionalStopTokenIds: additionalStopTokenIds,
             onToken: onToken)
         dbg("generate done in \(String(format: "%.2f", result.decodeSeconds))s")
         return result
+    }
+
+    private static func installDefaultPrefillChunkThresholdIfNeeded(
+        bundlePath: String,
+        verbose: Bool
+    ) {
+        // The fast engine does not expose the stateful KV contract here; target the production
+        // single-main monolithic bundle shape and leave staged/multi-asset bundles unchanged.
+        guard let resolved = try? ResolvedBundle.load(at: bundlePath),
+              MonolithicPrefillPolicy.isMonolithicLanguageBundle(resolved),
+              let threshold = MonolithicPrefillPolicy.coreAILanguageModelsChunkThreshold()
+        else { return }
+
+        setenv("COREAI_CHUNK_THRESHOLD", String(threshold), 0)
+        if verbose, ProcessInfo.processInfo.environment["COREAI_CHUNK_THRESHOLD"] == String(threshold) {
+            let message = "[fast] defaulting CoreAILanguageModels prefill chunk threshold to \(threshold) "
+                + "for monolithic stateful determinism; override with COREAI_CHUNK_THRESHOLD "
+                + "or disable with COREAI_PREFILL_MODE=batch\n"
+            FileHandle.standardError.write(
+                Data(message.utf8))
+        }
     }
 
     private static func decodeWithVanillaStrategy(
@@ -242,9 +321,32 @@ enum PipelinedLLM {
         samplingConfiguration: SamplingConfiguration,
         options: CoreAIPipeline.Options,
         promptTokenCount: Int,
+        vocabSize: Int,
         modelLoadSeconds: Double,
+        additionalStopTokenIds: [Int32],
         onToken: ((String) -> Void)?
     ) async throws -> CoreAIPipeline.Result {
+        if let jsonSchema = options.constrainedJSONSchema {
+            guard inferenceEngine.supportsLogits else {
+                throw CoreAIPipeline.RuntimeError.unsupportedFeature(
+                    "JSON-schema constrained decoding requires a CoreAILM engine that exposes "
+                        + "per-step logits; the current pipelined engine samples on GPU and does "
+                        + "not support logits")
+            }
+            return try await decodeWithConstrainedStrategy(
+                jsonSchema: jsonSchema,
+                input: input,
+                tokenizer: tokenizer,
+                inferenceEngine: inferenceEngine,
+                samplingConfiguration: samplingConfiguration,
+                options: options,
+                promptTokenCount: promptTokenCount,
+                vocabSize: vocabSize,
+                modelLoadSeconds: modelLoadSeconds,
+                additionalStopTokenIds: additionalStopTokenIds,
+                onToken: onToken)
+        }
+
         if onToken == nil {
             return try await decodeTokenAccurate(
                 input: input,
@@ -264,7 +366,9 @@ enum PipelinedLLM {
             inferenceEngine: inferenceEngine,
             samplingConfiguration: samplingConfiguration,
             options: InferenceOptions(maxTokens: maxTokens),
-            stopSequences: StopSequences(for: tokenizer))
+            stopSequences: StopSequences(
+                for: tokenizer,
+                additionalEosTokenIds: additionalStopTokenIds))
 
         let decodeStart = Date()
         var text = ""
@@ -318,7 +422,139 @@ enum PipelinedLLM {
             stopReason: stopReason,
             modelLoadSeconds: modelLoadSeconds,
             prefillSeconds: 0,
-            decodeSeconds: Date().timeIntervalSince(decodeStart))
+            decodeSeconds: Date().timeIntervalSince(decodeStart),
+            prefixHitCount: inferenceEngine.lastPrefixHitCount)
+    }
+
+    private static func decodeWithConstrainedStrategy(
+        jsonSchema: String,
+        input: Input,
+        tokenizer: any Tokenizer,
+        inferenceEngine: any InferenceEngine,
+        samplingConfiguration: SamplingConfiguration,
+        options: CoreAIPipeline.Options,
+        promptTokenCount: Int,
+        vocabSize: Int,
+        modelLoadSeconds: Double,
+        additionalStopTokenIds: [Int32],
+        onToken: ((String) -> Void)?
+    ) async throws -> CoreAIPipeline.Result {
+        let maxTokens = max(0, options.maxTokens)
+        let textStops = options.stopSequences.filter { !$0.isEmpty }
+        let tokenStops = textStops
+            .map { tokenizer.encode(text: $0).map(Int32.init) }
+            .filter { !$0.isEmpty }
+        let stopSequences = StopSequences(
+            for: tokenizer,
+            additionalSequences: tokenStops,
+            additionalEosTokenIds: additionalStopTokenIds)
+        let stream = try await ConstrainedDecodingStrategy(
+            jsonSchema: jsonSchema,
+            vocabSize: vocabSize
+        ).decode(
+            from: input,
+            tokenizer: tokenizer,
+            inferenceEngine: inferenceEngine,
+            samplingConfiguration: samplingConfiguration,
+            options: InferenceOptions(maxTokens: maxTokens, includeLogits: true),
+            stopSequences: stopSequences)
+
+        let startedAt = Date()
+        var firstTokenAt: Date?
+        var lastTokenAt: Date?
+        var generated: [Int32] = []
+        var text = ""
+        var streamedText = ""
+        var finalTextOverride: String?
+        var stopReason: CoreAIPipeline.StopReason = .maxTokens
+
+        func emitVisibleText(_ visible: String) {
+            guard let onToken else {
+                streamedText = visible
+                return
+            }
+            if visible.hasPrefix(streamedText) {
+                let delta = String(visible.dropFirst(streamedText.count))
+                if !delta.isEmpty { onToken(delta) }
+            }
+            streamedText = visible
+        }
+
+        for try await chunk in stream {
+            let now = Date()
+            if firstTokenAt == nil { firstTokenAt = now }
+            lastTokenAt = now
+
+            generated.append(chunk.tokenId)
+            text += chunk.text
+
+            if let stopRange = CoreAIPipeline.firstStopRange(
+                in: text, stopSequences: textStops)
+            {
+                let visible = String(text[..<stopRange.lowerBound])
+                emitVisibleText(visible)
+                finalTextOverride = visible
+                stopReason = .stopSequence
+                break
+            }
+
+            if !textStops.isEmpty {
+                let visible = textStops.isEmpty
+                    ? text
+                    : CoreAIPipeline.visibleTextAvoidingPartialStop(
+                        text, stopSequences: textStops)
+                emitVisibleText(visible)
+            }
+        }
+
+        if finalTextOverride == nil, generated.count < maxTokens {
+            stopReason = .eos
+        }
+        let finalText = cleanConstrainedOutput(finalTextOverride ?? text)
+        if finalTextOverride == nil, onToken != nil {
+            emitVisibleText(finalText)
+        }
+
+        let prefillSeconds = firstTokenAt.map { max(0, $0.timeIntervalSince(startedAt)) } ?? 0
+        let decodeSeconds: Double
+        if let firstTokenAt, let lastTokenAt {
+            decodeSeconds = max(0, lastTokenAt.timeIntervalSince(firstTokenAt))
+        } else {
+            decodeSeconds = 0
+        }
+
+        return CoreAIPipeline.Result(
+            text: finalText,
+            promptTokenCount: promptTokenCount,
+            generatedTokenCount: generated.count,
+            stopReason: stopReason,
+            modelLoadSeconds: modelLoadSeconds,
+            prefillSeconds: prefillSeconds,
+            decodeSeconds: decodeSeconds,
+            prefixHitCount: inferenceEngine.lastPrefixHitCount,
+            generatedTokenIDs: generated)
+    }
+
+    private static func cleanConstrainedOutput(_ raw: String) -> String {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let suffixes = [
+            "<|endoftext|>",
+            "<|im_end|>",
+            "<|eot_id|>",
+            "<end_of_turn>",
+            "<eos>",
+            "</s>",
+        ]
+        var changed = true
+        while changed {
+            changed = false
+            for suffix in suffixes where text.hasSuffix(suffix) {
+                text = String(text.dropLast(suffix.count))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                changed = true
+            }
+        }
+        return text
     }
 
     private static func decodeTokenAccurate(
@@ -394,7 +630,9 @@ enum PipelinedLLM {
             stopReason: stopReason,
             modelLoadSeconds: modelLoadSeconds,
             prefillSeconds: prefillSeconds,
-            decodeSeconds: decodeSeconds)
+            decodeSeconds: decodeSeconds,
+            prefixHitCount: inferenceEngine.lastPrefixHitCount,
+            generatedTokenIDs: generated)
     }
 }
 

@@ -22,7 +22,7 @@ if enableCoreAIRuntime {
     packageDependencies.append(
         .package(
             url: "https://github.com/apple/coreai-models.git",
-            revision: "34f0db331dd69d0b295d5f69b3edce7347115e43")
+            branch: "main")
     )
     packageDependencies.append(
         .package(url: "https://github.com/huggingface/swift-transformers", exact: "1.3.3")

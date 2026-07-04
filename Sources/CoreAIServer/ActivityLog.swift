@@ -16,6 +16,7 @@ struct ActivityEvent: Codable, Sendable, Equatable {
     var prefillMs: Int?
     var decodeMs: Int?
     var decodeTokensPerSecond: Double?
+    var prefixHitCount: Int?
 }
 
 actor ActivityLog {
@@ -38,7 +39,8 @@ actor ActivityLog {
         firstTokenSeconds: Double? = nil,
         loadSeconds: Double? = nil,
         prefillSeconds: Double? = nil,
-        decodeSeconds: Double? = nil
+        decodeSeconds: Double? = nil,
+        prefixHitCount: Int? = nil
     ) {
         let output = max(0, outputTokens ?? 0)
         let decode = decodeSeconds.map { max(0, $0) }
@@ -57,7 +59,8 @@ actor ActivityLog {
             loadMs: Self.milliseconds(loadSeconds),
             prefillMs: Self.milliseconds(prefillSeconds),
             decodeMs: Self.milliseconds(decode),
-            decodeTokensPerSecond: decode.flatMap { $0 > 0 ? Double(output) / $0 : nil })
+            decodeTokensPerSecond: decode.flatMap { $0 > 0 ? Double(output) / $0 : nil },
+            prefixHitCount: prefixHitCount)
         events.append(event)
         if events.count > capacity {
             events.removeFirst(events.count - capacity)

@@ -1,5 +1,5 @@
 {
-  "originHash" : "cc63d6fd7d02fdf5f8efe921f4a91ec71c55bfca2a6c92dd0a04545d24a98c3c",
+  "originHash" : "9ccae3945f3b33d2507edce885d4475b636210d261f18b79484944fc089209cf",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -15,7 +15,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/coreai-models.git",
       "state" : {
-        "revision" : "34f0db331dd69d0b295d5f69b3edce7347115e43"
+        "branch" : "main",
+        "revision" : "e203a0da1f847041d7d28036fcc9b484495359bb"
       }
     },
     {

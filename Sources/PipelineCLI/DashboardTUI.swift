@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 func dashboardCommand(_ argv: [String]) {
@@ -32,13 +33,19 @@ func dashboardCommand(_ argv: [String]) {
             print(
                 """
                 USAGE:
-                  caix dashboard [--endpoint URL] [--interval SECONDS] [--once]
+                  caix dashboard [--endpoint URL] [--interval SECONDS] [--once] [--no-clear]
 
                 OPTIONS:
                   --endpoint <url>       caix server endpoint (default: http://127.0.0.1:1237)
                   --interval <seconds>   Refresh interval (default: 2)
                   --once                 Print one snapshot and exit
                   --no-clear             Do not clear the terminal between refreshes
+
+                INTERACTIVE KEYS:
+                  q                      Quit
+                  r                      Refresh now
+                  c                      Toggle screen clearing
+                  ?                      Toggle help
                 """
             )
             exit(0)
@@ -79,23 +86,77 @@ struct DashboardTUI {
     }
 
     func run() throws {
-        while true {
-            if options.clearScreen {
+        var state = DashboardRuntimeState(clearScreen: options.clearScreen)
+        if options.once {
+            if state.clearScreen {
                 print("\u{001B}[2J\u{001B}[H", terminator: "")
             }
-            print(render())
+            print(render(state: state, interactive: false))
             fflush(stdout)
-            if options.once { return }
-            Thread.sleep(forTimeInterval: options.interval)
+            return
+        }
+
+        let input = DashboardTerminalInput.openIfInteractive()
+        defer { input?.restore() }
+
+        while true {
+            if state.clearScreen {
+                print("\u{001B}[2J\u{001B}[H", terminator: "")
+            }
+            print(render(state: state, interactive: input != nil))
+            fflush(stdout)
+            guard waitForNextRefresh(input: input, state: &state) else { return }
         }
     }
 
-    private func render() -> String {
+    private func waitForNextRefresh(
+        input: DashboardTerminalInput?,
+        state: inout DashboardRuntimeState
+    ) -> Bool {
+        guard let input else {
+            Thread.sleep(forTimeInterval: options.interval)
+            return true
+        }
+
+        let deadline = Date().addingTimeInterval(options.interval)
+        while true {
+            while let byte = input.readByte() {
+                switch DashboardKeyCommand(byte: byte) {
+                case .quit:
+                    return false
+                case .refresh:
+                    return true
+                case .toggleClear:
+                    state.clearScreen.toggle()
+                    return true
+                case .toggleHelp:
+                    state.showHelp.toggle()
+                    return true
+                case nil:
+                    continue
+                }
+            }
+
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else { return true }
+            Thread.sleep(forTimeInterval: min(0.05, remaining))
+        }
+    }
+
+    private func render(state: DashboardRuntimeState, interactive: Bool) -> String {
         var lines: [String] = []
         let now = ISO8601DateFormatter().string(from: Date())
         lines.append("caix dashboard")
         lines.append("endpoint: \(endpoint.absoluteString)   refreshed: \(now)")
-        lines.append("press control-c to exit")
+        if interactive {
+            if state.showHelp {
+                lines.append("keys: q quit | r refresh now | c toggle clear | ? hide help | control-c exit")
+            } else {
+                lines.append("keys: q quit | r refresh | c clear | ? help")
+            }
+        } else {
+            lines.append("press control-c to exit")
+        }
         lines.append("")
 
         let server = fetchObject("api/server")
@@ -338,11 +399,100 @@ private func summarizeActivity(_ rows: [[String: Any]]) -> [String] {
         let path = (row["path"] as? String) ?? "-"
         let latency = row.numberValue("latencyMs", "latency_ms").map { "\(Int($0.rounded()))ms" } ?? "-"
         let timing = activityTiming(row)
+        let prefix = row.numberValue("prefixHitCount", "prefix_hit_count")
+            .map { " prefix=\(Int($0.rounded()))" } ?? ""
         let model = (row["model"] as? String).map { " \($0)" } ?? ""
         let summary = (row["summary"] as? String) ?? "-"
-        return "\(status) \(method) \(path) \(latency)\(timing)\(model) - \(summary)"
+        return "\(status) \(method) \(path) \(latency)\(timing)\(prefix)\(model) - \(summary)"
     }
     return recent.isEmpty ? [field("recent", "none")] : recent
+}
+
+private struct DashboardRuntimeState {
+    var clearScreen: Bool
+    var showHelp = false
+}
+
+private enum DashboardKeyCommand {
+    case quit
+    case refresh
+    case toggleClear
+    case toggleHelp
+
+    init?(byte: UInt8) {
+        switch byte {
+        case 3, 81, 113:
+            self = .quit
+        case 82, 114:
+            self = .refresh
+        case 67, 99:
+            self = .toggleClear
+        case 63:
+            self = .toggleHelp
+        default:
+            return nil
+        }
+    }
+}
+
+private final class DashboardTerminalInput {
+    private let fileDescriptor: Int32
+    private var originalTermios: termios
+    private let originalFlags: Int32
+    private var restored = false
+
+    static func openIfInteractive() -> DashboardTerminalInput? {
+        let fd = STDIN_FILENO
+        guard isatty(fd) == 1 else { return nil }
+
+        var savedTermios = termios()
+        guard tcgetattr(fd, &savedTermios) == 0 else { return nil }
+
+        let savedFlags = Darwin.fcntl(fd, F_GETFL, 0)
+        guard savedFlags >= 0 else { return nil }
+
+        var rawTermios = savedTermios
+        rawTermios.c_lflag &= ~tcflag_t(ECHO | ICANON)
+        withUnsafeMutableBytes(of: &rawTermios.c_cc) { bytes in
+            bytes[Int(VMIN)] = 0
+            bytes[Int(VTIME)] = 0
+        }
+        guard tcsetattr(fd, TCSANOW, &rawTermios) == 0 else { return nil }
+
+        guard Darwin.fcntl(fd, F_SETFL, savedFlags | O_NONBLOCK) == 0 else {
+            _ = tcsetattr(fd, TCSANOW, &savedTermios)
+            return nil
+        }
+
+        return DashboardTerminalInput(
+            fileDescriptor: fd,
+            originalTermios: savedTermios,
+            originalFlags: savedFlags)
+    }
+
+    private init(fileDescriptor: Int32, originalTermios: termios, originalFlags: Int32) {
+        self.fileDescriptor = fileDescriptor
+        self.originalTermios = originalTermios
+        self.originalFlags = originalFlags
+    }
+
+    func readByte() -> UInt8? {
+        var byte: UInt8 = 0
+        let count = Darwin.read(fileDescriptor, &byte, 1)
+        if count == 1 { return byte }
+        return nil
+    }
+
+    func restore() {
+        guard !restored else { return }
+        _ = tcsetattr(fileDescriptor, TCSANOW, &originalTermios)
+        _ = Darwin.fcntl(fileDescriptor, F_SETFL, originalFlags)
+        restored = true
+    }
+
+    deinit {
+        restore()
+    }
 }
 
 private extension Dictionary where Key == String, Value == Any {

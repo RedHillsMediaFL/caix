@@ -16,6 +16,10 @@ scripts/check-version-sync.sh
 scripts/check-release-version.sh v0.2.0-beta
 ```
 
+The local publication gate also runs `scripts/check-release-version-contract.sh`, which fixture-tests
+the Core AI beta `<1.0.0` policy, malformed-version rejection, dev-version rejection, and the explicit
+stable-runtime override.
+
 For a packaged release:
 
 ```bash
@@ -40,8 +44,11 @@ Distributed releases must pass the Brew-installed readiness gate before cross-Ma
 brew tap RedHillsMediaFL/caix
 brew reinstall caix
 brew test caix
-scripts/check-publication-gates.sh --distributed --brew-caix "$(command -v caix)"
+scripts/check-publication-gates.sh --distributed --strict-evidence --brew-caix "$(command -v caix)"
 ```
+
+`--strict-evidence` keeps final distributed release review from passing on untracked local parity
+summaries or raw logs.
 
 The formula test must keep checking `caix cluster plan --help`, `caix cluster join --help`,
 `caix deploy verify --help` advertising speed checks, top-level `caix --help` advertising

@@ -16,6 +16,7 @@ benchmarks/raw/
 benchmarks/reports/
 benchmarks/revisions.tsv
 benchmarks/revisions-details.tsv
+quality/raw/
 
 # prebuilt binary staged into a release (not committed to source)
 bin/

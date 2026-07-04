@@ -335,7 +335,8 @@
       <button class="ico hamburger" id="menuToggle" type="button" aria-label="Open sidebar" aria-expanded="false" aria-controls="sidenav">☰</button>
       <select id="chatmodel" title="Choose a model"></select>
       <span class="badge" id="mtpbadge"></span>
-      <label class="tog" style="padding:0"><input type="checkbox" id="showthink" checked/> thinking</label>
+      <span class="badge std" id="reasonbadge"></span>
+      <label class="tog" id="reasonToggle" style="padding:0" title="Show reasoning_content when the model emits it; this does not change generation."><input type="checkbox" id="showthink" checked/> show reasoning</label>
       <span class="live" id="live"></span>
       <div class="mode" id="modeSwitch" aria-label="Mode">
         <button type="button" data-mode="simple" class="active">Simple</button>
@@ -388,6 +389,10 @@ function chatScore(name){
 function modelWarn(name){
   return isComponent(name)?'component bundle':(!isChatTuned(name)?'not chat-tuned':'');
 }
+function reasoningSupport(name){
+  const m=modelByName(name);
+  return (m&&typeof m.reasoningSupported==='boolean')?m.reasoningSupported:null;
+}
 
 const redactLog=s=>(s||'').replace(/\b((?:[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|AUTHORIZATION|CREDENTIAL)[A-Z0-9_]*)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s]+)/gi,'$1[redacted]')
   .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/\-]+=*/gi,'$1[redacted]')
@@ -412,8 +417,9 @@ async function renderServerActivity(){
       const cls=(a.status||0)<400?'ok':((a.status||0)<500?'work':'bad');
       const when=a.at?new Date(a.at*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}):'';
       const tokens=(a.inputTokens||a.outputTokens)?` · ${a.inputTokens||0}/${a.outputTokens||0} tok`:'';
+      const prefix=(a.prefixHitCount||a.prefix_hit_count)?` · prefix ${a.prefixHitCount||a.prefix_hit_count}`:'';
       const model=a.model?` · ${a.model}`:'';
-      return `<span class="activityline"><span class="${cls}">${esc(String(a.status||'-'))}</span> <b>${esc(a.method||'-')}</b> ${esc(a.path||'-')} <span class="faint">${esc(when)} · ${esc(String(a.latencyMs||0))} ms${esc(model)}${esc(tokens)}</span><br>${esc(a.summary||'')}</span>`;
+      return `<span class="activityline"><span class="${cls}">${esc(String(a.status||'-'))}</span> <b>${esc(a.method||'-')}</b> ${esc(a.path||'-')} <span class="faint">${esc(when)} · ${esc(String(a.latencyMs||0))} ms${esc(model)}${esc(tokens)}${esc(prefix)}</span><br>${esc(a.summary||'')}</span>`;
     }).join('')||'<span class="logrow">no recent activity</span>';
   }catch(e){
     el.innerHTML='<span class="logrow">activity unavailable</span>';
@@ -470,17 +476,18 @@ async function loadModels(){
     sel.innerHTML=bundles.map(n=>`<option value="${escA(n)}">${esc(n)}${isMTP(n)?'  · MTP':''}</option>`).join('');
     sel.dataset.opts=bundles.join('|'); sel.value=(cur&&bundles.includes(cur))?cur:(bundles[0]||''); updateBadge();}
   // sidebar list with lifecycle controls — names are data-bound (no HTML/JS-string injection)
-  $('modellist').innerHTML=MODELS.map(m=>{
-    const on=m.status==='loaded', active=m.name===sel.value, nm=escA(m.name);
-    const right=m.bundle
-      ? `${on?`<button class="ico" data-act="offload" data-name="${nm}">Unload</button>`
-            :`<button class="ico go" data-act="load" data-name="${nm}">Load</button>`}
+	  $('modellist').innerHTML=MODELS.map(m=>{
+	    const on=m.status==='loaded', active=m.name===sel.value, nm=escA(m.name);
+	    const right=m.bundle
+	      ? `${on?`<button class="ico" data-act="offload" data-name="${nm}">Unload</button>`
+	            :`<button class="ico go" data-act="load" data-name="${nm}">Load</button>`}
          <button class="ico danger" data-act="del" data-name="${nm}" title="delete bundle">✕</button>`
       : `<button class="ico go" data-act="conv" data-name="${nm}" title="convert from registry">Convert</button>`;
-    return `<div class="mrow"><span class="dotst ${on?'on':''}"></span>
-      <span class="nm ${active?'active':''}" title="${nm}" data-act="pick" data-name="${nm}">${esc(m.name)}</span>${right}</div>`;
-  }).join('');
-}
+	    return `<div class="mrow"><span class="dotst ${on?'on':''}"></span>
+	      <span class="nm ${active?'active':''}" title="${nm}" data-act="pick" data-name="${nm}">${esc(m.name)}</span>${right}</div>`;
+	  }).join('');
+	  updateBadge();
+	}
 $('modellist').addEventListener('click',e=>{
   const el=e.target.closest('[data-act]'); if(!el)return;
   const n=el.dataset.name, a=el.dataset.act;
@@ -577,7 +584,21 @@ function updateBadge(){const m=$('chatmodel').value,b=$('mtpbadge');
   const warn=modelWarn(m);
   if(warn){b.textContent=warn;b.className='badge warn';}
   else if(isMTP(m)){b.textContent='MTP · speculative';b.className='badge';}
-  else{b.textContent='chat-ready';b.className='badge std';}}
+  else{b.textContent='chat-ready';b.className='badge std';}
+  updateReasoningBadge();}
+function updateReasoningBadge(){
+  const support=reasoningSupport($('chatmodel').value), rb=$('reasonbadge'), cb=$('showthink'), label=$('reasonToggle');
+  if(support===true){
+    rb.textContent='reasoning stream'; rb.className='badge std'; cb.disabled=false;
+    label.title='Show reasoning_content when the model emits it; this does not change generation.';
+  }else if(support===false){
+    rb.textContent='no reasoning markers'; rb.className='badge std'; cb.disabled=true; cb.checked=false;
+    label.title='This model has no detected reasoning markers; the control only displays emitted reasoning_content.';
+  }else{
+    rb.textContent='reasoning unknown'; rb.className='badge std'; cb.disabled=false;
+    label.title='Server did not report reasoning support; this control only displays emitted reasoning_content.';
+  }
+}
 function copyCode(btn){const pre=btn.parentElement,code=pre.querySelector('code');navigator.clipboard.writeText(code.innerText);btn.textContent='copied';setTimeout(()=>btn.textContent='copy',1200);}
 function render(){
   const wrap=$('scroll').querySelector('.wrap');

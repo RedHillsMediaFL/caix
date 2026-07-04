@@ -139,10 +139,10 @@ sudo xcode-select -s /Applications/Xcode-beta.app    # your Core AI–capable Xc
 
 The first build downloads Swift dependencies and compiles. It takes a few minutes.
 
-> **Pinned dependency (beta).** `Package.swift` pins `apple/coreai-models` to an exact revision
-> tested against the current Core AI beta. As Apple's betas move, that revision may need bumping
-> and the deployment target may need raising. Edit `revision:` in `Package.swift`, or run
-> `swift package update`.
+> **Core AI dependency (beta).** Runtime builds track `apple/coreai-models` on `main` so caix follows
+> Apple's active Core AI work. `Package.resolved` records the exact SHA used by each checkout; keep
+> that SHA in benchmark and release evidence, and snapshot a known-good revision for a release train
+> if upstream `main` regresses.
 
 ---
 
@@ -267,8 +267,8 @@ This gives you a private HTTPS URL on your tailnet without opening public ports.
 - MTP/speculative decoding for supported pairs; caix auto-tunes the draft window up to the safe cap.
 - Dashboard: RAM/GPU stats, load/unload/convert/delete, per-model usage, rolling/lifetime tok/s.
   Usage stats persist across restarts.
-- Chat: markdown, streaming, code blocks with copy, tables, and a thinking panel for reasoning
-  models. The chat page includes a redacted session log for debugging.
+- Chat: markdown, streaming, code blocks with copy, tables, and a reasoning panel when a model emits
+  `reasoning_content`. The chat page includes a redacted session log for debugging.
 - Terminal chat: `caix chat` / `caix tui` talks to a local caix server and includes shell-tool
   controls (`ask`, `on`, `off`).
 - Skills: choose or write a system prompt.
@@ -375,7 +375,7 @@ confirms the architecture after dequant.
 | HF cache | `$HF_HOME`; otherwise Hugging Face uses its local default |
 | Converter tmp | `$caix_tmpdir`; converter default is `/Volumes/SSD/coreai-tmp` |
 | Export index | optional JSON from `scripts/refresh-export-index.sh` (set `caix_export_index`) |
-| Web UI | `web/` (served at `/` and `/chat`) |
+| Web UI | `web/` (served at `/` and `/chat`; restart `caix serve` after editing these files) |
 | Usage stats | `~/.caix/usage.json` (override with `--stats-file`) — survives restarts |
 | Converter | `python/converter/` |
 

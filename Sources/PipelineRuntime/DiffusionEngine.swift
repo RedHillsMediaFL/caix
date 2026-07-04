@@ -627,6 +627,10 @@ final class DiffusionEngine {
         options: CoreAIPipeline.Options,
         onToken: ((String) -> Void)?
     ) async throws -> CoreAIPipeline.DiffusionResult {
+        guard options.constrainedJSONSchema == nil else {
+            throw CoreAIPipeline.RuntimeError.unsupportedFeature(
+                "JSON-schema constrained decoding is not supported on diffusion backends")
+        }
         func log(_ s: @autoclosure () -> String) {
             if options.verbose { FileHandle.standardError.write(Data(("[coreai] " + s() + "\n").utf8)) }
         }
