@@ -3,13 +3,13 @@ redhillsmediafl/rhm-qwen2.5-0.5b-instruct-caix	qwen2.5-0.5b-instruct-coreai	stan
 redhillsmediafl/rhm-qwen2.5-3b-instruct-caix	qwen2.5-3b-instruct-coreai	standalone	decode	eligible	verified; Qwen Research License
 redhillsmediafl/rhm-qwen3-0.6b-caix	qwen3-0.6b-coreai	standalone	decode	eligible	cataloged
 redhillsmediafl/rhm-qwen3-1.7b-caix	qwen3-1.7b-coreai	standalone	decode	eligible	verified
-redhillsmediafl/rhm-qwen3-4b-caix	qwen3-4b-coreai	standalone	decode	eligible	monolithic default <=16 prefill mitigation required; deterministic 4bit path is non-1:1 vs fp16; publish only if determinism gate passes
+redhillsmediafl/rhm-qwen3-4b-caix	qwen3-4b-coreai	standalone	decode	gated_private	PRIVATED 2026-07-04 (non-1:1 4bit determinism / <=16 prefill); republish after determinism fix + full-native-ctx + regular&quant
 redhillsmediafl/rhm-qwen3-8b-caix	qwen3-8b-coreai	standalone	decode	eligible	verified
 redhillsmediafl/rhm-qwen3-14b-caix	qwen3-14b-coreai	standalone	decode	eligible	verified
 redhillsmediafl/rhm-ornith-1.0-9b-caix	ornith-1.0-9b-coreai	standalone	decode	eligible	cataloged
 redhillsmediafl/rhm-qwythos-9b-caix	qwythos-9b-coreai	standalone	decode	eligible	cataloged
 redhillsmediafl/rhm-glm-4-9b-0414-caix	glm-4-9b-0414-coreai	standalone	decode	eligible	cataloged
-redhillsmediafl/rhm-glm-z1-9b-0414-caix	glm-z1-9b-0414-coreai	standalone	decode	eligible	local stdout instability; publish only if stability gate passes
+redhillsmediafl/rhm-glm-z1-9b-0414-caix	glm-z1-9b-0414-coreai	standalone	decode	gated_private	PRIVATED 2026-07-04 (stdout instability); republish after stability fix + full-native-ctx + regular&quant
 redhillsmediafl/rhm-glm-4-32b-0414-caix	glm-4-32b-0414-coreai	standalone	decode	eligible	cataloged
 redhillsmediafl/rhm-gpt-oss-20b-caix	gpt-oss-20b-coreai	standalone	decode	eligible	verified
 redhillsmediafl/rhm-mistral-7b-instruct-v0.3-caix	mistral-7b-instruct-v0.3-coreai	standalone	decode	eligible	verified
@@ -29,7 +29,7 @@ redhillsmediafl/rhm-gemma-4-26b-a4b-it-staged-caix	gemma4-26b-a4b-it-staged-4bit
 redhillsmediafl/rhm-gemma-4-31b-it-caix	gemma-4-31b-it-coreai	standalone	decode	eligible	cataloged
 redhillsmediafl/rhm-gemma-4-31b-it-staged-caix	gemma4-31b-it-staged-4bit-ctx128-6x10	staged	manual	component_only	staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook
 redhillsmediafl/rhm-gemma-4-26b-a4b-mtp-caix	gemma-4-26b-a4b-mtp-coreai	mtp	eagle-mtp	eligible	benchmark MTP package; compare against standalone target row
-redhillsmediafl/rhm-gemma-4-31b-it-mtp-caix	gemma-4-31b-it-mtp-coreai	mtp	eagle-mtp	blocked_runtime	draft graph is standard two-input assistant; rebuild package with dependent EAGLE draft
-redhillsmediafl/rhm-qwen3-4b-mtp-caix	qwen3-4b-mtp-coreai	mtp	speculative	eligible	benchmark classic target+draft package; target monolithic default <=16 prefill mitigation required; deterministic 4bit path is non-1:1 vs fp16; publish only if determinism gate passes
+redhillsmediafl/rhm-gemma-4-31b-it-mtp-caix	gemma-4-31b-it-mtp-coreai	mtp	eagle-mtp	gated_private	PRIVATED 2026-07-04 (blocked_runtime: draft graph is standard two-input assistant); rebuild with dependent EAGLE draft then republish
+redhillsmediafl/rhm-qwen3-4b-mtp-caix	qwen3-4b-mtp-coreai	mtp	speculative	gated_private	PRIVATED 2026-07-04 (target non-1:1 4bit determinism / <=16 prefill); republish after determinism fix
 redhillsmediafl/rhm-gemma-4-26b-a4b-draft-caix	gemma-4-26b-a4b-draft-coreai	draft	manual	component_only	draft component; benchmark with matching target
 redhillsmediafl/rhm-gemma-4-31b-it-draft-caix	gemma-4-31b-it-draft-coreai	draft	manual	component_only	draft component; benchmark with matching target
