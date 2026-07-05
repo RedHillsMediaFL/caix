@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://huggingface.co/spaces/redhillsmediafl/README/resolve/main/rhm-full-logo.png" alt="Red Hills Media" width="260">
+</p>
+
 # caix
 
 [![Release](https://img.shields.io/github/v/release/RedHillsMediaFL/caix?include_prereleases&sort=semver&color=E5484D)](https://github.com/RedHillsMediaFL/caix/releases)
@@ -22,8 +26,9 @@ OpenAI and Anthropic clients can point at the local server.
 caix supports classic speculative packages and EAGLE target+draft packages. Use the model-card flags
 for each package.
 
-Multimodal status: caix parses OpenAI and Anthropic image/audio/video content blocks, but no verified
-runtime bundle consumes them yet. Multimodal requests return a clear 400 until that changes.
+Multimodal: caix runs **multimodal Gemma 4** bundles — send an image with your prompt and the model
+describes and reasons over it (verified on-device; image + text). Audio and video content blocks are
+parsed but not yet consumed and return a clear 400.
 
 ---
 
@@ -169,13 +174,10 @@ and runs a disk preflight first.
 Converted bundles are in the [redhillsmediafl Hugging Face org](https://huggingface.co/redhillsmediafl?search=caix)
 and in family collections:
 
-- [Qwen caix](https://huggingface.co/collections/redhillsmediafl/qwen-caix-6a3fd5f6d272c154dbfcda67)
-- [Gemma caix](https://huggingface.co/collections/redhillsmediafl/gemma-caix-6a3fd5f57b67589b85e6eac6)
-- [GLM caix](https://huggingface.co/collections/redhillsmediafl/glm-caix-6a40604dfb87315cc99a558e)
-- [Mistral caix](https://huggingface.co/collections/redhillsmediafl/mistral-caix-6a404e43a972c2f2621a000e)
-- [Ornith caix](https://huggingface.co/collections/redhillsmediafl/ornith-caix-6a3ff0de0d269f65f53ef064)
-- [Qwythos caix](https://huggingface.co/collections/redhillsmediafl/qwythos-caix-6a409e86fb87315cc9a2d69f)
-- [gpt-oss caix](https://huggingface.co/collections/redhillsmediafl/gpt-oss-caix-6a404e428791003d8e6e79fc)
+- [Qwen3](https://huggingface.co/collections/redhillsmediafl/qwen-caix-6a3fd5f6d272c154dbfcda67) · [Qwen2.5](https://huggingface.co/collections/redhillsmediafl/qwen25-caix-6a49cb984626eb049898ef2f)
+- [Gemma 4](https://huggingface.co/collections/redhillsmediafl/gemma-caix-6a3fd5f57b67589b85e6eac6) — multimodal (image + text)
+- [GLM](https://huggingface.co/collections/redhillsmediafl/glm-caix-6a40604dfb87315cc99a558e) · [Mistral](https://huggingface.co/collections/redhillsmediafl/mistral-caix-6a404e43a972c2f2621a000e) · [Mixtral](https://huggingface.co/collections/redhillsmediafl/mixtral-caix-6a49cb9a1c5fc6899c1334d8)
+- [gpt-oss](https://huggingface.co/collections/redhillsmediafl/gpt-oss-caix-6a404e428791003d8e6e79fc)
 
 Use the catalog for current install commands:
 
