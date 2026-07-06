@@ -306,6 +306,34 @@ final class APITypesTests: XCTestCase {
             "remote image URLs are not supported; send a base64 data URL")
     }
 
+    func testMultimodalRequestRejectsBlockedMonolithicGemmaRoute() {
+        let generation = GenerationRequest(
+            model: "local",
+            messages: [
+                ChatMessage(
+                    role: "user",
+                    content: "Describe this.",
+                    media: [
+                        MediaPart(
+                            type: "image_url",
+                            payload: .object([
+                                "type": .string("image_url"),
+                                "image_url": .object(["url": .string("data:image/png;base64,aGVsbG8=")]),
+                            ]))
+                    ])
+            ])
+
+        let error = MultimodalRequestSupport.validateMinimalSingleImageRequest(
+            generation,
+            capabilities: .gemma4ImageText(
+                maxSoftTokensPerImage: 280,
+                backend: "monolithic",
+                routeAvailable: false))
+        XCTAssertEqual(
+            error?.description,
+            "monolithic Gemma image-text bundles are discovered, but native prefill_multimodal serving is not wired yet")
+    }
+
     func testServerRejectsStructuredResponseFormatBeforeRuntime() throws {
         let generation = GenerationRequest(
             model: "local",

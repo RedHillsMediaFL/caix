@@ -12,8 +12,11 @@ import Glibc
 /// additive field carrying the resident footprint of loaded models (ignored by the dashboard).
 /// `reasoningSupported` is derived from bundle tokenizer markers and does not require model load.
 /// `multimodalSupported` is true for bundles that can accept the currently supported image route.
+/// `multimodalCapabilities` may also describe detected-but-blocked multimodal bundle contracts.
 public struct MultimodalCapabilities: Codable, Sendable, Equatable {
     public var family: String
+    public var backend: String
+    public var routeAvailable: Bool
     public var supportedModalities: [String]
     public var maxImages: Int
     public var imageSourceTypes: [String]
@@ -23,6 +26,8 @@ public struct MultimodalCapabilities: Codable, Sendable, Equatable {
 
     public init(
         family: String,
+        backend: String = "staged",
+        routeAvailable: Bool = true,
         supportedModalities: [String],
         maxImages: Int,
         imageSourceTypes: [String],
@@ -31,6 +36,8 @@ public struct MultimodalCapabilities: Codable, Sendable, Equatable {
         unsupportedFeatures: [String]
     ) {
         self.family = family
+        self.backend = backend
+        self.routeAvailable = routeAvailable
         self.supportedModalities = supportedModalities
         self.maxImages = maxImages
         self.imageSourceTypes = imageSourceTypes
@@ -39,24 +46,34 @@ public struct MultimodalCapabilities: Codable, Sendable, Equatable {
         self.unsupportedFeatures = unsupportedFeatures
     }
 
-    public static func gemma4ImageText(maxSoftTokensPerImage: Int? = nil) -> MultimodalCapabilities {
-        MultimodalCapabilities(
+    public static func gemma4ImageText(
+        maxSoftTokensPerImage: Int? = nil,
+        backend: String = "staged",
+        routeAvailable: Bool = true
+    ) -> MultimodalCapabilities {
+        var unsupportedFeatures = [
+            "audio",
+            "video",
+            "files",
+            "remote_image_urls",
+            "multiple_images",
+            "tools",
+            "response_format",
+            "non_greedy_decoding",
+        ]
+        if !routeAvailable {
+            unsupportedFeatures.append("monolithic_prefill_runtime")
+        }
+        return MultimodalCapabilities(
             family: "gemma4",
+            backend: backend,
+            routeAvailable: routeAvailable,
             supportedModalities: ["image", "text"],
             maxImages: 1,
             imageSourceTypes: ["base64", "data_url"],
             maxSoftTokensPerImage: maxSoftTokensPerImage,
             supportedDecoding: ["greedy"],
-            unsupportedFeatures: [
-                "audio",
-                "video",
-                "files",
-                "remote_image_urls",
-                "multiple_images",
-                "tools",
-                "response_format",
-                "non_greedy_decoding",
-            ])
+            unsupportedFeatures: unsupportedFeatures)
     }
 }
 
@@ -218,6 +235,7 @@ public enum ModelNameRepair: Sendable {
 final class ModelHandle: @unchecked Sendable {
     enum Backend {
         case persistent(PersistentModel)
+        case multimodalMonolithicGemma(PersistentModel)
         case speculative(PersistentSpeculativeModel)
         #if COREAI_RUNTIME
         case eagle(EagleEngine)  // EAGLE speculative decoding
@@ -238,6 +256,12 @@ final class ModelHandle: @unchecked Sendable {
 
     init(model: PersistentModel, name: String) {
         self.backend = .persistent(model)
+        self.displayName = name
+        self.bytes = model.bundleByteSize
+    }
+
+    init(monolithicMultimodalGemma model: PersistentModel, name: String) {
+        self.backend = .multimodalMonolithicGemma(model)
         self.displayName = name
         self.bytes = model.bundleByteSize
     }
@@ -276,14 +300,22 @@ final class ModelHandle: @unchecked Sendable {
             return .gemma4ImageText(maxSoftTokensPerImage: Gemma4MultimodalProcessor.maxSoftTokens)
         }
         #endif
+        if case .multimodalMonolithicGemma = backend {
+            return .gemma4ImageText(
+                maxSoftTokensPerImage: 280,
+                backend: "monolithic",
+                routeAvailable: false)
+        }
         return nil
     }
     var supportsMultimodalInput: Bool {
-        multimodalCapabilities != nil
+        multimodalCapabilities?.routeAvailable == true
     }
     var supportsConstrainedDecoding: Bool {
         switch backend {
         case .persistent(let model):
+            return model.supportsConstrainedDecoding
+        case .multimodalMonolithicGemma(let model):
             return model.supportsConstrainedDecoding
         case .speculative:
             return false
@@ -318,6 +350,9 @@ final class ModelHandle: @unchecked Sendable {
             let result: CoreAIPipeline.Result
             switch backend {
             case .persistent(let model):
+                result = try await model.generate(
+                    messages: messages, options: options, tools: tools, onToken: onToken)
+            case .multimodalMonolithicGemma(let model):
                 result = try await model.generate(
                     messages: messages, options: options, tools: tools, onToken: onToken)
             case .speculative(let model):
@@ -418,9 +453,9 @@ final class ModelHandle: @unchecked Sendable {
                             generated.embedding.rows).utf8))
                 }
                 result = generated.result
-            case .persistent, .speculative, .eagle, .textStaged:
+            case .persistent, .multimodalMonolithicGemma, .speculative, .eagle, .textStaged:
                 throw CoreAIPipeline.RuntimeError.unsupportedFeature(
-                    "resolved backend '\(displayName)' does not support multimodal input")
+                    "resolved backend '\(displayName)' does not support routed multimodal input")
             }
             await gate.release()
             Usage.record(model: displayName, inputTokens: result.promptTokenCount,
@@ -451,6 +486,13 @@ enum MultimodalRequestSupport {
         capabilities: MultimodalCapabilities = .gemma4ImageText()
     ) -> RequestError? {
         guard request.hasMultimodalContent else { return nil }
+        guard capabilities.routeAvailable else {
+            if capabilities.backend == "monolithic" {
+                return .unsupported(
+                    "monolithic Gemma image-text bundles are discovered, but native prefill_multimodal serving is not wired yet")
+            }
+            return .unsupported("resolved multimodal backend is not available for generation")
+        }
         guard capabilities.supportedModalities.contains("image"), capabilities.maxImages == 1 else {
             return .unsupported("resolved multimodal backend does not support single-image generation")
         }
@@ -668,9 +710,10 @@ public actor ModelManager {
             guard isDirectory(url), let mode = bundleMode(at: url) else {
                 continue
             }
+            let isMetadataBacked = mode == "standard" || mode == "staged" || mode == "multimodal_monolithic"
             let identity: (metadataName: String?, sourceModelID: String?, tokenizer: String?) =
-                mode == "standard" || mode == "staged" ? bundleIdentity(at: url) : (nil, nil, nil)
-            let servedName = mode == "standard" || mode == "staged"
+                isMetadataBacked ? bundleIdentity(at: url) : (nil, nil, nil)
+            let servedName = isMetadataBacked
                 ? ModelNameRepair.preferredServedName(
                     directoryName: name,
                     metadataName: identity.metadataName,
@@ -740,7 +783,7 @@ public actor ModelManager {
                     memoryBytes: handles[name]?.memoryBytes,
                     mode: bundle.mode,
                     reasoningSupported: outputFormat(for: name).supportsReasoning,
-                    multimodalSupported: capabilities != nil,
+                    multimodalSupported: capabilities?.routeAvailable ?? false,
                     multimodalCapabilities: capabilities))
         }
 
@@ -930,6 +973,13 @@ public actor ModelManager {
                 #else
                 throw CoreAIPipeline.RuntimeError.runtimeUnavailable
                 #endif
+            } else if Self.isMultimodalMonolithicBundle(at: URL(fileURLWithPath: path, isDirectory: true)) {
+                if verbose {
+                    FileHandle.standardError.write(
+                        Data("[server] loading monolithic multimodal Gemma bundle \(name) for text generation\n".utf8))
+                }
+                let model = try await PersistentModel.load(bundlePath: path, verbose: verbose)
+                return ModelHandle(monolithicMultimodalGemma: model, name: name)
             } else if Self.isTextStagedBundle(at: URL(fileURLWithPath: path, isDirectory: true)) {
                 #if COREAI_RUNTIME
                 let root = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
@@ -1082,7 +1132,8 @@ public actor ModelManager {
     }
 
     static func isLoadableBundle(at root: URL) -> Bool {
-        isDirectLLMBundle(at: root) || isEagleBundle(at: root) || isMultimodalStagedBundle(at: root)
+        isDirectLLMBundle(at: root) || isEagleBundle(at: root)
+            || isMultimodalStagedBundle(at: root) || isMultimodalMonolithicBundle(at: root)
             || isTextStagedBundle(at: root)
     }
 
@@ -1090,6 +1141,7 @@ public actor ModelManager {
         if isEagleBundle(at: root) { return "eagle" }
         if isClassicSpeculativeBundle(at: root) { return "speculative" }
         if isMultimodalStagedBundle(at: root) { return "multimodal_staged" }
+        if isMultimodalMonolithicBundle(at: root) { return "multimodal_monolithic" }
         if isTextStagedBundle(at: root) { return "staged" }
         if isDirectLLMBundle(at: root) { return "standard" }
         return nil
@@ -1232,16 +1284,25 @@ public actor ModelManager {
     }
 
     static func isMultimodalStagedBundle(at root: URL) -> Bool {
-        multimodalMetadata(at: root) != nil
+        stagedMultimodalMetadata(at: root) != nil
     }
 
     static func multimodalCapabilities(at root: URL) -> MultimodalCapabilities? {
-        guard let multimodal = multimodalMetadata(at: root) else { return nil }
-        let softTokens = multimodal["soft_tokens_per_image"] as? Int
-        return .gemma4ImageText(maxSoftTokensPerImage: softTokens)
+        if let multimodal = stagedMultimodalMetadata(at: root) {
+            let softTokens = intValue(multimodal["soft_tokens_per_image"])
+            return .gemma4ImageText(maxSoftTokensPerImage: softTokens)
+        }
+        if let multimodal = monolithicMultimodalMetadata(at: root) {
+            let softTokens = intValue(multimodal["soft_tokens_per_image"]) ?? 280
+            return .gemma4ImageText(
+                maxSoftTokensPerImage: softTokens,
+                backend: "monolithic",
+                routeAvailable: false)
+        }
+        return nil
     }
 
-    private static func multimodalMetadata(at root: URL) -> [String: Any]? {
+    private static func stagedMultimodalMetadata(at root: URL) -> [String: Any]? {
         let manifest = root.appendingPathComponent("stage-manifest.json")
         guard fileExists(manifest),
               let data = readSmallFile(manifest, timeoutSeconds: 0.5),
@@ -1253,12 +1314,65 @@ public actor ModelManager {
         return multimodal
     }
 
+    static func isMultimodalMonolithicBundle(at root: URL) -> Bool {
+        monolithicMultimodalMetadata(at: root) != nil
+    }
+
+    private static func monolithicMultimodalMetadata(at root: URL) -> [String: Any]? {
+        let metadata = root.appendingPathComponent("metadata.json")
+        guard fileExists(metadata),
+              let data = readSmallFile(metadata, timeoutSeconds: 0.5),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              (object["kind"] as? String) == "llm",
+              let multimodal = object["multimodal"] as? [String: Any],
+              let rawKind = multimodal["kind"] as? String
+        else { return nil }
+        let kind = rawKind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard kind == "gemma4_monolithic"
+                || kind == "gemma4_monolithic_multimodal"
+                || kind == "gemma4_image_text_monolithic"
+        else { return nil }
+        guard declaresMonolithicMultimodalPrefill(object: object, multimodal: multimodal) else {
+            return nil
+        }
+        return multimodal
+    }
+
+    private static func declaresMonolithicMultimodalPrefill(
+        object: [String: Any],
+        multimodal: [String: Any]
+    ) -> Bool {
+        if let prefill = multimodal["prefill_function"] as? String,
+           prefill.trimmingCharacters(in: .whitespacesAndNewlines) == "prefill_multimodal" {
+            return true
+        }
+        guard let language = object["language"] as? [String: Any],
+              let functionMap = language["function_map"] as? [String: Any]
+        else { return false }
+        for value in functionMap.values {
+            if let names = value as? [String],
+               names.contains("prefill_multimodal") {
+                return true
+            }
+            if let name = value as? String, name == "prefill_multimodal" {
+                return true
+            }
+        }
+        return false
+    }
+
     static func isTextStagedBundle(at root: URL) -> Bool {
         let manifest = root.appendingPathComponent("stage-manifest.json")
         guard fileExists(manifest), !isMultimodalStagedBundle(at: root) else {
             return false
         }
         return true
+    }
+
+    private static func intValue(_ value: Any?) -> Int? {
+        if let value = value as? Int { return value }
+        if let value = value as? Double { return Int(value) }
+        return nil
     }
 
     static func multimodalEmbedderURL(for root: URL, exportsDir: URL) -> URL? {

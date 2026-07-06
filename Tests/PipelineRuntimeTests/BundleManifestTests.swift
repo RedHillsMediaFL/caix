@@ -67,6 +67,47 @@ final class BundleManifestTests: XCTestCase {
         XCTAssertEqual(bundle.decodeAimodelURL?.lastPathComponent, "decode.aimodel")
     }
 
+    func testMonolithicGemmaMultimodalMetadataDecodes() throws {
+        let data = """
+            {
+              "metadata_version": "0.2",
+              "kind": "llm",
+              "name": "gemma4-e2b-it-mm-monolithic",
+              "assets": {"main": "model.aimodel"},
+              "language": {
+                "tokenizer": "google/gemma-4-e2b-it",
+                "vocab_size": 258944,
+                "max_context_length": 131072,
+                "embedded_tokenizer": true,
+                "function_map": {
+                  "main": ["main"],
+                  "multimodal_prefill": ["prefill_multimodal"]
+                }
+              },
+              "multimodal": {
+                "kind": "gemma4_monolithic",
+                "modalities": ["text", "image"],
+                "max_images": 1,
+                "soft_tokens_per_image": 280,
+                "prefill_function": "prefill_multimodal",
+                "vision_function": "embed_vision",
+                "block_ids_required": true
+              }
+            }
+            """.data(using: .utf8)!
+
+        let manifest = try JSONDecoder().decode(BundleManifest.self, from: data)
+
+        XCTAssertEqual(manifest.multimodal?.kind, "gemma4_monolithic")
+        XCTAssertEqual(manifest.multimodal?.isGemma4Monolithic, true)
+        XCTAssertEqual(manifest.multimodal?.modalities, ["text", "image"])
+        XCTAssertEqual(manifest.multimodal?.maxImages, 1)
+        XCTAssertEqual(manifest.multimodal?.softTokensPerImage, 280)
+        XCTAssertEqual(manifest.multimodal?.prefillFunction, "prefill_multimodal")
+        XCTAssertEqual(manifest.multimodal?.visionFunction, "embed_vision")
+        XCTAssertEqual(manifest.multimodal?.blockIDsRequired, true)
+    }
+
     func testStandardQwenKeepsZeroFloorWithoutRegistry() throws {
         let root = try makeBundle(
             name: "qwen3-4b-coreai",

@@ -142,6 +142,8 @@ final class ModelManagerTests: XCTestCase {
         XCTAssertEqual(row.mode, "multimodal_staged")
         XCTAssertEqual(row.multimodalSupported, true)
         XCTAssertEqual(row.multimodalCapabilities?.family, "gemma4")
+        XCTAssertEqual(row.multimodalCapabilities?.backend, "staged")
+        XCTAssertEqual(row.multimodalCapabilities?.routeAvailable, true)
         XCTAssertEqual(row.multimodalCapabilities?.supportedModalities, ["image", "text"])
         XCTAssertEqual(row.multimodalCapabilities?.maxImages, 1)
         XCTAssertEqual(row.multimodalCapabilities?.imageSourceTypes, ["base64", "data_url"])
@@ -150,6 +152,33 @@ final class ModelManagerTests: XCTestCase {
         XCTAssertTrue(row.multimodalCapabilities?.unsupportedFeatures.contains("audio") == true)
         XCTAssertTrue(row.multimodalCapabilities?.unsupportedFeatures.contains("video") == true)
         XCTAssertTrue(row.multimodalCapabilities?.unsupportedFeatures.contains("remote_image_urls") == true)
+    }
+
+    func testMonolithicGemmaMultimodalBundleIsListedSeparatelyButBlockedForImageRoute() async throws {
+        let root = try makeTempDir()
+        let exports = root.appendingPathComponent("exports", isDirectory: true)
+        let registry = root.appendingPathComponent("models/registry.json")
+        try FileManager.default.createDirectory(
+            at: registry.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try #"{"models":{}}"#.write(to: registry, atomically: true, encoding: .utf8)
+
+        try writeMonolithicMultimodalGemmaBundle(
+            at: exports.appendingPathComponent("gemma4-e2b-it-mm-monolithic", isDirectory: true),
+            name: "gemma4-e2b-it-mm-monolithic")
+
+        let manager = ModelManager(exportsDir: exports, registryPath: registry)
+        let rows = await manager.listModels()
+
+        let row = try XCTUnwrap(rows.first { $0.name == "gemma4-e2b-it-mm-monolithic" })
+        XCTAssertEqual(row.mode, "multimodal_monolithic")
+        XCTAssertEqual(row.multimodalSupported, false)
+        XCTAssertEqual(row.multimodalCapabilities?.family, "gemma4")
+        XCTAssertEqual(row.multimodalCapabilities?.backend, "monolithic")
+        XCTAssertEqual(row.multimodalCapabilities?.routeAvailable, false)
+        XCTAssertEqual(row.multimodalCapabilities?.maxSoftTokensPerImage, 280)
+        XCTAssertTrue(
+            row.multimodalCapabilities?.unsupportedFeatures.contains("monolithic_prefill_runtime")
+                == true)
     }
 
     func testEagleTargetDraftPackageIsListedAsEagle() async throws {
@@ -274,6 +303,37 @@ final class ModelManagerTests: XCTestCase {
                 to: root.appendingPathComponent("stage-manifest.json"),
                 atomically: true,
                 encoding: .utf8)
+    }
+
+    private func writeMonolithicMultimodalGemmaBundle(at root: URL, name: String) throws {
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try """
+            {
+              "metadata_version": "0.2",
+              "kind": "llm",
+              "name": "\(name)",
+              "assets": {"main": "\(name).aimodel"},
+              "language": {
+                "tokenizer": "google/gemma-4-e2b-it",
+                "vocab_size": 258944,
+                "max_context_length": 131072,
+                "embedded_tokenizer": true,
+                "function_map": {
+                  "main": ["main"],
+                  "multimodal_prefill": ["prefill_multimodal"]
+                }
+              },
+              "multimodal": {
+                "kind": "gemma4_monolithic",
+                "modalities": ["text", "image"],
+                "max_images": 1,
+                "soft_tokens_per_image": 280,
+                "prefill_function": "prefill_multimodal",
+                "vision_function": "embed_vision",
+                "block_ids_required": true
+              }
+            }
+            """.write(to: root.appendingPathComponent("metadata.json"), atomically: true, encoding: .utf8)
     }
 
     private func makeTempDir() throws -> URL {

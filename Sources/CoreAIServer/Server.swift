@@ -1410,7 +1410,7 @@ final class ServerRuntime: Sendable {
         guard gen.hasMultimodalContent else { return nil }
         guard let capabilities = backendMultimodalCapabilities else {
             return JSONResponder.error(
-                "multimodal input requires a loaded multimodal staged Gemma backend; resolved backend is text-only",
+                "multimodal input requires a loaded multimodal Gemma backend; resolved backend is text-only",
                 status: .badRequest)
         }
         if let error = MultimodalRequestSupport.validateMinimalSingleImageRequest(

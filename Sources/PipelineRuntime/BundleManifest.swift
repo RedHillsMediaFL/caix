@@ -82,6 +82,56 @@ public struct BundleManifest: Codable, Sendable {
         }
     }
 
+    /// Optional image/audio/video capability block. For Gemma 4 monolithic image-text bundles this
+    /// records the non-staged multimodal ABI so the server can route the bundle explicitly instead
+    /// of treating it as a plain text LLM.
+    public struct Multimodal: Codable, Sendable {
+        public let kind: String
+        public let modalities: [String]?
+        public let maxImages: Int?
+        public let softTokensPerImage: Int?
+        public let prefillFunction: String?
+        public let visionFunction: String?
+        public let embedderAsset: String?
+        public let embedderAssetPath: String?
+        public let blockIDsRequired: Bool?
+
+        enum CodingKeys: String, CodingKey {
+            case kind
+            case modalities
+            case maxImages = "max_images"
+            case softTokensPerImage = "soft_tokens_per_image"
+            case prefillFunction = "prefill_function"
+            case visionFunction = "vision_function"
+            case embedderAsset = "embedder_asset"
+            case embedderAssetPath = "embedder_asset_path"
+            case blockIDsRequired = "block_ids_required"
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            self.kind = try c.decode(String.self, forKey: .kind)
+            self.modalities = try c.decodeIfPresent([String].self, forKey: .modalities)
+            self.maxImages = try c.decodeIfPresent(Int.self, forKey: .maxImages)
+            self.softTokensPerImage = try c.decodeIfPresent(Int.self, forKey: .softTokensPerImage)
+            self.prefillFunction = try c.decodeIfPresent(String.self, forKey: .prefillFunction)
+            self.visionFunction = try c.decodeIfPresent(String.self, forKey: .visionFunction)
+            self.embedderAsset = try c.decodeIfPresent(String.self, forKey: .embedderAsset)
+            self.embedderAssetPath = try c.decodeIfPresent(String.self, forKey: .embedderAssetPath)
+            self.blockIDsRequired = try c.decodeIfPresent(Bool.self, forKey: .blockIDsRequired)
+        }
+
+        public var normalizedKind: String {
+            kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }
+
+        public var isGemma4Monolithic: Bool {
+            normalizedKind == "gemma4_monolithic"
+                || normalizedKind == "gemma4_monolithic_multimodal"
+                || normalizedKind == "gemma4_image_text_monolithic"
+        }
+    }
+
     /// `source` block of `metadata.json` (provenance). Used to map an exported bundle back to its
     /// `models/registry.json` entry (by `hf_model_id` == registry `hf_repo`).
     public struct Source: Codable, Sendable {
@@ -99,6 +149,7 @@ public struct BundleManifest: Codable, Sendable {
     /// Tokenizer/vocab block. Always present for `llm` bundles; diffusion bundles may omit it
     /// (vocab is then read from the `diffusion` block), so it's optional.
     public let language: Language?
+    public let multimodal: Multimodal?
     public let source: Source?
 
     public init(from decoder: Decoder) throws {
@@ -108,6 +159,7 @@ public struct BundleManifest: Codable, Sendable {
         self.name = try c.decodeIfPresent(String.self, forKey: .name) ?? "legacy-coreai-asset"
         self.assets = try c.decodeIfPresent(Assets.self, forKey: .assets) ?? Assets(byName: ["main": "."])
         self.language = try c.decodeIfPresent(Language.self, forKey: .language)
+        self.multimodal = try c.decodeIfPresent(Multimodal.self, forKey: .multimodal)
         self.source = try c.decodeIfPresent(Source.self, forKey: .source)
     }
 
@@ -117,6 +169,7 @@ public struct BundleManifest: Codable, Sendable {
         case name
         case assets
         case language
+        case multimodal
         case source
     }
 }
