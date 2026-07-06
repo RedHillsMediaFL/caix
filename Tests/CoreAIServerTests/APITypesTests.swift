@@ -237,6 +237,75 @@ final class APITypesTests: XCTestCase {
                 backendSupportsMultimodalInput: true))
     }
 
+    func testServerRejectsAudioVideoAndMultipleImagesOnMultimodalBackend() throws {
+        let audioVideo = GenerationRequest(
+            model: "local",
+            messages: [
+                ChatMessage(
+                    role: "user",
+                    content: "Describe these.",
+                    media: [
+                        MediaPart(
+                            type: "input_audio",
+                            payload: .object(["input_audio": .object(["data": .string("abc")])])),
+                        MediaPart(
+                            type: "video_url",
+                            payload: .object(["video_url": .object(["url": .string("data:video/mp4;base64,abc")])])),
+                    ])
+            ])
+        let audioVideoResponse = try XCTUnwrap(
+            ServerRuntime.rejectMultimodalIfNeeded(
+                audioVideo,
+                backendMultimodalCapabilities: .gemma4ImageText()))
+        XCTAssertEqual(audioVideoResponse.status.code, 400)
+
+        let multipleImages = GenerationRequest(
+            model: "local",
+            messages: [
+                ChatMessage(
+                    role: "user",
+                    content: "Compare.",
+                    media: [
+                        MediaPart(
+                            type: "image_url",
+                            payload: .object(["image_url": .object(["url": .string("data:image/png;base64,aGVsbG8=")])])),
+                        MediaPart(
+                            type: "image_url",
+                            payload: .object(["image_url": .object(["url": .string("data:image/png;base64,aGVsbG8=")])])),
+                    ])
+            ])
+        let multipleImageResponse = try XCTUnwrap(
+            ServerRuntime.rejectMultimodalIfNeeded(
+                multipleImages,
+                backendMultimodalCapabilities: .gemma4ImageText()))
+        XCTAssertEqual(multipleImageResponse.status.code, 400)
+    }
+
+    func testMultimodalRequestRejectsRemoteImageURLs() {
+        let generation = GenerationRequest(
+            model: "local",
+            messages: [
+                ChatMessage(
+                    role: "user",
+                    content: "Describe this.",
+                    media: [
+                        MediaPart(
+                            type: "image_url",
+                            payload: .object([
+                                "type": .string("image_url"),
+                                "image_url": .object(["url": .string("https://example.com/image.png")]),
+                            ]))
+                    ])
+            ])
+
+        let error = MultimodalRequestSupport.validateMinimalSingleImageRequest(
+            generation,
+            capabilities: .gemma4ImageText())
+        XCTAssertEqual(
+            error?.description,
+            "remote image URLs are not supported; send a base64 data URL")
+    }
+
     func testServerRejectsStructuredResponseFormatBeforeRuntime() throws {
         let generation = GenerationRequest(
             model: "local",

@@ -123,6 +123,35 @@ final class ModelManagerTests: XCTestCase {
         XCTAssertEqual(plain.reasoningSupported, false)
     }
 
+    func testMultimodalStagedBundleReportsImageCapabilities() async throws {
+        let root = try makeTempDir()
+        let exports = root.appendingPathComponent("exports", isDirectory: true)
+        let registry = root.appendingPathComponent("models/registry.json")
+        try FileManager.default.createDirectory(
+            at: registry.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try #"{"models":{}}"#.write(to: registry, atomically: true, encoding: .utf8)
+
+        try writeMultimodalStagedBundle(
+            at: exports.appendingPathComponent("gemma4-e2b-it-mm-staged", isDirectory: true),
+            name: "gemma4-e2b-it-mm-staged")
+
+        let manager = ModelManager(exportsDir: exports, registryPath: registry)
+        let rows = await manager.listModels()
+
+        let row = try XCTUnwrap(rows.first { $0.name == "gemma4-e2b-it-mm-staged" })
+        XCTAssertEqual(row.mode, "multimodal_staged")
+        XCTAssertEqual(row.multimodalSupported, true)
+        XCTAssertEqual(row.multimodalCapabilities?.family, "gemma4")
+        XCTAssertEqual(row.multimodalCapabilities?.supportedModalities, ["image", "text"])
+        XCTAssertEqual(row.multimodalCapabilities?.maxImages, 1)
+        XCTAssertEqual(row.multimodalCapabilities?.imageSourceTypes, ["base64", "data_url"])
+        XCTAssertEqual(row.multimodalCapabilities?.maxSoftTokensPerImage, 280)
+        XCTAssertEqual(row.multimodalCapabilities?.supportedDecoding, ["greedy"])
+        XCTAssertTrue(row.multimodalCapabilities?.unsupportedFeatures.contains("audio") == true)
+        XCTAssertTrue(row.multimodalCapabilities?.unsupportedFeatures.contains("video") == true)
+        XCTAssertTrue(row.multimodalCapabilities?.unsupportedFeatures.contains("remote_image_urls") == true)
+    }
+
     func testEagleTargetDraftPackageIsListedAsEagle() async throws {
         let root = try makeTempDir()
         let exports = root.appendingPathComponent("exports", isDirectory: true)
@@ -224,6 +253,27 @@ final class ModelManagerTests: XCTestCase {
                 atomically: true,
                 encoding: .utf8)
         }
+    }
+
+    private func writeMultimodalStagedBundle(at root: URL, name: String) throws {
+        try writeBundle(at: root, name: name)
+        try """
+            {
+              "schema": "caix.cluster.stage_manifest.v0",
+              "model": "\(name)",
+              "position_mode": "full_prefix",
+              "stages": [],
+              "multimodal": {
+                "kind": "gemma4",
+                "soft_tokens_per_image": 280,
+                "embedder_asset": "gemma4-mm-embedder_float32.aimodel",
+                "block_ids_required": false
+              }
+            }
+            """.write(
+                to: root.appendingPathComponent("stage-manifest.json"),
+                atomically: true,
+                encoding: .utf8)
     }
 
     private func makeTempDir() throws -> URL {

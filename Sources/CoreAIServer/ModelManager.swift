@@ -12,6 +12,54 @@ import Glibc
 /// additive field carrying the resident footprint of loaded models (ignored by the dashboard).
 /// `reasoningSupported` is derived from bundle tokenizer markers and does not require model load.
 /// `multimodalSupported` is true for bundles that can accept the currently supported image route.
+public struct MultimodalCapabilities: Codable, Sendable, Equatable {
+    public var family: String
+    public var supportedModalities: [String]
+    public var maxImages: Int
+    public var imageSourceTypes: [String]
+    public var maxSoftTokensPerImage: Int?
+    public var supportedDecoding: [String]
+    public var unsupportedFeatures: [String]
+
+    public init(
+        family: String,
+        supportedModalities: [String],
+        maxImages: Int,
+        imageSourceTypes: [String],
+        maxSoftTokensPerImage: Int?,
+        supportedDecoding: [String],
+        unsupportedFeatures: [String]
+    ) {
+        self.family = family
+        self.supportedModalities = supportedModalities
+        self.maxImages = maxImages
+        self.imageSourceTypes = imageSourceTypes
+        self.maxSoftTokensPerImage = maxSoftTokensPerImage
+        self.supportedDecoding = supportedDecoding
+        self.unsupportedFeatures = unsupportedFeatures
+    }
+
+    public static func gemma4ImageText(maxSoftTokensPerImage: Int? = nil) -> MultimodalCapabilities {
+        MultimodalCapabilities(
+            family: "gemma4",
+            supportedModalities: ["image", "text"],
+            maxImages: 1,
+            imageSourceTypes: ["base64", "data_url"],
+            maxSoftTokensPerImage: maxSoftTokensPerImage,
+            supportedDecoding: ["greedy"],
+            unsupportedFeatures: [
+                "audio",
+                "video",
+                "files",
+                "remote_image_urls",
+                "multiple_images",
+                "tools",
+                "response_format",
+                "non_greedy_decoding",
+            ])
+    }
+}
+
 public struct ModelEntry: Codable, Sendable {
     public var name: String
     public var params: String
@@ -21,6 +69,7 @@ public struct ModelEntry: Codable, Sendable {
     public var mode: String?
     public var reasoningSupported: Bool?
     public var multimodalSupported: Bool?
+    public var multimodalCapabilities: MultimodalCapabilities?
 }
 
 public enum ModelSuitability: Sendable {
@@ -221,11 +270,16 @@ final class ModelHandle: @unchecked Sendable {
 
     var name: String { displayName }
     var memoryBytes: UInt64 { bytes }
-    var supportsMultimodalInput: Bool {
+    var multimodalCapabilities: MultimodalCapabilities? {
         #if COREAI_RUNTIME
-        if case .multimodalStaged = backend { return true }
+        if case .multimodalStaged = backend {
+            return .gemma4ImageText(maxSoftTokensPerImage: Gemma4MultimodalProcessor.maxSoftTokens)
+        }
         #endif
-        return false
+        return nil
+    }
+    var supportsMultimodalInput: Bool {
+        multimodalCapabilities != nil
     }
     var supportsConstrainedDecoding: Bool {
         switch backend {
@@ -392,8 +446,14 @@ enum MultimodalRequestSupport {
         }
     }
 
-    static func validateMinimalSingleImageRequest(_ request: GenerationRequest) -> RequestError? {
+    static func validateMinimalSingleImageRequest(
+        _ request: GenerationRequest,
+        capabilities: MultimodalCapabilities = .gemma4ImageText()
+    ) -> RequestError? {
         guard request.hasMultimodalContent else { return nil }
+        guard capabilities.supportedModalities.contains("image"), capabilities.maxImages == 1 else {
+            return .unsupported("resolved multimodal backend does not support single-image generation")
+        }
         if let tools = request.tools, !tools.isEmpty {
             return .unsupported("tools are not supported on the multimodal route yet")
         }
@@ -660,7 +720,8 @@ public actor ModelManager {
                     status: loaded ? "loaded" : "available", bundle: true,
                     memoryBytes: handles[cfg.name]?.memoryBytes, mode: "eagle",
                     reasoningSupported: outputFormat(for: cfg.name).supportsReasoning,
-                    multimodalSupported: false))
+                    multimodalSupported: false,
+                    multimodalCapabilities: nil))
         }
 
         for bundle in bundleEntries() {
@@ -668,6 +729,8 @@ public actor ModelManager {
             if seen.contains(Self.normalize(name)) { continue }
             seen.insert(Self.normalize(name))
             let loaded = handles[name] != nil
+            let capabilities = Self.multimodalCapabilities(
+                at: exportsDir.appendingPathComponent(bundle.directoryName, isDirectory: true))
             entries.append(
                 ModelEntry(
                     name: name,
@@ -677,7 +740,8 @@ public actor ModelManager {
                     memoryBytes: handles[name]?.memoryBytes,
                     mode: bundle.mode,
                     reasoningSupported: outputFormat(for: name).supportsReasoning,
-                    multimodalSupported: bundle.mode == "multimodal_staged"))
+                    multimodalSupported: capabilities != nil,
+                    multimodalCapabilities: capabilities))
         }
 
         for (key, params) in registryModels() {
@@ -689,7 +753,8 @@ public actor ModelManager {
                 ModelEntry(
                     name: key, params: params, status: "available", bundle: false,
                     memoryBytes: nil, mode: "registry", reasoningSupported: nil,
-                    multimodalSupported: nil))
+                    multimodalSupported: nil,
+                    multimodalCapabilities: nil))
         }
         return entries
     }
@@ -1167,6 +1232,16 @@ public actor ModelManager {
     }
 
     static func isMultimodalStagedBundle(at root: URL) -> Bool {
+        multimodalMetadata(at: root) != nil
+    }
+
+    static func multimodalCapabilities(at root: URL) -> MultimodalCapabilities? {
+        guard let multimodal = multimodalMetadata(at: root) else { return nil }
+        let softTokens = multimodal["soft_tokens_per_image"] as? Int
+        return .gemma4ImageText(maxSoftTokensPerImage: softTokens)
+    }
+
+    private static func multimodalMetadata(at root: URL) -> [String: Any]? {
         let manifest = root.appendingPathComponent("stage-manifest.json")
         guard fileExists(manifest),
               let data = readSmallFile(manifest, timeoutSeconds: 0.5),
@@ -1174,8 +1249,8 @@ public actor ModelManager {
               let multimodal = object["multimodal"] as? [String: Any],
               let kind = multimodal["kind"] as? String,
               kind == "gemma4_unified" || kind == "gemma4"
-        else { return false }
-        return true
+        else { return nil }
+        return multimodal
     }
 
     static func isTextStagedBundle(at root: URL) -> Bool {

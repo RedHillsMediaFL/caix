@@ -1391,21 +1391,33 @@ final class ServerRuntime: Sendable {
     ) -> Response? {
         rejectMultimodalIfNeeded(
             gen,
-            backendSupportsMultimodalInput: handle.supportsMultimodalInput)
+            backendMultimodalCapabilities: handle.multimodalCapabilities)
     }
 
     static func rejectMultimodalIfNeeded(
         _ gen: GenerationRequest,
         backendSupportsMultimodalInput: Bool
     ) -> Response? {
+        rejectMultimodalIfNeeded(
+            gen,
+            backendMultimodalCapabilities: backendSupportsMultimodalInput ? .gemma4ImageText() : nil)
+    }
+
+    static func rejectMultimodalIfNeeded(
+        _ gen: GenerationRequest,
+        backendMultimodalCapabilities: MultimodalCapabilities?
+    ) -> Response? {
         guard gen.hasMultimodalContent else { return nil }
-        if let error = MultimodalRequestSupport.validateMinimalSingleImageRequest(gen) {
-            return JSONResponder.error(error.description, status: .badRequest)
-        }
-        guard backendSupportsMultimodalInput else {
+        guard let capabilities = backendMultimodalCapabilities else {
             return JSONResponder.error(
                 "multimodal input requires a loaded multimodal staged Gemma backend; resolved backend is text-only",
                 status: .badRequest)
+        }
+        if let error = MultimodalRequestSupport.validateMinimalSingleImageRequest(
+            gen,
+            capabilities: capabilities)
+        {
+            return JSONResponder.error(error.description, status: .badRequest)
         }
         return nil
     }
