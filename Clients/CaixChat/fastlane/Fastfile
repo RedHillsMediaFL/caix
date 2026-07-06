@@ -1,0 +1,235 @@
+default_platform(:ios)
+
+APP_NAME = "CAIX Chat"
+BUNDLE_ID = "com.redhillsmediafl.CaixChat"
+SKU = "caix-chat-ios-0001"
+PRIMARY_LOCALE = "en-US"
+VERSION = "0.1"
+TEAM_ID = "34UZ7Y2KSW"
+BUILD_NUMBER = "1"
+INTERNAL_GROUP_NAME = "Internal Testers"
+INTERNAL_TESTER_FIRST_NAME = "Internal"
+INTERNAL_TESTER_LAST_NAME = "Tester"
+
+def env_value(name, fallback = nil)
+  value = ENV[name]
+  return value unless value.to_s.strip.empty?
+
+  fallback
+end
+
+def required_env(name)
+  value = env_value(name)
+  UI.user_error!("Missing #{name}") if value.nil?
+
+  value
+end
+
+def fastlane_username
+  env_value("FASTLANE_USER", env_value("APPLE_ID", env_value("APP_STORE_CONNECT_USERNAME")))
+end
+
+def configure_app_store_connect_api_key
+  app_store_connect_api_key(
+    key_id: required_env("ASC_KEY_ID"),
+    issuer_id: required_env("ASC_ISSUER_ID"),
+    key_filepath: required_env("ASC_KEY_PATH"),
+    duration: 1200,
+    in_house: false
+  )
+end
+
+def internal_testing_active?(build)
+  state = build.build_beta_detail&.internal_build_state
+  state == Spaceship::ConnectAPI::BuildBetaDetail::InternalState::READY_FOR_BETA_TESTING ||
+    state == Spaceship::ConnectAPI::BuildBetaDetail::InternalState::IN_BETA_TESTING
+end
+
+def create_internal_beta_group(app, group_name)
+  body = {
+    data: {
+      type: "betaGroups",
+      attributes: {
+        name: group_name,
+        isInternalGroup: true,
+        hasAccessToAllBuilds: true
+      },
+      relationships: {
+        app: {
+          data: {
+            type: "apps",
+            id: app.id
+          }
+        }
+      }
+    }
+  }
+
+  Spaceship::ConnectAPI.client.test_flight_request_client.post("v1/betaGroups", body).to_models.first
+end
+
+def create_beta_tester(email, first_name, last_name, beta_group_id)
+  body = {
+    data: {
+      type: "betaTesters",
+      attributes: {
+        email: email,
+        firstName: first_name,
+        lastName: last_name
+      },
+      relationships: {
+        betaGroups: {
+          data: [
+            {
+              type: "betaGroups",
+              id: beta_group_id
+            }
+          ]
+        }
+      }
+    }
+  }
+
+  Spaceship::ConnectAPI.client.test_flight_request_client.post("v1/betaTesters", body).to_models.first
+end
+
+platform :ios do
+  desc "Ensure the Bundle ID and App Store Connect app record exist"
+  lane :ensure_app_record do
+    configure_app_store_connect_api_key
+
+    require "spaceship/connect_api"
+
+    app_name = env_value("APP_NAME", APP_NAME)
+    bundle_identifier = env_value("BUNDLE_ID", BUNDLE_ID)
+    sku = env_value("APP_SKU", SKU)
+    primary_locale = env_value("APP_PRIMARY_LOCALE", PRIMARY_LOCALE)
+    version = env_value("APP_VERSION", VERSION)
+    team_id = env_value("TEAM_ID", TEAM_ID)
+
+    bundle = Spaceship::ConnectAPI::BundleId.find(bundle_identifier)
+    if bundle
+      UI.success("Bundle ID #{bundle_identifier} exists")
+    else
+      UI.message("Creating Bundle ID #{bundle_identifier}")
+      bundle = Spaceship::ConnectAPI::BundleId.create(
+        name: app_name,
+        platform: Spaceship::ConnectAPI::BundleIdPlatform::IOS,
+        identifier: bundle_identifier,
+        seed_id: team_id
+      )
+      UI.success("Created Bundle ID #{bundle_identifier} (#{bundle.id})")
+    end
+
+    app = Spaceship::ConnectAPI::App.find(bundle_identifier)
+    if app
+      UI.success("App Store Connect app #{bundle_identifier} exists (#{app.id})")
+      next app.id
+    end
+
+    username = fastlane_username
+    if username.nil?
+      UI.user_error!(<<~MESSAGE)
+        App Store Connect app record #{bundle_identifier} is missing.
+
+        Apple allows this creation path through Fastlane produce, but not through App Store Connect API-key auth.
+        Rerun with FASTLANE_USER, APPLE_ID, or APP_STORE_CONNECT_USERNAME set so Fastlane can use an Apple ID web session.
+      MESSAGE
+    end
+
+    UI.message("Creating App Store Connect app #{app_name} (#{bundle_identifier}) via fastlane produce")
+    produce(
+      username: username,
+      app_identifier: bundle_identifier,
+      app_name: app_name,
+      app_version: version,
+      sku: sku,
+      platform: "ios",
+      language: primary_locale,
+      skip_devcenter: true,
+      team_id: team_id
+    )
+
+    app = Spaceship::ConnectAPI::App.find(bundle_identifier)
+
+    UI.user_error!("Created app record was not visible after waiting") unless app
+
+    UI.success("Created App Store Connect app #{bundle_identifier} (#{app.id})")
+    app.id
+  end
+
+  desc "Assign the uploaded build to the internal TestFlight tester"
+  lane :assign_internal_testflight do
+    configure_app_store_connect_api_key
+
+    require "spaceship/connect_api"
+
+    bundle_identifier = env_value("BUNDLE_ID", BUNDLE_ID)
+    version = env_value("APP_VERSION", VERSION)
+    build_number = env_value("APP_BUILD_NUMBER", BUILD_NUMBER)
+    group_name = env_value("INTERNAL_GROUP_NAME", INTERNAL_GROUP_NAME)
+    tester_email = required_env("INTERNAL_TESTER_EMAIL")
+    tester_first_name = env_value("INTERNAL_TESTER_FIRST_NAME", INTERNAL_TESTER_FIRST_NAME)
+    tester_last_name = env_value("INTERNAL_TESTER_LAST_NAME", INTERNAL_TESTER_LAST_NAME)
+
+    app = Spaceship::ConnectAPI::App.find(bundle_identifier)
+    UI.user_error!("App Store Connect app #{bundle_identifier} was not found") unless app
+
+    build = nil
+    90.times do
+      build = Spaceship::ConnectAPI::Build.all(
+        app_id: app.id,
+        version: version,
+        build_number: build_number,
+        platform: Spaceship::ConnectAPI::Platform::IOS,
+        includes: "app,buildBetaDetail,preReleaseVersion,individualTesters",
+        limit: 10
+      ).first
+      break if build
+
+      UI.message("Waiting for build #{version} (#{build_number}) to appear in App Store Connect...")
+      sleep(10)
+    end
+    UI.user_error!("Build #{version} (#{build_number}) was not found") unless build
+
+    if build.uses_non_exempt_encryption.nil? || build.missing_export_compliance?
+      UI.message("Setting export compliance for build #{version} (#{build_number})")
+      Spaceship::ConnectAPI.patch_builds(build_id: build.id, attributes: { usesNonExemptEncryption: false })
+    end
+
+    90.times do
+      build = Spaceship::ConnectAPI::Build.get(
+        build_id: build.id,
+        includes: "app,buildBetaDetail,preReleaseVersion,individualTesters"
+      )
+      break if internal_testing_active?(build)
+
+      UI.message("Waiting for build #{version} (#{build_number}) to become ready for internal testing...")
+      sleep(10)
+    end
+    UI.user_error!("Build #{version} (#{build_number}) is not ready for internal testing") unless internal_testing_active?(build)
+
+    groups = app.get_beta_groups(includes: "betaTesters", limit: 200)
+    group = groups.find { |candidate| candidate.is_internal_group && candidate.name == group_name } ||
+            groups.find(&:is_internal_group)
+    group ||= create_internal_beta_group(app, group_name)
+    UI.success("Internal TestFlight group: #{group.name}")
+
+    tester = app.get_beta_testers(
+      filter: { email: tester_email },
+      includes: "apps,betaGroups,builds",
+      limit: 20
+    ).first
+    tester ||= create_beta_tester(tester_email, tester_first_name, tester_last_name, group.id)
+
+    member_group_ids = (tester.beta_groups || []).map(&:id)
+    group.add_beta_testers(beta_tester_ids: [tester.id]) unless member_group_ids.include?(group.id)
+
+    tester_build_ids = (tester.builds || []).map(&:id)
+    unless tester_build_ids.include?(build.id)
+      Spaceship::ConnectAPI.add_beta_testers_to_build(build_id: build.id, beta_tester_ids: [tester.id])
+    end
+
+    UI.success("Assigned #{tester_email} to TestFlight build #{version} (#{build_number})")
+  end
+end
