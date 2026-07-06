@@ -3,6 +3,10 @@
 dist/
 *.o
 *.swiftmodule
+Clients/*/build/
+fastlane/report.xml
+Clients/*/fastlane/README.md
+Clients/*/fastlane/report.xml
 __pycache__/
 *.pyc
 

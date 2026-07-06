@@ -30,8 +30,6 @@ trap 'rm -f "$tmp"; rm -rf "$bundle_tmp"' EXIT
 python3 "$SCRIPT_DIR/perf/ceiling.py" \
   --assumptions "$REPO_DIR/benchmarks/CEILING_ASSUMPTIONS.tsv" \
   --manifest "$REPO_DIR/benchmarks/MANIFEST.tsv" \
-  --require-estimate qwen3-4b-coreai \
-  --require-estimate gemma-4-26b-a4b-coreai \
   --out "$tmp"
 
 if ! cmp -s "$tmp" "$REPO_DIR/benchmarks/CEILINGS.md"; then

@@ -13,13 +13,10 @@ Current state:
 
 ## Current Tap Path
 
-Create `RedHillsMediaFL/homebrew-caix` with:
-
-```text
-Formula/caix.rb
-```
-
-Copy this repo's `Formula/caix.rb` there.
+The public tap repository is `RedHillsMediaFL/homebrew-caix`; users address it as
+`RedHillsMediaFL/caix`. The `Formula/caix.rb` in this repository is the source/template for tap
+updates. For a versioned release, update the tap clone's `Formula/caix.rb` with the GitHub release
+tarball URL and SHA-256, then push the tap after the release asset exists.
 
 Current install or upgrade:
 
@@ -37,18 +34,20 @@ For a verified `0.x` release:
 
 1. Update the version in `Sources/PipelineCLI/BuildInfo.swift`, `scripts/package.sh`, and `Formula/caix.rb`.
 2. Run `scripts/check-version-sync.sh`.
-3. Run `scripts/check-release-version.sh v0.2.0-beta`. The local publication gate runs
+3. Run `scripts/check-release-version.sh v<version>` (for example, `v0.2.13-beta`). The local publication gate runs
    `scripts/check-release-version-contract.sh` so the Core AI beta version policy stays fixture-tested.
-4. Build `caix-<version>-macos-arm64.tar.gz` with `scripts/package.sh <version>`.
+4. Build `caix-<version>-macos-arm64.tar.gz` with
+   `TMPDIR=/Volumes/SSD/caix/.tmp/coreai-tmp scripts/package.sh <version>`.
 5. Cut a release tag below `v1.0.0`.
 6. Upload the tarball.
-7. Update the tap formula with the release URL and SHA-256. The formula can install the packaged
-   `bin/caix` binary for a versioned release or build from source for `--HEAD`.
+7. Update the tap formula with the release URL and the SHA-256 from
+   `dist/caix-<version>-macos-arm64.tar.gz.sha256`. The formula can install the packaged `bin/caix`
+   binary for a versioned release or build from source for `--HEAD`.
 8. Test:
 
 ```bash
 brew audit --strict --online caix
-brew install caix
+brew install redhillsmediafl/caix/caix
 brew test caix
 caix doctor
 caix_prefix="$(brew --prefix caix)"
@@ -56,17 +55,24 @@ caix_prefix="$(brew --prefix caix)"
   --manifest "$caix_prefix/share/caix/examples/cluster-stage-manifest.json"
 ```
 
-When those pass, document this as the first install command:
+`scripts/package.sh` stages under `$TMPDIR` and defaults to `.tmp/coreai-tmp` in the caix checkout
+when `TMPDIR` is unset or points at macOS system temp (`/tmp`, `/private/tmp`, or
+`/var/folders/...`). It also writes `dist/caix-<version>-macos-arm64.tar.gz.sha256`.
+`scripts/check-package-contract.sh` fixture-tests that release-packaging temp and digest policy
+without building a package, and publication gates run it.
+
+Public docs and model cards should use the versioned tap install path:
 
 ```bash
 brew tap RedHillsMediaFL/caix
-brew install caix
+brew install redhillsmediafl/caix/caix
 caix doctor
 ```
 
 ## Local MacBook Tarball Test
 
-Before a public tap release exists, copy these package outputs to the MacBook:
+Before pushing a new public tap formula, test the candidate tarball through a local tap by copying
+these package outputs to the MacBook:
 
 ```text
 dist/caix-<version>-macos-arm64.tar.gz
@@ -103,9 +109,10 @@ doctor`. No marketing copy.
 
 ## MacBook Distributed POC Prep
 
-Temporary Studio-only overlay, 2026-07-03: the MacBook is unavailable, so this section is a later
-hardware runbook, not tonight's action list. Do not run these checks, copy staged bundles, or claim
-distributed readiness until the second machine is reachable again.
+The earlier Studio-only overlay is superseded: the MacBook path is available, and Brew-installed
+`caix` has been used for versioned release and staged two-machine validation. Treat this section as
+the reusable hardware checklist for each new distributed claim; rerun it instead of relying on prior
+captures.
 
 Use the Brew-installed binary only. Do not use checkout binaries for MacBook validation.
 

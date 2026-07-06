@@ -7,6 +7,8 @@ Usage: scripts/check-publication-gates.sh [--hub] [--distributed] [--strict-benc
 
 Runs the non-heavy gates for publishing docs, cards, manifests, and benchmark evidence.
 Default checks are local only. --hub adds Hugging Face metadata/model-card checks.
+Requires a local benchmarks/revisions.tsv; run scripts/collect-model-revisions.sh first.
+Uses .tmp/coreai-tmp when TMPDIR is unset or points at macOS system temp.
 --distributed checks the Thunderbolt readiness gate and implies --strict-evidence.
 --strict-benchmark-gaps fails when an eligible benchmark manifest row lacks raw evidence.
 --strict-evidence requires tracked distributed evidence files.
@@ -15,6 +17,18 @@ USAGE
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+DEFAULT_TMPDIR="$REPO_DIR/.tmp/coreai-tmp"
+is_system_tmpdir() {
+  case "${1%/}" in
+    /tmp|/private/tmp|/var/folders/*|/private/var/folders/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+if [[ -z "${TMPDIR:-}" ]] || is_system_tmpdir "$TMPDIR"; then
+  mkdir -p "$DEFAULT_TMPDIR"
+  export TMPDIR="$DEFAULT_TMPDIR"
+fi
+mkdir -p "${TMPDIR%/}"
 RUN_HUB=0
 RUN_DISTRIBUTED=0
 STRICT_BENCHMARK_GAPS=0
@@ -63,6 +77,7 @@ run "$SCRIPT_DIR/check-structured-output-release-readiness-contract.sh"
 run "$SCRIPT_DIR/check-public-copy.sh"
 run "$SCRIPT_DIR/check-release-version-contract.sh"
 run "$SCRIPT_DIR/check-version-sync.sh"
+run "$SCRIPT_DIR/check-package-contract.sh"
 run "$SCRIPT_DIR/check-catalog-install-locks.sh"
 run "$SCRIPT_DIR/check-disk-pressure-guard.sh"
 run "$SCRIPT_DIR/check-dependency-evidence-contract.sh"
@@ -79,12 +94,17 @@ run "$SCRIPT_DIR/check-hf-collections-contract.sh"
 run "$SCRIPT_DIR/check-pipelined-kv-guardrail.sh"
 run "$SCRIPT_DIR/check-benchmark-raw-contract.sh"
 run "$SCRIPT_DIR/check-benchmark-gaps-contract.sh"
+run "$SCRIPT_DIR/check-model-revisions-contract.sh"
+run "$SCRIPT_DIR/check-model-revisions.sh"
 run "$SCRIPT_DIR/check-conversion-ledger-contract.sh"
 run "$SCRIPT_DIR/check-tester-requests-contract.sh"
 run "$SCRIPT_DIR/check-tester-requests.sh"
 run "$SCRIPT_DIR/check-cleanup-safety.sh"
 run "$SCRIPT_DIR/check-export-cleanliness-contract.sh"
 run "$SCRIPT_DIR/check-conversion-guard.sh"
+run "$SCRIPT_DIR/check-converter-temp-contract.sh"
+run "$SCRIPT_DIR/check-converter-gguf-support-contract.sh"
+run "$SCRIPT_DIR/check-gguf-dequant-contract.sh"
 run "$SCRIPT_DIR/check-converter-cluster-metadata.sh"
 run "$SCRIPT_DIR/check-conversion-ledger.sh"
 run "$SCRIPT_DIR/check-conversion-gap-audit.sh"

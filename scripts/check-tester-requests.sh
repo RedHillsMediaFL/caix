@@ -8,7 +8,8 @@ Usage: scripts/check-tester-requests.sh [options]
 
 Options:
   --manifest <path>   TSV manifest. Default: benchmarks/MANIFEST.tsv.
-  --revisions <path>  Optional repo<TAB>revision TSV. Default: source declared in doc.
+  --revisions <path>  Optional repo<TAB>revision TSV. Default: source declared in doc, or
+                      benchmarks/revisions.tsv when present.
   --raw-dir <path>    Raw benchmark root. Default: benchmarks/raw.
   --doc <path>        Tester request markdown. Default: docs/TESTER_REQUESTS.md.
 
@@ -51,6 +52,8 @@ if [[ -z "$REVISIONS" ]]; then
       exit 1
     fi
     REVISIONS="$inferred_revisions"
+  elif [[ -f "$REPO_DIR/benchmarks/revisions.tsv" ]]; then
+    REVISIONS="$REPO_DIR/benchmarks/revisions.tsv"
   fi
 fi
 

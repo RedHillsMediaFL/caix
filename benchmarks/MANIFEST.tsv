@@ -1,35 +1,31 @@
 repo	local_dir	kind	benchmark_mode	status	notes
-redhillsmediafl/rhm-qwen2.5-0.5b-instruct-caix	qwen2.5-0.5b-instruct-coreai	standalone	decode	eligible	verified
-redhillsmediafl/rhm-qwen2.5-3b-instruct-caix	qwen2.5-3b-instruct-coreai	standalone	decode	eligible	verified; Qwen Research License
-redhillsmediafl/rhm-qwen3-0.6b-caix	qwen3-0.6b-coreai	standalone	decode	eligible	cataloged
-redhillsmediafl/rhm-qwen3-1.7b-caix	qwen3-1.7b-coreai	standalone	decode	eligible	verified
-redhillsmediafl/rhm-qwen3-4b-caix	qwen3-4b-coreai	standalone	decode	gated_private	PRIVATED 2026-07-04 (non-1:1 4bit determinism / <=16 prefill); republish after determinism fix + full-native-ctx + regular&quant
-redhillsmediafl/rhm-qwen3-8b-caix	qwen3-8b-coreai	standalone	decode	eligible	verified
-redhillsmediafl/rhm-qwen3-14b-caix	qwen3-14b-coreai	standalone	decode	eligible	verified
-redhillsmediafl/rhm-ornith-1.0-9b-caix	ornith-1.0-9b-coreai	standalone	decode	eligible	cataloged
-redhillsmediafl/rhm-qwythos-9b-caix	qwythos-9b-coreai	standalone	decode	eligible	cataloged
-redhillsmediafl/rhm-glm-4-9b-0414-caix	glm-4-9b-0414-coreai	standalone	decode	eligible	cataloged
-redhillsmediafl/rhm-glm-z1-9b-0414-caix	glm-z1-9b-0414-coreai	standalone	decode	gated_private	PRIVATED 2026-07-04 (stdout instability); republish after stability fix + full-native-ctx + regular&quant
-redhillsmediafl/rhm-glm-4-32b-0414-caix	glm-4-32b-0414-coreai	standalone	decode	eligible	cataloged
-redhillsmediafl/rhm-gpt-oss-20b-caix	gpt-oss-20b-coreai	standalone	decode	eligible	verified
-redhillsmediafl/rhm-mistral-7b-instruct-v0.3-caix	mistral-7b-instruct-v0.3-coreai	standalone	decode	eligible	verified
-redhillsmediafl/rhm-mistral-nemo-instruct-2407-caix	mistral-nemo-instruct-2407-coreai	standalone	decode	eligible	verified
-redhillsmediafl/rhm-mistral-small-instruct-2409-caix	mistral-small-instruct-2409-coreai	standalone	decode	eligible	verified; Mistral Research License
-redhillsmediafl/rhm-mixtral-8x7b-instruct-caix	mixtral-8x7b-instruct-coreai	standalone	decode	eligible	cataloged
-redhillsmediafl/rhm-qwen3.6-27b-caix	qwen3.6-27b-coreai	standalone	decode	eligible	cataloged
-redhillsmediafl/rhm-gemma-4-12b-it-unified-caix	gemma4-12b-it-unified-staged-4bit-ctx128-6x8	staged	manual	component_only	staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook
-redhillsmediafl/rhm-gemma-4-12b-staged-caix	gemma4-12b-staged-4bit-ctx128-2x24	staged	manual	component_only	staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook
-redhillsmediafl/rhm-gemma-4-e2b-it-staged-caix	gemma4-e2b-it-staged-4bit-ctx128-2x	staged	manual	component_only	staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook
-redhillsmediafl/rhm-gemma-4-e2b-staged-caix	gemma4-e2b-staged-4bit-ctx128-2x	staged	manual	component_only	staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook
-redhillsmediafl/rhm-gemma-4-e4b-it-staged-caix	gemma4-e4b-it-staged-4bit-ctx128-2x21	staged	manual	component_only	staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook
+redhillsmediafl/rhm-qwen2.5-0.5b-instruct-caix	qwen2.5-0.5b-instruct-coreai-4bit-ctx32768	standalone	decode	eligible	full-native-context quantized; long-context/determinism/HF first-token gates passed; speed pending
+redhillsmediafl/rhm-qwen2.5-0.5b-instruct-bf16-caix	qwen2.5-0.5b-instruct-bf16-coreai-ctx32768	standalone	decode	eligible	full-native-context regular bf16; long-context/determinism/HF first-token gates passed; speed pending
+redhillsmediafl/rhm-qwen2.5-3b-instruct-caix	qwen2.5-3b-instruct-coreai-4bit-ctx32768	standalone	decode	eligible	full-native-context quantized; long-context/determinism/HF first-token gates passed; Qwen Research License; speed pending
+redhillsmediafl/rhm-qwen2.5-3b-instruct-bf16-caix	qwen2.5-3b-instruct-bf16-coreai-ctx32768	standalone	decode	eligible	full-native-context regular bf16; long-context/determinism/HF first-token gates passed; Qwen Research License; speed pending
+redhillsmediafl/rhm-qwen3-0.6b-caix	qwen3-0.6b-coreai-4bit-ctx40960	standalone	decode	eligible	full-native-context quantized; long-context/determinism/HF first-token gates passed; speed pending
+redhillsmediafl/rhm-qwen3-0.6b-bf16-caix	qwen3-0.6b-bf16-coreai-ctx40960	standalone	decode	eligible	full-native-context regular bf16; long-context/determinism/HF first-token gates passed; speed pending
+redhillsmediafl/rhm-qwen3-1.7b-caix	qwen3-1.7b-coreai-4bit-ctx40960	standalone	decode	eligible	full-native-context quantized pattern-setter; long-context/determinism/HF first-token gates passed; speed pending
+redhillsmediafl/rhm-qwen3-1.7b-bf16-caix	qwen3-1.7b-bf16-coreai-ctx40960	standalone	decode	eligible	full-native-context regular bf16 pattern-setter; long-context/determinism/HF first-token gates passed; speed pending
+redhillsmediafl/rhm-qwen3-8b-caix	qwen3-8b-coreai-4bit-ctx40960	standalone	decode	eligible	full-native-context quantized; long-context/determinism/HF first-token gates passed; speed pending
+redhillsmediafl/rhm-qwen3-8b-bf16-caix	qwen3-8b-bf16-coreai-ctx40960	standalone	decode	eligible	full-native-context regular bf16; long-context/determinism/HF first-token gates passed; speed pending
+redhillsmediafl/rhm-qwen3-14b-caix	qwen3-14b-coreai-4bit-ctx40960	standalone	decode	eligible	full-native-context quantized; long-context/determinism/HF first-token gates passed; speed pending
+redhillsmediafl/rhm-qwen3-14b-bf16-caix	qwen3-14b-bf16-coreai-ctx40960	standalone	decode	eligible	full-native-context regular bf16; long-context/determinism/HF first-token gates passed; peak RSS ~48.6 GiB on Studio; speed pending
+redhillsmediafl/rhm-glm-4-9b-0414-caix	glm-4-9b-0414-coreai-4bit-ctx32768	standalone	decode	eligible	full-native-context quantized; long-context/determinism/HF first-token gates passed; speed pending
+redhillsmediafl/rhm-glm-4-9b-0414-bf16-caix	glm-4-9b-0414-bf16-coreai-ctx32768	standalone	decode	eligible	full-native-context regular bf16; long-context/determinism/HF first-token gates passed; speed pending
+redhillsmediafl/rhm-glm-4-32b-0414-caix	glm-4-32b-0414-coreai-4bit-ctx32768	standalone	decode	eligible	full-native-context quantized; 17022-token serve, fresh-process determinism, and HF first-token gates passed; speed pending
+redhillsmediafl/rhm-glm-4-32b-0414-int8-caix	glm-4-32b-0414-int8-coreai-ctx32768	standalone	decode	eligible	full-native-context regular int8; 17022-token serve, fresh-process determinism, and HF first-token gates passed; bf16/fp16 regular is outside the current 64GB conversion envelope; speed pending
+redhillsmediafl/rhm-gpt-oss-20b-caix	gpt-oss-20b-coreai-4bit-ctx131072	standalone	decode	eligible	full-native-context quantized; 17032-token serve, fresh-process determinism, and HF first-token gates passed; speed pending
+redhillsmediafl/rhm-gpt-oss-20b-int8-caix	gpt-oss-20b-int8-coreai-ctx131072	standalone	decode	eligible	full-native-context regular int8; 17032-token serve, fresh-process determinism, and HF first-token gates passed; bf16/fp16 regular is outside the current 64GB conversion envelope; speed pending
+redhillsmediafl/rhm-mistral-7b-instruct-v0.3-caix	mistral-7b-instruct-v0.3-coreai-4bit-ctx32768	standalone	decode	eligible	full-native-context quantized; long-context/determinism/HF first-token gates passed; speed pending
+redhillsmediafl/rhm-mistral-7b-instruct-v0.3-bf16-caix	mistral-7b-instruct-v0.3-bf16-coreai-ctx32768	standalone	decode	eligible	full-native-context regular bf16; long-context/determinism/HF first-token gates passed; speed pending
+redhillsmediafl/rhm-mistral-nemo-instruct-2407-caix	mistral-nemo-instruct-2407-coreai-4bit-ctx131072	standalone	decode	eligible	full-native-context quantized; long-context/determinism/HF first-token gates passed; speed pending
+redhillsmediafl/rhm-mistral-nemo-instruct-2407-bf16-caix	mistral-nemo-instruct-2407-bf16-coreai-ctx131072	standalone	decode	eligible	full-native-context regular bf16; long-context/determinism/HF first-token gates passed; peak RSS ~50 GiB on Studio; speed pending
+redhillsmediafl/rhm-mistral-small-instruct-2409-caix	mistral-small-instruct-2409-coreai-4bit-ctx32768	standalone	decode	eligible	full-native-context quantized; 17038-token serve, fresh-process determinism, and HF first-token gates passed; Mistral Research License; speed pending
+redhillsmediafl/rhm-mistral-small-instruct-2409-int8-caix	mistral-small-instruct-2409-int8-coreai-ctx32768	standalone	decode	eligible	full-native-context regular int8; 17038-token serve, fresh-process determinism, and HF first-token gates passed; bf16/fp16 regular is outside the current 64GB conversion envelope; Mistral Research License; speed pending
+redhillsmediafl/rhm-mixtral-8x7b-instruct-caix	mixtral-8x7b-instruct-coreai-4bit-ctx32768	standalone	decode	eligible	full-native-context quantized; 17018-token serve, fresh-process determinism, and HF first-token gates passed; int8/regular tier unavailable on 64GB-class runtime path; Apache-2.0; speed pending
+redhillsmediafl/rhm-gemma-4-12b-it-mm-staged-caix	gemma4-12b-it-mm-splitcache-masked-singleasset-staged-4bit-ctx256k-2x24	staged	manual	component_only	staged multimodal split-cache package; Studio HTTP hardware smoke passed with caix 0.2.13-beta; no public speed row
+redhillsmediafl/rhm-gemma-4-e2b-it-mm-staged-caix	gemma4-e2b-it-mm-QAT-splitcache-singleasset-staged-4bit-ctx128k-2x13-22	staged	manual	component_only	staged multimodal split-cache package; Studio HTTP hardware smoke passed with caix 0.2.13-beta; no public speed row
 redhillsmediafl/rhm-gemma-4-e4b-it-mm-staged-caix	gemma4-e4b-it-mm-QAT-splitcache-plefix-staged-4bit-ctx128k-2x21	staged	manual	component_only	staged multimodal split-cache package; 32 GB MacBook HTTP hardware smoke passed with caix 0.2.13-beta; no public speed row
-redhillsmediafl/rhm-gemma-4-e4b-staged-caix	gemma4-e4b-staged-4bit-ctx128-2x21	staged	manual	component_only	staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook
-redhillsmediafl/rhm-gemma-4-26b-a4b-caix	gemma-4-26b-a4b-coreai	standalone	decode	eligible	cataloged
-redhillsmediafl/rhm-gemma-4-26b-a4b-it-staged-caix	gemma4-26b-a4b-it-staged-4bit-ctx128-5x6	staged	manual	component_only	staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook
-redhillsmediafl/rhm-gemma-4-31b-it-caix	gemma-4-31b-it-coreai	standalone	decode	eligible	cataloged
-redhillsmediafl/rhm-gemma-4-31b-it-staged-caix	gemma4-31b-it-staged-4bit-ctx128-6x10	staged	manual	component_only	staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook
-redhillsmediafl/rhm-gemma-4-26b-a4b-mtp-caix	gemma-4-26b-a4b-mtp-coreai	mtp	eagle-mtp	eligible	benchmark MTP package; compare against standalone target row
-redhillsmediafl/rhm-gemma-4-31b-it-mtp-caix	gemma-4-31b-it-mtp-coreai	mtp	eagle-mtp	gated_private	PRIVATED 2026-07-04 (blocked_runtime: draft graph is standard two-input assistant); rebuild with dependent EAGLE draft then republish
-redhillsmediafl/rhm-qwen3-4b-mtp-caix	qwen3-4b-mtp-coreai	mtp	speculative	gated_private	PRIVATED 2026-07-04 (target non-1:1 4bit determinism / <=16 prefill); republish after determinism fix
-redhillsmediafl/rhm-gemma-4-26b-a4b-draft-caix	gemma-4-26b-a4b-draft-coreai	draft	manual	component_only	draft component; benchmark with matching target
-redhillsmediafl/rhm-gemma-4-31b-it-draft-caix	gemma-4-31b-it-draft-coreai	draft	manual	component_only	draft component; benchmark with matching target
+redhillsmediafl/rhm-gemma-4-26b-a4b-it-mm-staged-caix	gemma4-26b-a4b-it-mm-splitcache-masked-singleasset-staged-4bit-ctx256k-5x6	staged	manual	component_only	staged multimodal split-cache package; Studio HTTP hardware smoke passed with caix 0.2.13-beta; no public speed row
+redhillsmediafl/rhm-gemma-4-31b-it-mm-staged-caix	gemma4-31b-it-mm-splitcache-masked-singleasset-staged-4bit-ctx256k-6x10	staged	manual	component_only	staged multimodal split-cache package; Studio HTTP hardware smoke passed with caix 0.2.13-beta; full-native 262k requires 64 GB+ or multi-device; no public speed row

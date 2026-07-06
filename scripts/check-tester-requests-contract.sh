@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/caix-tester-requests-contract.XXXXXX")"
-inside_repo_tmp="$REPO_DIR/.tmp/tester-requests-contract-$$"
+inside_repo_tmp="$REPO_DIR/tester-requests-contract-$$"
 cleanup() {
   rm -rf "$tmpdir" "$inside_repo_tmp"
 }
@@ -141,10 +141,28 @@ section_contains_text "$external_doc" "## Manual Or Component Requests" "## Run 
 section_contains_text "$external_doc" "## Manual Or Component Requests" "## Run Template" \
   "| \`$draft_repo\` | \`$revision\` | \`fixture-draft-coreai\` | component; do not test alone | draft component; benchmark with matching target |" \
   || { echo "error: draft row did not keep component/do-not-test-alone wording" >&2; exit 1; }
-rg -q 'remain `needs-test` while the second Mac is unavailable' "$external_doc" \
-  || { echo "error: staged tester-request caveat must mention needs-test while the second Mac is unavailable" >&2; exit 1; }
-rg -q 'not Studio-only loopback, plan dry-runs, or HF diagnostic' "$external_doc" \
+rg -q 'package-specific installed-caix hardware evidence' "$external_doc" \
+  || { echo "error: staged tester-request caveat must require package-specific installed-caix hardware evidence" >&2; exit 1; }
+rg -q 'generic two-machine POC, Studio-only loopback, plan dry-run' "$external_doc" \
   || { echo "error: staged tester-request caveat must reject Studio-only diagnostic evidence" >&2; exit 1; }
+rg -F -q 'scripts/remove-export.sh --dry-run "$NAME"' "$external_doc" \
+  || { echo "error: tester request cleanup must preview remove-export before deleting" >&2; exit 1; }
+
+default_doc="$tmpdir/default-revisions.md"
+rg -F -q 'if [[ -f "$REPO_DIR/benchmarks/revisions.tsv" ]]; then' "$SCRIPT_DIR/generate-tester-requests.sh" \
+  || { echo "error: tester request generator must probe for benchmarks/revisions.tsv by default" >&2; exit 1; }
+rg -F -q 'REVISIONS="$REPO_DIR/benchmarks/revisions.tsv"' "$SCRIPT_DIR/generate-tester-requests.sh" \
+  || { echo "error: tester request generator must default to benchmarks/revisions.tsv when present" >&2; exit 1; }
+rg -F -q 'elif [[ -f "$REPO_DIR/benchmarks/revisions.tsv" ]]; then' "$SCRIPT_DIR/check-tester-requests.sh" \
+  || { echo "error: tester request checker must fall back to benchmarks/revisions.tsv when present" >&2; exit 1; }
+if [[ -f "$REPO_DIR/benchmarks/revisions.tsv" ]]; then
+  "$SCRIPT_DIR/generate-tester-requests.sh" \
+    --manifest "$manifest" \
+    --raw-dir "$external_raw" \
+    --out "$default_doc" >/dev/null
+  rg -q '^Revision source: `benchmarks/revisions.tsv`\.$' "$default_doc" \
+    || { echo "error: tester request generator must default to benchmarks/revisions.tsv when present" >&2; exit 1; }
+fi
 
 # In-repo raw evidence must be tracked before it can suppress tester requests. This prevents
 # locally generated or dirty benchmark folders from silently promoting a row to existing evidence.

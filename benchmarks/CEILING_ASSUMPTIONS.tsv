@@ -1,3 +1,1 @@
 repo	local_dir	kind	benchmark_mode	active_weight_gib	evidence_status	source	notes
-redhillsmediafl/rhm-qwen3-4b-caix	qwen3-4b-coreai	standalone	decode	2.30	estimate	.tmp/boss/ENGINEERING-GUIDE.md#2	Guide estimate: qwen3-4B 4-bit active weights approximately 2.3 GB/token; remeasure from bundle metadata before publishing percent-of-ceiling.
-redhillsmediafl/rhm-gemma-4-26b-a4b-caix	gemma-4-26b-a4b-coreai	standalone	decode	2.50	estimate	.tmp/boss/ENGINEERING-GUIDE.md#2	Guide estimate: gemma-26B-A4B active expert weights approximately 2.5 GB/token; remeasure from bundle metadata before publishing percent-of-ceiling.

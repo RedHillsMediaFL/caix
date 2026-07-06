@@ -7,7 +7,7 @@ Usage: scripts/generate-tester-requests.sh [options]
 
 Options:
   --manifest <path>   TSV manifest. Default: benchmarks/MANIFEST.tsv.
-  --revisions <path>  Optional repo<TAB>revision TSV. Default: none.
+  --revisions <path>  Optional repo<TAB>revision TSV. Default: benchmarks/revisions.tsv when present.
   --raw-dir <path>    Raw benchmark root. Default: benchmarks/raw.
   --out <path>        Markdown output path. Default: stdout.
 
@@ -23,6 +23,10 @@ MANIFEST="$REPO_DIR/benchmarks/MANIFEST.tsv"
 REVISIONS=""
 RAW_DIR="$REPO_DIR/benchmarks/raw"
 OUT=""
+
+if [[ -f "$REPO_DIR/benchmarks/revisions.tsv" ]]; then
+  REVISIONS="$REPO_DIR/benchmarks/revisions.tsv"
+fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -83,8 +87,12 @@ tracked_or_local_metadata() {
   case "$raw_abs/" in
     "$REPO_DIR"/*)
       raw_rel="${raw_abs#$REPO_DIR/}"
-      git -C "$REPO_DIR" ls-files -- "$raw_rel" \
-        | awk -v repo="$REPO_DIR" '/\/metadata[.]txt$/ { print repo "/" $0 }'
+      if git -C "$REPO_DIR" check-ignore -q -- "$raw_rel"; then
+        find "$RAW_DIR" -type f -name metadata.txt -print
+      else
+        git -C "$REPO_DIR" ls-files -- "$raw_rel" \
+          | awk -v repo="$REPO_DIR" '/\/metadata[.]txt$/ { print repo "/" $0 }'
+      fi
       ;;
     *)
       find "$RAW_DIR" -type f -name metadata.txt -print
@@ -110,6 +118,9 @@ raw_dir_has_git_changes() {
   local raw_dir="$1"
   local rel
   rel="$(repo_relative_path "$raw_dir")" || return 1
+  if git -C "$REPO_DIR" check-ignore -q -- "$rel"; then
+    return 1
+  fi
   [[ -n "$(git -C "$REPO_DIR" status --porcelain -- "$rel")" ]]
 }
 
@@ -249,9 +260,9 @@ EOF
 
 ## Manual Or Component Requests
 
-The staged distributed rows below remain `needs-test` while the second Mac is unavailable. They
-require installed-caix hardware evidence, not Studio-only loopback, plan dry-runs, or HF diagnostic
-parity.
+The staged distributed rows below need package-specific installed-caix hardware evidence before any
+distributed readiness or speed claim. A generic two-machine POC, Studio-only loopback, plan dry-run,
+or HF diagnostic parity does not substitute for the listed package's own distributed smoke.
 
 | repo | revision | local dir | request | notes |
 |---|---|---|---|---|
@@ -373,10 +384,11 @@ scripts/benchmark-eagle.sh \
   --runs 3
 ```
 
-Report the fields in `docs/TESTING.md`. Send the raw benchmark directory. Remove only the payload
-you installed:
+Report the fields in `docs/TESTING.md`. Send the raw benchmark directory. Preview cleanup, then
+remove only the payload you installed:
 
 ```bash
+scripts/remove-export.sh --dry-run "$NAME"
 scripts/remove-export.sh "$NAME"
 scripts/check-disk-pressure.sh --path /Volumes/SSD --floor-gib 500
 ```
