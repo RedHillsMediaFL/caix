@@ -929,16 +929,7 @@ public final class MultimodalStagedModel {
     }
 
     private func resolvedCacheCapacities(kvCapacity: Int) -> [String: Int]? {
-        guard let cacheGroups = manifest.cacheGroups else { return nil }
-        var capacities: [String: Int] = [:]
-        for (name, group) in cacheGroups.groups {
-            if group.slidingWindow == nil {
-                capacities[name] = min(group.capacity, kvCapacity)
-            } else {
-                capacities[name] = group.capacity
-            }
-        }
-        return capacities
+        manifest.cacheGroups?.capacities(forKVCapacity: kvCapacity)
     }
 
     private static func validateMultimodalManifest(
@@ -991,10 +982,6 @@ public final class MultimodalStagedModel {
         let defaultBlockIDsRequired = kind == "gemma4_unified"
         let blockIDsRequired = multimodal["block_ids_required"] as? Bool
             ?? defaultBlockIDsRequired
-        if kind == "gemma4" && blockIDsRequired {
-            throw CoreAIPipeline.RuntimeError.invalidBundle(
-                "gemma4 E-series multimodal bundles are expected to use causal image attention")
-        }
         return Gemma4MultimodalConfiguration(
             kind: kind,
             blockIDsRequired: blockIDsRequired)

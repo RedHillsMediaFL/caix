@@ -167,50 +167,20 @@ struct DistributedCoreAIStageCacheIO {
         -> DistributedCoreAIStageCacheIO
     {
         let stateGroups = try stateCacheGroups(from: descriptor)
-        let hasExplicitKV =
-            descriptor.stateNames.isEmpty
-            && descriptor.inputNames.contains("keyCache")
-            && descriptor.inputNames.contains("valueCache")
-            && descriptor.outputNames.contains("keyCache")
-            && descriptor.outputNames.contains("valueCache")
+        let explicitGroups = try explicitCacheGroups(from: descriptor)
         if !stateGroups.isEmpty {
             return DistributedCoreAIStageCacheIO(
                 contract: .stateful,
                 groups: stateGroups)
         }
-        if hasExplicitKV {
-            let keyName = pick("keyCache", descriptor.inputNames, index: 2)
-            let valueName = pick("valueCache", descriptor.inputNames, index: 3)
-            guard case .ndArray(let inputKeyDesc) = descriptor.inputDescriptor(of: keyName),
-                case .ndArray(let inputValueDesc) = descriptor.inputDescriptor(of: valueName)
-            else {
-                throw CoreAIPipeline.RuntimeError.modelContract(
-                    "distributed stage KV cache inputs are not NDArrays")
-            }
-            guard case .ndArray(let outputKeyDesc) = descriptor.outputDescriptor(of: keyName),
-                case .ndArray(let outputValueDesc) = descriptor.outputDescriptor(of: valueName)
-            else {
-                throw CoreAIPipeline.RuntimeError.modelContract(
-                    "distributed stage KV cache outputs are not NDArrays")
-            }
+        if !explicitGroups.isEmpty {
             return DistributedCoreAIStageCacheIO(
                 contract: .explicitOutputs,
-                groups: [
-                    DistributedCoreAIStageCacheGroupIO(
-                        groupName: "default",
-                        keyCacheName: keyName,
-                        valueCacheName: valueName,
-                        keyCacheDescriptor: inputKeyDesc,
-                        valueCacheDescriptor: inputValueDesc,
-                        keyCacheOutputDescriptor: outputKeyDesc,
-                        valueCacheOutputDescriptor: outputValueDesc)
-                ])
+                groups: explicitGroups)
         }
         if descriptor.stateNames.isEmpty
-            && !descriptor.inputNames.contains("keyCache")
-            && !descriptor.inputNames.contains("valueCache")
-            && !descriptor.outputNames.contains("keyCache")
-            && !descriptor.outputNames.contains("valueCache")
+            && !containsCacheTensorName(descriptor.inputNames)
+            && !containsCacheTensorName(descriptor.outputNames)
         {
             return DistributedCoreAIStageCacheIO(
                 contract: .none,
@@ -223,6 +193,85 @@ struct DistributedCoreAIStageCacheIO {
 
     private static func pick(_ wanted: String, _ names: [String], index: Int) -> String {
         names.contains(wanted) ? wanted : names[index]
+    }
+
+    private static func explicitCacheGroups(
+        from descriptor: InferenceFunctionDescriptor
+    ) throws -> [DistributedCoreAIStageCacheGroupIO] {
+        guard descriptor.stateNames.isEmpty else { return [] }
+
+        var keyByGroup: [String: String] = [:]
+        var valueByGroup: [String: String] = [:]
+        var groupOrder: [String] = []
+        let outputNames = Set(descriptor.outputNames)
+
+        for inputName in descriptor.inputNames {
+            if let groupName = cacheGroupName(for: inputName, suffix: "keyCache") {
+                guard outputNames.contains(inputName) else {
+                    throw CoreAIPipeline.RuntimeError.modelContract(
+                        "distributed stage explicit KV cache key input '\(inputName)' is missing a matching output")
+                }
+                if keyByGroup[groupName] != nil {
+                    throw CoreAIPipeline.RuntimeError.modelContract(
+                        "distributed stage explicit KV cache group '\(groupName)' has duplicate key input")
+                }
+                keyByGroup[groupName] = inputName
+                groupOrder.append(groupName)
+            } else if let groupName = cacheGroupName(for: inputName, suffix: "valueCache") {
+                guard outputNames.contains(inputName) else {
+                    throw CoreAIPipeline.RuntimeError.modelContract(
+                        "distributed stage explicit KV cache value input '\(inputName)' is missing a matching output")
+                }
+                if valueByGroup[groupName] != nil {
+                    throw CoreAIPipeline.RuntimeError.modelContract(
+                        "distributed stage explicit KV cache group '\(groupName)' has duplicate value input")
+                }
+                valueByGroup[groupName] = inputName
+                if !groupOrder.contains(groupName) {
+                    groupOrder.append(groupName)
+                }
+            }
+        }
+
+        guard !keyByGroup.isEmpty || !valueByGroup.isEmpty else { return [] }
+
+        var groups: [DistributedCoreAIStageCacheGroupIO] = []
+        for groupName in groupOrder {
+            guard let keyName = keyByGroup[groupName],
+                let valueName = valueByGroup[groupName]
+            else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "distributed stage explicit KV cache group '\(groupName)' is missing a key/value pair")
+            }
+            guard case .ndArray(let inputKeyDesc) = descriptor.inputDescriptor(of: keyName),
+                case .ndArray(let inputValueDesc) = descriptor.inputDescriptor(of: valueName)
+            else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "distributed stage explicit KV cache inputs are not NDArrays")
+            }
+            guard case .ndArray(let outputKeyDesc) = descriptor.outputDescriptor(of: keyName),
+                case .ndArray(let outputValueDesc) = descriptor.outputDescriptor(of: valueName)
+            else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "distributed stage explicit KV cache outputs are not NDArrays")
+            }
+            groups.append(DistributedCoreAIStageCacheGroupIO(
+                groupName: groupName,
+                keyCacheName: keyName,
+                valueCacheName: valueName,
+                keyCacheDescriptor: inputKeyDesc,
+                valueCacheDescriptor: inputValueDesc,
+                keyCacheOutputDescriptor: outputKeyDesc,
+                valueCacheOutputDescriptor: outputValueDesc))
+        }
+        return groups
+    }
+
+    private static func containsCacheTensorName(_ names: [String]) -> Bool {
+        names.contains { name in
+            cacheGroupName(for: name, suffix: "keyCache") != nil
+                || cacheGroupName(for: name, suffix: "valueCache") != nil
+        }
     }
 
     private static func stateCacheGroups(
@@ -809,7 +858,11 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
                 topLogits: Self.captureTopLogitsIfRequested(logitsRow))
         }
 
-        requestState.processedTokenCount += positionCount
+        if descriptor.role == .finalNormHead {
+            requestState.processedTokenCount = input.positionRange.upperBound
+        } else {
+            requestState.processedTokenCount += positionCount
+        }
         requestStates[input.requestID] = requestState
         return output
     }
@@ -952,9 +1005,16 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
             throw DistributedStageExecutionError.invalidForwardInput(
                 "position_range is invalid")
         }
-        guard input.positionRange.lowerBound == requestState.processedTokenCount else {
-            throw DistributedStageExecutionError.invalidForwardInput(
-                "position_range lower_bound \(input.positionRange.lowerBound) does not match processed_token_count \(requestState.processedTokenCount)")
+        if descriptor.role == .finalNormHead {
+            guard input.positionRange.lowerBound >= requestState.processedTokenCount else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "position_range lower_bound \(input.positionRange.lowerBound) is behind processed_token_count \(requestState.processedTokenCount)")
+            }
+        } else {
+            guard input.positionRange.lowerBound == requestState.processedTokenCount else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "position_range lower_bound \(input.positionRange.lowerBound) does not match processed_token_count \(requestState.processedTokenCount)")
+            }
         }
         guard input.positionRange.upperBound <= requestState.kvCapacity else {
             throw DistributedStageExecutionError.invalidForwardInput(
@@ -1146,31 +1206,77 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
                     "distributed stage stateful KV cache supports at most two cache groups")
             }
         case .explicitOutputs:
-            guard cacheIO.groups.count == 1 else {
-                throw CoreAIPipeline.RuntimeError.modelContract(
-                    "distributed stage explicit KV cache requires one key/value group")
-            }
-            let group = cacheIO.groups[0]
-            let cacheGroup = try requestState.cacheGroup(named: group.groupName)
-            var nextKeyCache = try Self.makeExplicitKVCacheOutput(
-                descriptor: group.keyCacheOutputDescriptor,
-                currentCache: cacheGroup.keyCache,
-                tensorName: group.keyCacheName)
-            var nextValueCache = try Self.makeExplicitKVCacheOutput(
-                descriptor: group.valueCacheOutputDescriptor,
-                currentCache: cacheGroup.valueCache,
-                tensorName: group.valueCacheName)
-            outputViews.insert(&nextKeyCache, for: group.keyCacheName)
-            outputViews.insert(&nextValueCache, for: group.valueCacheName)
             var explicitInputs = inputs
-            explicitInputs[group.keyCacheName] = cacheGroup.keyCache
-            explicitInputs[group.valueCacheName] = cacheGroup.valueCache
-            _ = try await function.run(
-                inputs: explicitInputs,
-                outputViews: consume outputViews)
-            requestState.cacheGroups[group.groupName] = DistributedCoreAIStageRequestCacheGroup(
-                keyCache: nextKeyCache,
-                valueCache: nextValueCache)
+            guard !cacheIO.groups.isEmpty else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "distributed stage explicit KV cache is missing")
+            }
+            if cacheIO.groups.count == 1 {
+                let group = cacheIO.groups[0]
+                let cacheGroup = try requestState.cacheGroup(named: group.groupName)
+                explicitInputs[group.keyCacheName] = cacheGroup.keyCache
+                explicitInputs[group.valueCacheName] = cacheGroup.valueCache
+                var nextKeyCache = try Self.makeExplicitKVCacheOutput(
+                    descriptor: group.keyCacheOutputDescriptor,
+                    currentCache: cacheGroup.keyCache,
+                    tensorName: group.keyCacheName)
+                var nextValueCache = try Self.makeExplicitKVCacheOutput(
+                    descriptor: group.valueCacheOutputDescriptor,
+                    currentCache: cacheGroup.valueCache,
+                    tensorName: group.valueCacheName)
+                outputViews.insert(&nextKeyCache, for: group.keyCacheName)
+                outputViews.insert(&nextValueCache, for: group.valueCacheName)
+                _ = try await function.run(
+                    inputs: explicitInputs,
+                    outputViews: consume outputViews)
+                requestState.cacheGroups[group.groupName] =
+                    DistributedCoreAIStageRequestCacheGroup(
+                        keyCache: nextKeyCache,
+                        valueCache: nextValueCache)
+            } else if cacheIO.groups.count == 2 {
+                let firstGroupIO = cacheIO.groups[0]
+                let secondGroupIO = cacheIO.groups[1]
+                let firstGroup = try requestState.cacheGroup(named: firstGroupIO.groupName)
+                let secondGroup = try requestState.cacheGroup(named: secondGroupIO.groupName)
+                explicitInputs[firstGroupIO.keyCacheName] = firstGroup.keyCache
+                explicitInputs[firstGroupIO.valueCacheName] = firstGroup.valueCache
+                explicitInputs[secondGroupIO.keyCacheName] = secondGroup.keyCache
+                explicitInputs[secondGroupIO.valueCacheName] = secondGroup.valueCache
+                var nextFirstKeyCache = try Self.makeExplicitKVCacheOutput(
+                    descriptor: firstGroupIO.keyCacheOutputDescriptor,
+                    currentCache: firstGroup.keyCache,
+                    tensorName: firstGroupIO.keyCacheName)
+                var nextFirstValueCache = try Self.makeExplicitKVCacheOutput(
+                    descriptor: firstGroupIO.valueCacheOutputDescriptor,
+                    currentCache: firstGroup.valueCache,
+                    tensorName: firstGroupIO.valueCacheName)
+                var nextSecondKeyCache = try Self.makeExplicitKVCacheOutput(
+                    descriptor: secondGroupIO.keyCacheOutputDescriptor,
+                    currentCache: secondGroup.keyCache,
+                    tensorName: secondGroupIO.keyCacheName)
+                var nextSecondValueCache = try Self.makeExplicitKVCacheOutput(
+                    descriptor: secondGroupIO.valueCacheOutputDescriptor,
+                    currentCache: secondGroup.valueCache,
+                    tensorName: secondGroupIO.valueCacheName)
+                outputViews.insert(&nextFirstKeyCache, for: firstGroupIO.keyCacheName)
+                outputViews.insert(&nextFirstValueCache, for: firstGroupIO.valueCacheName)
+                outputViews.insert(&nextSecondKeyCache, for: secondGroupIO.keyCacheName)
+                outputViews.insert(&nextSecondValueCache, for: secondGroupIO.valueCacheName)
+                _ = try await function.run(
+                    inputs: explicitInputs,
+                    outputViews: consume outputViews)
+                requestState.cacheGroups[firstGroupIO.groupName] =
+                    DistributedCoreAIStageRequestCacheGroup(
+                        keyCache: nextFirstKeyCache,
+                        valueCache: nextFirstValueCache)
+                requestState.cacheGroups[secondGroupIO.groupName] =
+                    DistributedCoreAIStageRequestCacheGroup(
+                        keyCache: nextSecondKeyCache,
+                        valueCache: nextSecondValueCache)
+            } else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "distributed stage explicit KV cache supports at most two cache groups")
+            }
         }
     }
 
@@ -1979,6 +2085,13 @@ enum DistributedCoreAIStageKVCacheShape {
                 "KV cache descriptor shape is empty")
         }
         let dynamicIndexes = descriptorShape.indices.filter { descriptorShape[$0] < 0 }
+        if dynamicIndexes.isEmpty {
+            guard descriptorShape.allSatisfy({ $0 > 0 }) else {
+                throw DistributedStageExecutionError.invalidControlFrame(
+                    "KV cache descriptor shape \(descriptorShape) resolves to invalid fixed shape")
+            }
+            return descriptorShape
+        }
         guard dynamicIndexes.count == 1, let dynamicIndex = dynamicIndexes.first else {
             throw DistributedStageExecutionError.invalidControlFrame(
                 "KV cache descriptor shape \(descriptorShape) must have exactly one dynamic capacity dimension")

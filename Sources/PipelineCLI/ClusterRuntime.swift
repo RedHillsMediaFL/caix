@@ -190,7 +190,8 @@ func runClusterServeRuntime(
         handlesByStageID: handlesByStageID)
     let engine = try DistributedStagedEngine(
         pipeline: pipeline,
-        maxContextLength: options.maxContextLength)
+        maxContextLength: options.maxContextLength,
+        cacheGroups: manifest.cacheGroups)
 
     guard let promptTokens = options.promptTokens else {
         FileHandle.standardError.write(Data("cluster ready; no prompt_tokens supplied\n".utf8))

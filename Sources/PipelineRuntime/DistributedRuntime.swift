@@ -584,6 +584,18 @@ public struct DistributedStageCacheGroups: Codable, Hashable, Sendable {
         Dictionary(uniqueKeysWithValues: groups.map { ($0.key, $0.value.capacity) })
     }
 
+    public func capacities(forKVCapacity kvCapacity: Int) -> [String: Int] {
+        Dictionary(uniqueKeysWithValues: groups.map { name, group in
+            let capacity: Int
+            if group.usesFixedAllocation(groupName: name, strategy: strategy) {
+                capacity = group.capacity
+            } else {
+                capacity = min(group.capacity, kvCapacity)
+            }
+            return (name, capacity)
+        })
+    }
+
     public var validationErrorMessage: String? {
         if let strategy,
             strategy.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -664,6 +676,18 @@ public struct DistributedStageCacheGroup: Codable, Hashable, Sendable {
             }
         }
         return nil
+    }
+
+    fileprivate func usesFixedAllocation(groupName: String, strategy: String?) -> Bool {
+        if slidingWindow != nil { return true }
+        let normalizedName = groupName.lowercased()
+        if normalizedName.contains("recurrent") { return true }
+        if strategy?.lowercased().contains("recurrent") == true,
+           normalizedName != "full"
+        {
+            return true
+        }
+        return false
     }
 }
 
@@ -3934,7 +3958,8 @@ public final class DistributedSameMachinePipeline {
         transformerTokenIDs: [Int32]? = nil,
         blockIDsQ: [Int32]? = nil,
         blockIDsKV: [Int32]? = nil,
-        softTokenSplice: DistributedSoftTokenSplice? = nil
+        softTokenSplice: DistributedSoftTokenSplice? = nil,
+        emitToken: Bool = true
     ) async throws -> DistributedStageForwardOutput {
         guard !requestID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw DistributedStageExecutionError.invalidForwardInput("request_id is empty")
@@ -4008,6 +4033,9 @@ public final class DistributedSameMachinePipeline {
         try requestTracker.validateForward(firstFrame)
 
         for (index, stage) in stages.enumerated() {
+            if !emitToken && stage.descriptor.role == .finalNormHead {
+                break
+            }
             let stageTokenIDs: [Int32]
             if stage.acceptsTokenIDs {
                 stageTokenIDs = stage.descriptor.role == .transformerLayers
@@ -4033,13 +4061,13 @@ public final class DistributedSameMachinePipeline {
             topLogits = output.topLogits
         }
 
-        guard tokenID != nil else {
+        if emitToken && tokenID == nil {
             throw DistributedStageExecutionError.invalidStageOutput(
                 "final stage did not return a token id")
         }
         requestTracker.commitForward(firstFrame)
         return DistributedStageForwardOutput(
-            stageID: stages.last!.descriptor.id,
+            stageID: emitToken ? stages.last!.descriptor.id : (hiddenState?.metadata.sourceStageID ?? stages.last!.descriptor.id),
             stepIndex: stepIndex,
             hiddenState: hiddenState,
             tokenID: tokenID,
@@ -4172,11 +4200,13 @@ public final class DistributedStagedEngine {
     public let pipeline: DistributedSameMachinePipeline
     public let maxContextLength: Int
     public let minKVCapacity: Int
+    public let cacheGroups: DistributedStageCacheGroups?
 
     public init(
         pipeline: DistributedSameMachinePipeline,
         maxContextLength: Int,
-        minKVCapacity: Int = 0
+        minKVCapacity: Int = 0,
+        cacheGroups: DistributedStageCacheGroups? = nil
     ) throws {
         guard maxContextLength > 0 else {
             throw DistributedStageExecutionError.invalidForwardInput(
@@ -4189,6 +4219,8 @@ public final class DistributedStagedEngine {
         self.pipeline = pipeline
         self.maxContextLength = maxContextLength
         self.minKVCapacity = minKVCapacity
+        self.cacheGroups = cacheGroups
+        try cacheGroups?.validate()
     }
 
     public func generate(
@@ -4217,7 +4249,10 @@ public final class DistributedStagedEngine {
                 kvCapacity: kvCapacity)
         }
 
-        try await pipeline.allocate(requestID: requestID, kvCapacity: kvCapacity)
+        try await pipeline.allocate(
+            requestID: requestID,
+            kvCapacity: kvCapacity,
+            cacheCapacities: resolvedCacheCapacities(kvCapacity: kvCapacity))
         do {
             var nextToken = try await pipelineNextToken(
                 requestID: requestID,
@@ -4299,6 +4334,10 @@ public final class DistributedStagedEngine {
                 "kv_capacity is smaller than prompt")
         }
         return capacity
+    }
+
+    private func resolvedCacheCapacities(kvCapacity: Int) -> [String: Int]? {
+        cacheGroups?.capacities(forKVCapacity: kvCapacity)
     }
 }
 

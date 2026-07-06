@@ -172,6 +172,7 @@ final class ModelHandle: @unchecked Sendable {
         case speculative(PersistentSpeculativeModel)
         #if COREAI_RUNTIME
         case eagle(EagleEngine)  // EAGLE speculative decoding
+        case textStaged(TextStagedModel)
         case multimodalStaged(MultimodalStagedModel, Gemma4VisionEmbedder)
         #endif
     }
@@ -205,6 +206,12 @@ final class ModelHandle: @unchecked Sendable {
         self.bytes = bytes
     }
 
+    init(textStaged: TextStagedModel, name: String, bytes: UInt64) {
+        self.backend = .textStaged(textStaged)
+        self.displayName = name
+        self.bytes = bytes
+    }
+
     init(multimodalStaged: MultimodalStagedModel, embedder: Gemma4VisionEmbedder, name: String, bytes: UInt64) {
         self.backend = .multimodalStaged(multimodalStaged, embedder)
         self.displayName = name
@@ -228,6 +235,8 @@ final class ModelHandle: @unchecked Sendable {
             return false
         #if COREAI_RUNTIME
         case .eagle:
+            return false
+        case .textStaged:
             return false
         case .multimodalStaged:
             return false
@@ -287,6 +296,12 @@ final class ModelHandle: @unchecked Sendable {
                     generatedTokenCount: r.generatedTokenCount, stopReason: r.stopReason,
                     modelLoadSeconds: r.modelLoadSeconds, prefillSeconds: r.prefillSeconds,
                     decodeSeconds: r.decodeSeconds)
+            case .textStaged(let model):
+                result = try await model.generate(
+                    messages: messages,
+                    options: options,
+                    tools: tools,
+                    onToken: onToken)
             case .multimodalStaged(let model, _):
                 if let tools, !tools.isEmpty {
                     throw CoreAIPipeline.RuntimeError.unsupportedFeature(
@@ -349,7 +364,7 @@ final class ModelHandle: @unchecked Sendable {
                             generated.embedding.rows).utf8))
                 }
                 result = generated.result
-            case .persistent, .speculative, .eagle:
+            case .persistent, .speculative, .eagle, .textStaged:
                 throw CoreAIPipeline.RuntimeError.unsupportedFeature(
                     "resolved backend '\(displayName)' does not support multimodal input")
             }
@@ -594,8 +609,8 @@ public actor ModelManager {
                 continue
             }
             let identity: (metadataName: String?, sourceModelID: String?, tokenizer: String?) =
-                mode == "standard" ? bundleIdentity(at: url) : (nil, nil, nil)
-            let servedName = mode == "standard"
+                mode == "standard" || mode == "staged" ? bundleIdentity(at: url) : (nil, nil, nil)
+            let servedName = mode == "standard" || mode == "staged"
                 ? ModelNameRepair.preferredServedName(
                     directoryName: name,
                     metadataName: identity.metadataName,
@@ -850,6 +865,23 @@ public actor ModelManager {
                 #else
                 throw CoreAIPipeline.RuntimeError.runtimeUnavailable
                 #endif
+            } else if Self.isTextStagedBundle(at: URL(fileURLWithPath: path, isDirectory: true)) {
+                #if COREAI_RUNTIME
+                let root = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
+                if verbose {
+                    FileHandle.standardError.write(
+                        Data("[server] loading text staged bundle \(name)\n".utf8))
+                }
+                let model = try await TextStagedModel.load(
+                    manifestURL: root.appendingPathComponent("stage-manifest.json"),
+                    verbose: verbose)
+                return ModelHandle(
+                    textStaged: model,
+                    name: name,
+                    bytes: Self.dirSize(root))
+                #else
+                throw CoreAIPipeline.RuntimeError.runtimeUnavailable
+                #endif
             } else {
                 if verbose {
                     FileHandle.standardError.write(Data("[server] loading persistent bundle \(name)\n".utf8))
@@ -986,12 +1018,14 @@ public actor ModelManager {
 
     static func isLoadableBundle(at root: URL) -> Bool {
         isDirectLLMBundle(at: root) || isEagleBundle(at: root) || isMultimodalStagedBundle(at: root)
+            || isTextStagedBundle(at: root)
     }
 
     static func bundleMode(at root: URL) -> String? {
         if isEagleBundle(at: root) { return "eagle" }
         if isClassicSpeculativeBundle(at: root) { return "speculative" }
         if isMultimodalStagedBundle(at: root) { return "multimodal_staged" }
+        if isTextStagedBundle(at: root) { return "staged" }
         if isDirectLLMBundle(at: root) { return "standard" }
         return nil
     }
@@ -1141,6 +1175,14 @@ public actor ModelManager {
               let kind = multimodal["kind"] as? String,
               kind == "gemma4_unified" || kind == "gemma4"
         else { return false }
+        return true
+    }
+
+    static func isTextStagedBundle(at root: URL) -> Bool {
+        let manifest = root.appendingPathComponent("stage-manifest.json")
+        guard fileExists(manifest), !isMultimodalStagedBundle(at: root) else {
+            return false
+        }
         return true
     }
 
