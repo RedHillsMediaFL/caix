@@ -514,8 +514,10 @@ function hfShow(h,c){$('hfresult').textContent=h;$('hfresult').className='hintbo
 $('hfcheck').onclick=async()=>{const repo=$('hfrepo').value.trim();if(!repo)return hfShow('paste a repo id','bad-txt');
   addLog('hf-check',repo);
   hfShow('checking…');try{const d=await api('/api/check-support',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({hf_repo:repo})});
-    addLog('hf-check',d.supported?'supported '+(d.model_type||'model'):'needs authoring');
-    hfShow(d.supported?`✓ supported · ${d.model_type}${d.params_b?` · ~${d.params_b}B`:''}`:`⚑ needs authoring · ${d.reason||d.next_step||'model path not authored yet'}`,d.supported?'ok-txt':'bad-txt');}catch(e){addLog('hf-check','failed: '+(e.message||e));hfShow('check failed','bad-txt');}};
+    addLog('hf-check',d.supported?'supported '+(d.model_type||'model'):(d.gguf_only?'GGUF-only':'needs authoring'));
+    if(d.supported)hfShow(`✓ supported · ${d.model_type}${d.params_b?` · ~${d.params_b}B`:''}`,'ok-txt');
+    else if(d.gguf_only)hfShow(d.gguf_mmproj?'GGUF-only · text-only dequant available; mmproj sidecar files are not consumed yet':'GGUF-only · conversion can start from GGUF','work-txt');
+    else hfShow(`⚑ needs authoring · ${d.reason||d.next_step||'model path not authored yet'}`,'bad-txt');}catch(e){addLog('hf-check','failed: '+(e.message||e));hfShow('check failed','bad-txt');}};
 $('hfconvert').onclick=async()=>{const repo=$('hfrepo').value.trim();if(!repo)return hfShow('paste a repo id','bad-txt');
   addLog('hf-convert',repo);
   hfShow('checking + converting…','work-txt');

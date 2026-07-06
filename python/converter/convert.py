@@ -38,7 +38,7 @@ _normalized_apple_env_candidates = [
 APPLE_ENV = next((p for p in _normalized_apple_env_candidates if p and p.exists()), _normalized_apple_env_candidates[1])
 EXPORTS = Path(caix_env("caix_exports", "EXPORTS", str(PIPELINE_ROOT / "exports"))).expanduser()
 HF_HOME = os.environ.get("HF_HOME", "/Volumes/SSD/hf-cache")
-TMPDIR_EXPORT = caix_env("caix_tmpdir", "TMPDIR", "/Volumes/SSD/coreai-tmp")
+TMPDIR_EXPORT = caix_env("caix_tmpdir", "TMPDIR", str(PIPELINE_ROOT / ".tmp" / "coreai-tmp"))
 CHECK_SUPPORT = Path(__file__).resolve().parent / "check_support.py"
 GGUF_DEQUANT = Path(__file__).resolve().parent / "gguf_dequant.py"
 CLUSTER_SCHEMA = "caix.cluster.stage_manifest.v0"
@@ -46,7 +46,7 @@ CLUSTER_SCHEMA = "caix.cluster.stage_manifest.v0"
 
 def dequant_gguf(repo: str, gguf_file: str | None, out_dir: str) -> dict:
     """Dequantize a GGUF repo/file to an HF dir (in the Apple env). Returns the parsed JSON dict."""
-    env = {**os.environ, "HF_HOME": HF_HOME}
+    env = {**os.environ, "HF_HOME": HF_HOME, "TMPDIR": TMPDIR_EXPORT}
     # transformers needs `gguf>=0.10.0` to dequantize a GGUF checkpoint; add it for this run.
     cmd = ["uv", "run", "--directory", str(APPLE_ENV), "--with", "gguf>=0.10.0",
            "python", str(GGUF_DEQUANT), "--repo", repo, "--out", out_dir]

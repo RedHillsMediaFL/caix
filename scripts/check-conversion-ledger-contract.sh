@@ -13,10 +13,11 @@ ledger="$tmpdir/CONVERSION_LEDGER.tsv"
 
 cat > "$registry" <<'JSON'
 {
-  "conversion_order": ["model-target", "model-draft"],
+  "conversion_order": ["model-target", "model-draft", "model-qwen35"],
   "models": {
     "model-target": {"hf_repo": "example/model-target"},
-    "model-draft": {"hf_repo": "example/model-draft"}
+    "model-draft": {"hf_repo": "example/model-draft"},
+    "model-qwen35": {"hf_repo": "example/model-qwen35", "model_type": "qwen3_5", "context": 1048576}
   }
 }
 JSON
@@ -27,12 +28,14 @@ redhillsmediafl/rhm-model-caix	model-coreai	standalone	decode	eligible	verified
 redhillsmediafl/rhm-model-staged-caix	model-staged	staged	manual	component_only	staged manifest; hardware smoke required
 redhillsmediafl/rhm-model-mtp-caix	model-mtp	mtp	eagle-mtp	eligible	benchmark with standalone target
 redhillsmediafl/rhm-model-draft-caix	model-draft	draft	manual	component_only	component; benchmark with matching target
+redhillsmediafl/rhm-qwen35-caix	qwen35-coreai	standalone	decode	eligible	full context with contiguous replay evidence
 TSV
 
 cat > "$ledger" <<'TSV'
 model_key	source_repo	status	published_repo	next_step
 model-target	example/model-target	published	redhillsmediafl/rhm-model-caix,redhillsmediafl/rhm-model-staged-caix,redhillsmediafl/rhm-model-mtp-caix	Standalone is benchmarked; staged package needs distributed hardware smoke; benchmark MTP against standalone target row.
 model-draft	example/model-draft	component_published	redhillsmediafl/rhm-model-draft-caix	Keep as a component; benchmark only with the matching target package.
+model-qwen35	example/model-qwen35	published	redhillsmediafl/rhm-qwen35-caix	Full-context contiguous replay gate passed; collect speed evidence.
 TSV
 
 "$SCRIPT_DIR/check-conversion-ledger.sh" \
@@ -81,5 +84,19 @@ then
 fi
 grep -F 'draft published repo' "$tmpdir/draft.out" >/dev/null \
   || { echo "error: draft caveat failure did not mention component next_step" >&2; cat "$tmpdir/draft.out" >&2; exit 1; }
+
+bad_qwen35="$tmpdir/qwen35-missing.tsv"
+cp "$ledger" "$bad_qwen35"
+perl -0pi -e 's/Full-context contiguous replay gate passed; collect speed evidence[.]/Collect speed evidence./' "$bad_qwen35"
+if "$SCRIPT_DIR/check-conversion-ledger.sh" \
+    --registry "$registry" \
+    --ledger "$bad_qwen35" \
+    --manifest "$manifest" >"$tmpdir/qwen35.out" 2>&1
+then
+  echo "error: qwen3_5 published repo without replay/narrower-label next_step unexpectedly passed" >&2
+  exit 1
+fi
+grep -F 'qwen3_5 published row' "$tmpdir/qwen35.out" >/dev/null \
+  || { echo "error: qwen3_5 caveat failure did not mention replay/narrower-label evidence" >&2; cat "$tmpdir/qwen35.out" >&2; exit 1; }
 
 echo "conversion ledger contract ok"

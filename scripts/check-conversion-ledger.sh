@@ -52,7 +52,12 @@ jq -e '
   and all(.conversion_order[]; ($models[.] and (($models[.].hf_repo // "") != "")))
 ' "$REGISTRY" >/dev/null
 
-jq -r '.conversion_order[] as $key | [$key, .models[$key].hf_repo] | @tsv' "$REGISTRY" \
+jq -r '.conversion_order[] as $key | [
+    $key,
+    .models[$key].hf_repo,
+    (.models[$key].model_type // ""),
+    ((.models[$key].context // "") | tostring)
+  ] | @tsv' "$REGISTRY" \
   > "$registry_tsv"
 
 cut -f1 "$registry_tsv" | sort -u > "$registry_keys"
@@ -99,6 +104,8 @@ awk -F '\t' -v registry="$registry_tsv" -v manifest="$manifest_repos" '
     while ((getline line < registry) > 0) {
       split(line, parts, "\t")
       source[parts[1]] = parts[2]
+      model_type[parts[1]] = parts[3]
+      context[parts[1]] = parts[4]
     }
     close(registry)
     while ((getline repo < manifest) > 0) {
@@ -152,6 +159,13 @@ awk -F '\t' -v registry="$registry_tsv" -v manifest="$manifest_repos" '
     if (next_step == "-") {
       printf "error: next_step must be explicit for %s\n", key > "/dev/stderr"
       fail = 1
+    }
+    if (status == "published" && model_type[key] ~ /^qwen3_5/ && context[key] + 0 >= 1000000) {
+      qwen35_evidence = next_step_lower ~ /(contiguous replay|full[- ]?context replay|replay gate|approved narrower|narrower label|capped[- ]context|capped context)/
+      if (!qwen35_evidence) {
+        printf "error: qwen3_5 published row for %s needs contiguous replay evidence or an approved narrower context label in next_step\n", key > "/dev/stderr"
+        fail = 1
+      }
     }
     if (published_lower ~ /-staged-caix/ && next_step_lower !~ /(staged|distributed|hardware smoke|needs-test|thunderbolt|macbook)/) {
       printf "error: staged published repo for %s needs an explicit distributed/hardware next_step\n", key > "/dev/stderr"

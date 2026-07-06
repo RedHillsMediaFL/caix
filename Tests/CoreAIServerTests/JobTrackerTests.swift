@@ -88,6 +88,88 @@ final class JobTrackerTests: XCTestCase {
         XCTAssertTrue(jobs.isEmpty)
     }
 
+    func testStartConvertHFSetsSSDBackedTmpDefaults() async throws {
+        let root = try makeTempDir()
+        let envLog = root.appendingPathComponent("convert-env.txt")
+        let script = root.appendingPathComponent("record_env.sh")
+        try """
+            printf 'caix_tmpdir=%s\\nTMPDIR=%s\\n' "$caix_tmpdir" "$TMPDIR" > "\(envLog.path)"
+            exit 0
+            """.write(to: script, atomically: true, encoding: .utf8)
+
+        let savedCaixTmp = getenv("caix_tmpdir").map { String(cString: $0) }
+        let savedUpperCaixTmp = getenv("CAIX_TMPDIR").map { String(cString: $0) }
+        let savedTmp = getenv("TMPDIR").map { String(cString: $0) }
+        unsetenv("caix_tmpdir")
+        unsetenv("CAIX_TMPDIR")
+        unsetenv("TMPDIR")
+        addTeardownBlock {
+            Self.restoreEnv("caix_tmpdir", savedCaixTmp)
+            Self.restoreEnv("CAIX_TMPDIR", savedUpperCaixTmp)
+            Self.restoreEnv("TMPDIR", savedTmp)
+        }
+
+        let tracker = JobTracker()
+        let err = await tracker.startConvertHF(
+            name: "example-coreai",
+            hfRepo: "example/model",
+            compression: "4bit",
+            precision: "float16",
+            context: nil,
+            script: script.path,
+            workingDir: root,
+            pythonExecutable: "/bin/sh",
+            reserveBytes: 0)
+
+        XCTAssertNil(err)
+        let envLogExists = await waitForFile(envLog)
+        XCTAssertTrue(envLogExists)
+        let env = try String(contentsOf: envLog, encoding: .utf8)
+        XCTAssertTrue(env.contains("caix_tmpdir=/Volumes/SSD/caix/.tmp/coreai-tmp\n"))
+        XCTAssertTrue(env.contains("TMPDIR=/Volumes/SSD/caix/.tmp/coreai-tmp\n"))
+    }
+
+    func testStartConvertHFOverridesMacOSSystemTmpDir() async throws {
+        let root = try makeTempDir()
+        let envLog = root.appendingPathComponent("convert-env.txt")
+        let script = root.appendingPathComponent("record_env.sh")
+        try """
+            printf 'caix_tmpdir=%s\\nTMPDIR=%s\\n' "$caix_tmpdir" "$TMPDIR" > "\(envLog.path)"
+            exit 0
+            """.write(to: script, atomically: true, encoding: .utf8)
+
+        let savedCaixTmp = getenv("caix_tmpdir").map { String(cString: $0) }
+        let savedUpperCaixTmp = getenv("CAIX_TMPDIR").map { String(cString: $0) }
+        let savedTmp = getenv("TMPDIR").map { String(cString: $0) }
+        unsetenv("caix_tmpdir")
+        unsetenv("CAIX_TMPDIR")
+        setenv("TMPDIR", "/private/var/folders/caix-test/", 1)
+        addTeardownBlock {
+            Self.restoreEnv("caix_tmpdir", savedCaixTmp)
+            Self.restoreEnv("CAIX_TMPDIR", savedUpperCaixTmp)
+            Self.restoreEnv("TMPDIR", savedTmp)
+        }
+
+        let tracker = JobTracker()
+        let err = await tracker.startConvertHF(
+            name: "example-coreai",
+            hfRepo: "example/model",
+            compression: "4bit",
+            precision: "float16",
+            context: nil,
+            script: script.path,
+            workingDir: root,
+            pythonExecutable: "/bin/sh",
+            reserveBytes: 0)
+
+        XCTAssertNil(err)
+        let envLogExists = await waitForFile(envLog)
+        XCTAssertTrue(envLogExists)
+        let env = try String(contentsOf: envLog, encoding: .utf8)
+        XCTAssertTrue(env.contains("caix_tmpdir=/Volumes/SSD/caix/.tmp/coreai-tmp\n"))
+        XCTAssertTrue(env.contains("TMPDIR=/Volumes/SSD/caix/.tmp/coreai-tmp\n"))
+    }
+
     func testStartDownloadRHMPassesExactRevisionToHFAndDoesNotForceHFHome() async throws {
         let root = try makeTempDir()
         let bin = root.appendingPathComponent("bin", isDirectory: true)
@@ -212,5 +294,13 @@ final class JobTrackerTests: XCTestCase {
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
         return FileManager.default.fileExists(atPath: url.path)
+    }
+
+    private static func restoreEnv(_ name: String, _ value: String?) {
+        if let value {
+            setenv(name, value, 1)
+        } else {
+            unsetenv(name)
+        }
     }
 }

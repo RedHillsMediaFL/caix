@@ -869,7 +869,12 @@ async function hfCheck(){
   try{
     const d=await api('/api/check-support',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({hf_repo:repo})});
     if(d.supported)hfShow('supported / '+esc(d.model_type||'model')+(d.params_b?' / ~'+d.params_b+'B':''),'ok');
-    else if(d.gguf_only)hfShow('GGUF-only repo / conversion can start from GGUF','work');
+    else if(d.gguf_only){
+      const ggufMsg=d.gguf_mmproj
+        ? 'GGUF-only repo / text-only dequant available; mmproj sidecar files are not consumed yet'
+        : 'GGUF-only repo / conversion can start from GGUF';
+      hfShow(ggufMsg,'work');
+    }
     else{
       const req=(d.requirements&&d.requirements.length)?'<br><span class="faint">next: '+esc(d.requirements[0])+'</span>':'';
       hfShow('needs Core AI authoring / '+esc(d.reason||d.next_step||'model path not authored yet')+req+(d.support_log?'<br><span class="faint">'+esc(d.support_log)+'</span>':''),'bad');

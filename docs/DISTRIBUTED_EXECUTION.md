@@ -325,6 +325,17 @@ the rest local on the Studio. Use explicit timeouts: coordinator `caix serve --c
   a positional KV; `LLMEngine.swift:606-615` already restricts rollback to standard attention).
   v0 targets a standard-attention model (Qwen3-0.6B), so this does not bite yet, but each
   stage's KV floor must still be honored.
+- Hybrid `qwen3_5` split-state staging is implemented as two cache groups: fixed recurrent
+  state for linear-attention layers and full KV for full-attention layers. The runtime must
+  replay tokens contiguously from position 0; a synthetic jump to a high `position_range`
+  only tests RoPE indexing with empty KV and is not valid full-context evidence. The current
+  Qwythos gate proves short HF-token parity plus native 1,048,576 KV-capacity allocation. On
+  2026-07-06, contiguous `TextStagedRealAssetTests/testQwythosLongContextSmoke` gates with
+  `prefill_chunk=128` passed 512 tokens (`prefill=24.193s`), 4,096 tokens (`prefill=183.167s`), and
+  16,384 tokens (`prefill=735.048s`), each generating token `[198]`. The measured slope projects to
+  about 13.1 h for full 1,048,576-token replay, so this does not prove practical sequential use of
+  the entire 1M context. Qwythos/Qwen3.6 qwen3_5 catalog rows must either stay capped at 16,384
+  sequential tokens or wait for a faster replay path before any full-context public claim.
 
 ---
 
@@ -490,11 +501,11 @@ check only until the same token-match evidence exists for real staged assets.
 
 - Nothing about throughput. A 3-stage split on one machine serializes three graph calls per
   token and shares one GPU; it will not be faster than monolithic and is not meant to be.
-- Nothing about qwen3-4b staged-local speed yet. No qwen3-4b staged artifact exists locally, and the
-  held qwen3-4b staged export is shelved unless BOSS explicitly reopens it. Existing Qwen3-0.6B
-  artifacts provide only internal directional local evidence: internal monolithic median `171.3` tok/s
-  vs internal same-machine staged `38.2` tok/s over the captured 256-token probe (`R=0.223`). Treat this as an
-  architecture decision input, not a published benchmark.
+- Nothing about staged-local speed. Same-machine staged placement is a correctness/debug mode; it is
+  not the single-device fast path. Existing Qwen3-0.6B artifacts provide only internal directional
+  local evidence: internal monolithic median `171.3` tok/s vs internal same-machine staged `38.2`
+  tok/s over the captured 256-token probe (`R=0.223`). Treat this as an architecture decision input,
+  not a published benchmark.
 - Nothing about temperature sampling (greedy only).
 - Nothing about real two-machine throughput or placing a model that exceeds one host's memory budget.
 - Nothing about staged upload readiness.
@@ -506,10 +517,9 @@ check only until the same token-match evidence exists for real staged assets.
   a single-device fast path. Qwen3-0.6B fp16 is verified 1:1 with HF under the teacher-forced gate;
   every other staged model needs per-model parity before any 1:1 claim.
 - `<model>-monolithic`: single-device fused local fast path. It must carry an explicit
-  determinism/parity status block. Current qwen3-4b monolithic behavior is deterministic in the
-  reviewed-ready local worktree via default `MonolithicPrefillPolicy` chunk16 mitigation, but as a
-  4-bit bundle it must not claim fp16-1:1 HF; it is the deterministic local 4-bit greedy path until a
-  same-quant oracle says more. No upload, HF card relabel, or public claim follows until BOSS sign-off.
+  determinism/parity status block. Current qwen3-4b monolithic behavior is deterministic by default
+  via the released `MonolithicPrefillPolicy` chunk16 mitigation. 4-bit bundles must not claim fp16 1:1
+  HF. The local greedy path stays limited to same-quant evidence until a same-quant oracle says more.
 
 ---
 

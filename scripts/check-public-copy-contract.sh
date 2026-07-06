@@ -17,15 +17,20 @@ Structured output requires a real model smoke before public claims.
 The response_format path is unsupported until a backend constrained-decoding gate passes.
 Exact continuation reuse may apply in loaded CoreAILM fast handles.
 Partial-prefix reuse is unsupported until a release gate exists.
-Multimodal requests are parsed but not supported by any verified runtime bundle yet.
-Image, audio, and video requests return HTTP 400 until runtime serving evidence exists.
+Gemma 4 image+text has verified runtime bundle and serving evidence.
+Audio, video, multipart, and unsupported backends return clean 400/503 errors.
 Staged bundles are distributed artifacts; same-machine staged is not a single-device fast path.
+A monolithic multimodal path would require a new export/runtime contract.
 The monolithic 4-bit path is deterministic 4-bit greedy and must not claim fp16 1:1.
+Unsafe wider stateful batch prefill is not a release path; chunk16 is the default.
 Internal directional speed evidence: monolithic `171.3` tok/s vs staged `38.2` tok/s; do not publish.
 Do not claim staged upload readiness until two-machine hardware evidence and sign-off exist.
 Before asking for MacBook Thunderbolt testing, the readiness gate must pass.
+	qwen3_5 full-1M context claims require practical contiguous replay evidence or an approved narrower label.
+	GGUF image-text conversion needs a safetensors source or a verified mmproj importer.
 RDMA over Thunderbolt 5 is a future hardware-gated transport design, not hardware evidence.
 Do not claim RDMA support without a TB5 pair, captured negotiation evidence, and sign-off.
+Use scripts/remove-export.sh for local export cleanup after upload verification.
 EOF
 
 "$SCRIPT_DIR/check-public-copy.sh" "$allowed" >/dev/null
@@ -145,6 +150,38 @@ rg -q '4-bit bundles must not claim fp16 1:1' "$tmpdir/fp16-claim.out" || {
 cat > "$blocked" <<'EOF'
 # Release Notes
 
+Monolithic multimodal image-text serving is supported as the fast path.
+EOF
+
+if "$SCRIPT_DIR/check-public-copy.sh" "$blocked" >"$tmpdir/monolithic-mm.out" 2>&1; then
+  echo "error: monolithic multimodal claim unexpectedly passed" >&2
+  exit 1
+fi
+rg -q 'monolithic multimodal public claims require a new export/runtime contract' "$tmpdir/monolithic-mm.out" || {
+  echo "error: monolithic-mm failure did not mention new export/runtime contract" >&2
+  cat "$tmpdir/monolithic-mm.out" >&2
+  exit 1
+}
+
+cat > "$blocked" <<'EOF'
+# Release Notes
+
+Wider stateful batch prefill above 16 tokens is deterministic and ready.
+EOF
+
+if "$SCRIPT_DIR/check-public-copy.sh" "$blocked" >"$tmpdir/stateful-prefill.out" 2>&1; then
+  echo "error: stateful prefill claim unexpectedly passed" >&2
+  exit 1
+fi
+rg -q 'wider stateful monolithic prefill claims require deterministic >16-token evidence' "$tmpdir/stateful-prefill.out" || {
+  echo "error: stateful-prefill failure did not mention deterministic >16 evidence" >&2
+  cat "$tmpdir/stateful-prefill.out" >&2
+  exit 1
+}
+
+cat > "$blocked" <<'EOF'
+# Release Notes
+
 The staged distributed package is ready for Thunderbolt testing.
 EOF
 
@@ -171,6 +208,54 @@ fi
 rg -q 'distributed readiness/upload claims require two-machine hardware evidence' "$tmpdir/staged-upload-ready.out" || {
   echo "error: staged-upload failure did not mention hardware evidence" >&2
   cat "$tmpdir/staged-upload-ready.out" >&2
+  exit 1
+}
+
+cat > "$blocked" <<'EOF'
+# Release Notes
+
+Qwythos qwen3_5 full-1M context is verified and ready.
+EOF
+
+if "$SCRIPT_DIR/check-public-copy.sh" "$blocked" >"$tmpdir/qwen35-full-context.out" 2>&1; then
+  echo "error: qwen3_5 full-context claim unexpectedly passed" >&2
+  exit 1
+fi
+rg -q 'qwen3_5 full-context public claims require practical contiguous replay evidence' "$tmpdir/qwen35-full-context.out" || {
+  echo "error: qwen3_5 full-context failure did not mention contiguous replay evidence" >&2
+  cat "$tmpdir/qwen35-full-context.out" >&2
+  exit 1
+}
+
+cat > "$blocked" <<'EOF'
+# Release Notes
+
+Qwen3.5 million-token context ships and works.
+EOF
+
+if "$SCRIPT_DIR/check-public-copy.sh" "$blocked" >"$tmpdir/qwen35-million-token.out" 2>&1; then
+  echo "error: qwen3_5 million-token claim unexpectedly passed" >&2
+  exit 1
+fi
+rg -q 'qwen3_5 full-context public claims require practical contiguous replay evidence' "$tmpdir/qwen35-million-token.out" || {
+  echo "error: qwen3_5 million-token failure did not mention contiguous replay evidence" >&2
+  cat "$tmpdir/qwen35-million-token.out" >&2
+  exit 1
+}
+
+cat > "$blocked" <<'EOF'
+# Release Notes
+
+GGUF image-text conversion is supported for models with mmproj files.
+EOF
+
+if "$SCRIPT_DIR/check-public-copy.sh" "$blocked" >"$tmpdir/gguf-mm.out" 2>&1; then
+  echo "error: GGUF image-text claim unexpectedly passed" >&2
+  exit 1
+fi
+rg -q 'GGUF image-text public claims require a safetensors source or a verified mmproj importer' "$tmpdir/gguf-mm.out" || {
+  echo "error: GGUF image-text failure did not mention safetensors or mmproj importer" >&2
+  cat "$tmpdir/gguf-mm.out" >&2
   exit 1
 }
 
@@ -235,6 +320,22 @@ fi
 rg -q 'public speed claims require publishable raw benchmark evidence' "$tmpdir/bench-markdown.out" || {
   echo "error: markdown-speed failure did not mention publishable raw evidence" >&2
   cat "$tmpdir/bench-markdown.out" >&2
+  exit 1
+}
+
+cat > "$blocked" <<'EOF'
+# Release Notes
+
+Cleanup after upload: rm -rf models/exports/demo-bundle
+EOF
+
+if "$SCRIPT_DIR/check-public-copy.sh" "$blocked" >"$tmpdir/export-cleanup.out" 2>&1; then
+  echo "error: unsafe export cleanup command unexpectedly passed" >&2
+  exit 1
+fi
+rg -q 'unsafe export cleanup command; use scripts/remove-export.sh' "$tmpdir/export-cleanup.out" || {
+  echo "error: export-cleanup failure did not mention remove-export" >&2
+  cat "$tmpdir/export-cleanup.out" >&2
   exit 1
 }
 
