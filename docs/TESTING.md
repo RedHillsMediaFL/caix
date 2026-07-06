@@ -55,6 +55,7 @@ For a manifest-wide run, use the metadata collector:
 scripts/collect-model-revisions.sh \
   --out benchmarks/revisions.tsv \
   --details benchmarks/revisions-details.tsv
+scripts/check-model-revisions.sh
 ```
 
 ## Install the Bundle
@@ -105,6 +106,28 @@ Fail condition:
 - The process exits nonzero.
 - Core AI reports a model-contract, specialization, memory, or shape error.
 - Output is empty after a successful load.
+
+### Hybrid qwen3_5 Full-Context Gate
+
+`qwen3_5` and `qwen3_5_moe` bundles use hybrid recurrent/full-attention state, not a standard
+all-layer KV cache. A full-context claim for these models needs stronger evidence than allocation
+or a high-position smoke:
+
+- Short-sequence parity must match a deterministic HF/token oracle.
+- The bundle must allocate its native KV capacity and serve a long prompt without memory pressure.
+- Publication as "full native context" additionally requires a practical contiguous replay gate
+  from token 0 through the claimed context, or an explicitly narrower card/status label approved in
+  the conversion ledger.
+
+Do not use a synthetic jump to a high `position_range` as evidence. The recurrent/full KV state is
+created by replaying the sequence; jumping would leave the cache empty and only exercise position
+encoding. Current Qwythos evidence is short HF parity, native 1,048,576 KV-capacity allocation, and
+contiguous `TextStagedRealAssetTests/testQwythosLongContextSmoke` gates at
+`COREAI_STAGED_PREFILL_CHUNK=128` through 512 tokens (`prefill=24.193s`), 4,096 tokens
+(`prefill=183.167s`), and 16,384 tokens (`prefill=735.048s`). The 16,384-token run projects to about
+13.1 h for a full 1,048,576-token replay, so Qwythos public sequential context is capped at 16,384
+tokens until replay performance improves. That evidence is useful for runtime bring-up, but it is
+not enough to publish a full-1M sequential-context claim.
 
 ## Benchmark
 
@@ -164,6 +187,7 @@ For a suite run, write or collect a TSV with exact revisions:
 ```bash
 printf '%s\t%s\n' "$REPO" "$REVISION" > benchmarks/revisions.tsv
 scripts/collect-model-revisions.sh --out benchmarks/revisions.tsv
+scripts/check-model-revisions.sh
 scripts/check-dependency-evidence.sh
 scripts/benchmark-suite.sh \
   --exports models/exports \
@@ -206,9 +230,9 @@ The public-copy guard allows only the narrow prefix-cache wording that exact con
 apply in loaded CoreAILM fast handles. General prompt caching is unsupported in public copy, and
 partial or semantic prefix reuse is blocked. Cross-session caches and SSD-persistent KV snapshots
 are blocked until a release gate proves them.
-The same guard blocks positive multimodal, vision, image, audio, or video serving claims. Public copy
-may say multimodal requests are parsed but unsupported and return HTTP 400 until a verified runtime
-bundle plus serving evidence exists.
+The same guard rejects broad media-capability copy. Gemma 4 image+text copy must be tied to a
+verified runtime bundle plus serving evidence; audio, video, multipart, and unsupported backends must
+still be described as clean 400/503 errors.
 Serving-path labels are also guarded: `<model>-staged` is the distributed artifact, not the
 single-device fast path, and 4-bit monolithic bundles must not claim fp16 1:1.
 Markdown-wrapped speed numbers and `x faster` wording are guarded too. They must either cite
@@ -228,8 +252,10 @@ For live collection notes, use `scripts/check-hf-collections.sh`. The local fixt
 touching the Hub.
 
 That check reads only card `README.md` files from the Hub. It does not download model payloads.
-Cards must carry the support link, card-v2 evidence table, and any required `caix-status-label`
-block for `needs-test`, component-only, blocked, or instability labels before publication. Use
+Cards must carry the production user-facing contract: `library_name: caix`, `base_model`,
+small RHM logo, `Install & run`, `At a glance` specs, short status, `## License`, and the
+open-source footer. Internal validation numbers, build details, and test-device notes stay in the
+manifest, revision tables, and ledger, not public cards. Use
 `scripts/check-hf-model-cards.sh --cards-dir <dir>` to run the same contract against local
 `${repo//\//__}.README.md` fixtures without touching the Hub.
 The local fixture regression is `scripts/check-hf-model-card-contract.sh`.
@@ -295,9 +321,10 @@ scripts/diffusion-eval/validate-run.py --run quality/raw/<run>
 
 ## Cleanup
 
-After testing, remove only the payload you installed:
+After testing, preview cleanup, then remove only the payload you installed:
 
 ```bash
+scripts/remove-export.sh --dry-run "$NAME"
 scripts/remove-export.sh "$NAME"
 ```
 

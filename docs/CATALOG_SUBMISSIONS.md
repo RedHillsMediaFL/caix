@@ -10,29 +10,30 @@ A model can go in the catalog only as one of these states:
 | state | required evidence |
 |---|---|
 | `verified` | `caix inspect` plus load/generation smoke on target hardware; benchmark rows need raw logs |
-| `needs-test` | structural checks passed, but the needed hardware is unavailable or lacks enough unified memory |
+| `needs-test` | structural checks passed, but the needed hardware is unavailable, lacks enough unified memory, or has not produced package-specific evidence |
 | `component` | draft/assistant/MTP component; card names the matching target package |
 | `blocked` | converted or attempted, but runtime load/generation fails; not a normal install target |
 
-For `needs-test`, state the exact gap: memory ceiling, missing second machine, missing Thunderbolt
-test, or Core AI/runtime issue. Do not imply runtime success.
+For `needs-test`, state the exact gap: memory ceiling, missing package-specific distributed hardware
+evidence, missing Thunderbolt test, or Core AI/runtime issue. Do not imply runtime success.
 
-Every public RHM card must satisfy the card-v2 metadata contract before catalog promotion:
-`library_name: caix`, `## Download`, `## License`, the support link, and evidence rows for Base
-model, Format, Quant, Context, Runtime, and License. Component, staged, blocked, and
-instability-gated cards must include a `caix-status-label` block and must not claim ready-to-run or
-verified status. A card that does claim ready-to-run or verified-in-caix status must cite parity
-evidence and speed/benchmark evidence.
-MTP/speculative package cards must also include a `caix-status-label` block that identifies the
-target+draft package and names the matching standalone target context; publish target-only and
-target+draft results separately.
+Every public RHM card must satisfy the production card contract before catalog promotion:
+`library_name: caix`, `base_model`, a small RHM logo, an `Install & run` section with Homebrew,
+catalog install, and `caix serve --model` commands, an `At a glance` section with the base model,
+context, quantization/precision, download or disk size, and Apple silicon runtime target, a short
+status, `## License`, and the open-source footer link. Public cards should not include internal
+validation numbers such as RSS, determinism counts, oracle token IDs, multimodal agreement ratios, or
+build/test device details; keep those in `benchmarks/MANIFEST.tsv`, revision tables, and the
+conversion ledger. Component, staged, blocked, MTP/speculative, and instability-gated cards must be
+clearly described in user-facing language and must not claim unsupported speed or readiness.
+Publish target-only and target+draft results separately.
 Use `<model>-staged` for the artifact that can run all stages locally or split them across workers,
 and `<model>-monolithic` for a separate single-machine fused fast path. A monolithic card needs a
 determinism/parity status block. The reviewed qwen3-4b monolithic fix makes stateful prefill
 deterministic by default with a `<=16` chunk cap, but it remains a 4bit path and must not claim
 fp16 1:1; keep it unpublished/unrelabelled until the fix is accepted and release-gated.
-`scripts/check-publication-gates.sh --hub` enforces this through `scripts/check-hf-model-cards.sh`
-without downloading model payloads.
+`scripts/check-publication-gates.sh --hub` enforces this production-card contract through
+`scripts/check-hf-model-cards.sh` without downloading model payloads.
 
 ## Submit a Model
 
@@ -55,8 +56,9 @@ caix cluster plan --manifest <bundle>/stage-manifest.json --workers studio=64,ma
 caix deploy verify --endpoint <host-a>:1237 --endpoint <host-b>:1237 --min-mbps <floor>
 ```
 
-If the second machine is unavailable, keep the staged package in `needs-test`; do not promote it
-from Studio-only `cluster plan`, loopback/socket smoke, or diagnostic HF parity evidence.
+Keep staged packages in `needs-test` until that package has installed-caix hardware evidence on the
+target machines; do not promote from Studio-only `cluster plan`, loopback/socket smoke, generic
+two-machine POC evidence, or diagnostic HF parity evidence.
 
 Attach raw logs for failures and benchmarks. Speed claims need the raw benchmark directory, exact
 model repo revision, caix commit, prompt, token budget, temperature, warmup count, and measured runs.

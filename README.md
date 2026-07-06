@@ -80,19 +80,19 @@ third-party installs.
 
 ### Option A — Homebrew
 
-Homebrew is the intended default install path after tap testing and Core AI stabilization.
+Homebrew is the default install path for versioned beta releases.
 
 Current beta path:
 
 ```bash
+brew tap RedHillsMediaFL/caix
 brew install redhillsmediafl/caix/caix
 caix doctor
 ```
 
-After macOS 27/Core AI are stable and the release formula passes audit/test:
+After macOS 27/Core AI are stable and the formula is eligible for Homebrew/core, this can become:
 
 ```bash
-brew tap RedHillsMediaFL/caix
 brew install caix
 caix doctor
 ```
@@ -187,11 +187,11 @@ caix catalog redhillsmediafl/qwen
 caix catalog install <repo>
 ```
 
-Model cards list exact revisions, licenses, storage, RAM notes, and any speculative or EAGLE flags.
-Catalog entries are published only when they are backed by open-source/open-weight models and either
-have runtime verification, or are converted artifacts that our current hardware cannot fully smoke.
-Those cards must say what passed and what still needs tester hardware. Blocked and component-only
-packages must be labeled that way.
+Model cards list the install command, base model, context, quantization/precision, download size,
+license, short status, and any speculative or EAGLE flags. Catalog entries are published only when
+they are backed by open-source/open-weight models and either have runtime verification, or are
+converted artifacts that our current hardware cannot fully smoke. Those cards must say what passed
+and what still needs tester hardware. Blocked and component-only packages must be labeled that way.
 
 To submit a model or tester result, see [docs/CATALOG_SUBMISSIONS.md](docs/CATALOG_SUBMISSIONS.md).
 
@@ -309,6 +309,10 @@ scripts/refresh-export-index.sh /Volumes/SSD/ai-dev/coreai-pipeline/exports \
 - **Authored architectures.** Conversion support exists for gemma3/gemma4,
   qwen2/qwen3/qwen3_moe/qwen3_5/qwen3_5_moe, glm4, mistral, mixtral, and gpt_oss. New model types
   are flagged with their required Core AI authoring steps in the UI and support logs.
+- **Qwen3.5 hybrid long context.** `qwen3_5` split-state staging is in bring-up: short HF parity,
+  native 1,048,576 KV-capacity allocation, and contiguous replay through 16,384 tokens pass. Public
+  sequential context is capped at 16,384 tokens until the replay path is fast enough for a practical
+  full-context gate.
 - **Ornith-1.0-35B lane.** `ornith-1.0-35b` is registered for local conversion. The authored int4
   path exports a 17 GB bundle, but runtime warmup is blocked by an MPS reshape failure, so it is not
   published to HF. The next fix is graph segmentation or a decode-shape workaround. The 397B variant
@@ -326,7 +330,7 @@ Conversion wraps Apple's `coreai.llm.export` and needs Apple's `coreai-models` P
 # point caix at your coreai-models python dir and keep conversion IO on the SSD:
 export caix_coreai_models=/path/to/coreai-models/python
 export HF_HOME=${HF_HOME:-/Volumes/SSD/hf-cache}
-export caix_tmpdir=${caix_tmpdir:-/Volumes/SSD/coreai-tmp}
+export caix_tmpdir=${caix_tmpdir:-/Volumes/SSD/caix/.tmp/coreai-tmp}
 export caix_exports=${caix_exports:-$PWD/models/exports}
 scripts/check-disk-pressure.sh --path /Volumes/SSD --floor-gib 500
 
@@ -348,8 +352,8 @@ work.
 
 ### GGUF repos (llama.cpp models)
 
-caix can convert GGUF repos. If a repo ships only `.gguf` files, caix dequantizes the GGUF back to
-an HF checkpoint, then runs the normal export.
+caix can attempt text conversion for GGUF repos. If a repo ships only `.gguf` files, caix dequantizes
+the GGUF back to an HF checkpoint, then runs the normal export.
 
 ```bash
 # repo: caix picks the least-compressed quant present (F16 > Q8_0 > Q6_K > ...)
@@ -364,6 +368,8 @@ confirms the architecture after dequant.
 > **Quality caveat.** A GGUF is already quantized. Dequantizing and re-exporting, often to 4-bit, is
 > quant-on-quant and loses quality versus converting the original safetensors. Prefer the original
 > release when it exists. GGUF does not add architecture support.
+> Image-text GGUF repos that ship an `mmproj` sidecar are not yet full multimodal conversions in
+> caix; the current GGUF path does not consume `mmproj` vision files.
 > Needs `gguf>=0.10.0` (added automatically for the dequant run). Note: `gemma4` GGUFs are **not**
 > convertible — `transformers` has no GGUF dequantizer for that architecture yet.
 
@@ -375,7 +381,7 @@ confirms the architecture after dequant.
 |---|---|
 | Models | `~/.caix/models/exports/<name>/` (override with `caix_exports` or `--exports`) |
 | HF cache | `$HF_HOME`; otherwise Hugging Face uses its local default |
-| Converter tmp | `$caix_tmpdir`; converter default is `/Volumes/SSD/coreai-tmp` |
+| Converter tmp | `$caix_tmpdir`; converter default is `/Volumes/SSD/caix/.tmp/coreai-tmp` |
 | Export index | optional JSON from `scripts/refresh-export-index.sh` (set `caix_export_index`) |
 | Web UI | `web/` (served at `/` and `/chat`; restart `caix serve` after editing these files) |
 | Usage stats | `~/.caix/usage.json` (override with `--stats-file`) — survives restarts |

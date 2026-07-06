@@ -12,9 +12,10 @@ Options:
   --cards-dir <dir>  Read local card fixtures instead of fetching from the Hub.
 
 Reads README.md files through the Hugging Face CLI unless --cards-dir is set. Does not download model
-payloads. Fails when a card has public-copy wording that should not ship, omits the support link,
-omits the card-v2 evidence table, lacks a required status block, or claims ready/verified status
-without parity and speed evidence.
+payloads. Fails when a card has public-copy wording that should not ship or omits the production
+model-card contract: caix metadata, a small RHM logo, install/run instructions, user-facing specs,
+license, and support footer. Internal validation numbers and build/test process details belong in
+MANIFEST/ledger files, not public cards.
 USAGE
 }
 
@@ -120,6 +121,35 @@ while IFS=$'\t' read -r repo kind mode status notes; do
   card="$cards_dir/${repo//\//__}.README.md"
   lower="$(tr '[:upper:]' '[:lower:]' < "$card")"
 
+  duplicate_tags="$(
+    awk '
+      BEGIN { front = 0; tags = 0 }
+      /^---[[:space:]]*$/ {
+        if (front == 0) { front = 1; next }
+        exit
+      }
+      front && /^tags:[[:space:]]*$/ { tags = 1; next }
+      front && tags && /^[[:space:]]*-/ {
+        tag = $0
+        sub(/^[[:space:]]*-[[:space:]]*/, "", tag)
+        sub(/[[:space:]]*#.*/, "", tag)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", tag)
+        if (tag != "") print tolower(tag)
+        next
+      }
+      front && tags && /^[[:alnum:]_-]+:/ { tags = 0 }
+    ' "$card" | sort | uniq -d
+  )"
+  if [[ -n "$duplicate_tags" ]]; then
+    echo "error: duplicate front-matter tag(s) in model card: $repo@$REVISION ($(tr '\n' ',' <<<"$duplicate_tags" | sed 's/,$//'))" >&2
+    contract_fail=1
+  fi
+
+  if printf '%s\n' "$lower" | rg -q 'this[[:space:]]+none[[:space:]]*;'; then
+    echo "error: unfilled compression fragment in model card: $repo@$REVISION (This none;)" >&2
+    contract_fail=1
+  fi
+
   require_text() {
     local pattern="$1"
     local message="$2"
@@ -129,25 +159,41 @@ while IFS=$'\t' read -r repo kind mode status notes; do
     fi
   }
 
+  reject_text() {
+    local pattern="$1"
+    local message="$2"
+    if printf '%s\n' "$lower" | rg -q "$pattern"; then
+      echo "error: $message: $repo@$REVISION" >&2
+      contract_fail=1
+    fi
+  }
+
   require_text '^library_name:[[:space:]]*caix$' "model card front matter must declare library_name: caix"
-  require_text '^## download$' "model card must include a Download section"
+  require_text '^base_model:[[:space:]]*[^[:space:]].*$' "model card front matter must declare base_model"
+  require_text '<img[^>]+(redhillsmediafl|red hills media|rhm)[^>]+width="?([8-9][0-9]|1[0-5][0-9])"?|<img[^>]+width="?([8-9][0-9]|1[0-5][0-9])"?[^>]+(redhillsmediafl|red hills media|rhm)' \
+    "model card must include a small RHM logo (width 80-159)"
+  require_text '^## install[[:space:]]*&[[:space:]]*run$' "model card must include an Install & run section"
+  require_text 'brew install redhillsmediafl/caix/caix|brew upgrade redhillsmediafl/caix/caix' \
+    "model card must include Homebrew caix install instructions"
+  require_text 'caix catalog install[[:space:]]+redhillsmediafl/' \
+    "model card must include caix catalog install instructions"
+  require_text 'caix serve --model[[:space:]]+' "model card must include caix serve --model instructions"
+  require_text '^## at a glance$' "model card must include an At a glance section"
+  require_text 'context:.*matches base model' "model card must state context matches base model"
+  require_text 'runs on:.*apple silicon' "model card must state Apple silicon support"
+  require_text 'base model:' "model card must name the base model in At a glance"
+  require_text 'quantization:|precision:|weights:' "model card must state quantization/precision"
+  require_text 'download:|disk:|size:' "model card must state download/disk size"
+  require_text '^## status$' "model card must include a Status section"
+  require_text '^(verified|needs-test|needs test|component|blocked|beta)' \
+    "model card status must use verified/needs-test/component/blocked/beta wording"
   require_text '^## license$' "model card must include a License section"
-  require_text '[|][[:space:]]*base model[[:space:]]*[|]' "model card must include Base model evidence"
-  require_text '[|][[:space:]]*format[[:space:]]*[|]' "model card must include Format evidence"
-  require_text '[|][[:space:]]*quant[[:space:]]*[|]' "model card must include Quant evidence"
-  require_text '[|][[:space:]]*context[[:space:]]*[|]' "model card must include Context evidence"
-  require_text '[|][[:space:]]*runtime[[:space:]]*[|]' "model card must include Runtime evidence"
-  require_text '[|][[:space:]]*license[[:space:]]*[|]' "model card must include License evidence"
+  reject_text 'tested on|validated on|verified on .*mac|mac studio|macbook|mac mini|xcode|os build|sw_vers|build host|build machine|built on|converted on|export host|where we build|when we build|why we build|how we build|coreai-models commit|caix commit|oracle token|determinism count|peak rss|wired memory' \
+    "model card must not include build/test device details"
 
   ready_claim=0
-  if printf '%s\n' "$lower" | rg -q 'ready-to-run|verified in caix'; then
+  if printf '%s\n' "$lower" | rg -q 'ready-to-run|ready to run|verified in caix'; then
     ready_claim=1
-  fi
-  if [[ "$ready_claim" -eq 1 ]]; then
-    require_text 'parity evidence|parity[[:space:]]+gate|teacher-forced|hf-fp16|1:1[[:space:]]+parity' \
-      "ready/verified card must cite parity evidence"
-    require_text 'speed evidence|benchmark evidence|raw benchmark|decode speed|performance evidence' \
-      "ready/verified card must cite speed evidence"
   fi
 
   case "$status" in
@@ -160,25 +206,21 @@ while IFS=$'\t' read -r repo kind mode status notes; do
   esac
 
   if [[ "$kind" == "staged" || "$status" == "component_only" ]]; then
-    require_text 'caix-status-label' "component/staged card must include a caix-status-label block"
-    require_text 'component-only|component only|needs-test|needs test|not a standalone|do not test alone|matching target|requires distributed|distributed hardware|hardware smoke' \
+    require_text 'staged|distributed|multi-device|multimodal|understands images|image' \
       "component/staged card must be clearly labeled"
   fi
   if [[ "$kind" == "mtp" ]]; then
-    require_text 'caix-status-label' "MTP/speculative card must include a caix-status-label block"
     require_text 'mtp|speculative|eagle|target[+ -]?draft|target and draft|target-plus-draft|matching target|standalone target|compare against standalone' \
       "MTP/speculative card must identify the target+draft package and matching target context"
   fi
   if [[ "$status" == "blocked_runtime" ]]; then
-    require_text 'caix-status-label' "blocked card must include a caix-status-label block"
     require_text 'blocked|do not test|rebuild|runtime' "blocked card must be clearly labeled"
   fi
   if [[ "$notes" == *"local stdout instability"* || "$notes" == *"publish only if"* || "$notes" == *"nondeterministic"* || "$notes" == *"non-1:1"* ]]; then
     if [[ "$ready_claim" -eq 1 ]]; then
       echo "error: instability-gated card must not claim ready-to-run or verified status: $repo@$REVISION" >&2
-      contract_fail=1
+        contract_fail=1
     fi
-    require_text 'caix-status-label' "instability-gated card must include a caix-status-label block"
     require_text 'stability|determinism|nondeterministic|non-1:1|needs-test|needs test|blocked|do not publish' \
       "instability-gated card must be clearly labeled"
   fi
