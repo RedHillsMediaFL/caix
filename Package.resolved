@@ -1,5 +1,5 @@
 {
-  "originHash" : "8160da5cb4239134ad67c3d699b98e6585e62d0ee8bb938f162bbc4f934f23dd",
+  "originHash" : "d109ac544e8c380e72c049612eac0edda0626497523d8dfa1a4785ad28afe241",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -16,7 +16,7 @@
       "location" : "https://github.com/apple/coreai-models.git",
       "state" : {
         "branch" : "main",
-        "revision" : "e203a0da1f847041d7d28036fcc9b484495359bb"
+        "revision" : "aff0bb2c9992da9fbeb4d5b9533b05a9efc2f6dd"
       }
     },
     {
@@ -150,8 +150,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/huggingface/swift-jinja.git",
       "state" : {
-        "revision" : "0b67ecb79139f6addef8699eff3622808aa6c7dc",
-        "version" : "2.3.6"
+        "revision" : "7d0b8880ef8e567dd4e0089f8b99fb354129017c",
+        "version" : "2.4.2"
       }
     },
     {
@@ -268,7 +268,7 @@
       "location" : "https://github.com/mlc-ai/xgrammar",
       "state" : {
         "branch" : "main",
-        "revision" : "557becfb64c503ae9c04344b0047661f43f44320"
+        "revision" : "db4b9557a3984841ccff930333e54bc2a319068e"
       }
     },
     {

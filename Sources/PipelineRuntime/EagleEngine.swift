@@ -452,6 +452,7 @@ public final class EagleEngine {
     let target: EagleTargetEngine
     let draft: EagleDraftEngine
     let tokenizer: any Tokenizer
+    private let chatRenderer: Gemma4ChatTemplateContract.ResidentRenderer
     let draftTokens: Int
     public let backbone: Int
     let slidingWindow: Int
@@ -462,10 +463,12 @@ public final class EagleEngine {
     let draftUnrolled: EagleDraftUnrolledEngine?
 
     private init(target: EagleTargetEngine, draft: EagleDraftEngine, tokenizer: any Tokenizer,
+                 chatRenderer: Gemma4ChatTemplateContract.ResidentRenderer,
                  draftTokens: Int, backbone: Int, slidingWindow: Int, maxContext: Int,
                  loadSeconds: Double, stopIds: Set<Int>,
                  draftUnrolled: EagleDraftUnrolledEngine? = nil) {
         self.target = target; self.draft = draft; self.tokenizer = tokenizer
+        self.chatRenderer = chatRenderer
         self.draftUnrolled = draftUnrolled
         // With an unrolled draft, K is fixed by the exported graph.
         self.draftTokens = max(1, draftUnrolled?.numSteps ?? draftTokens); self.backbone = backbone
@@ -477,6 +480,11 @@ public final class EagleEngine {
                             vocabSize: Int, backbone: Int, slidingWindow: Int, maxContext: Int,
                             verbose: Bool, unrolledURL: URL? = nil) async throws -> EagleEngine {
         let t0 = Date()
+        // Authenticate and compile the July prompt contract before allocating either model.
+        // EAGLE is the Gemma 4 MTP backend; stale Gemma templates must fail closed rather than
+        // silently changing turn boundaries or tool-call semantics.
+        let chatRenderer = try Gemma4ChatTemplateContract.ResidentRenderer(
+            tokenizerDirectory: tokenizerDir)
         async let tok = AutoTokenizer.from(modelFolder: tokenizerDir)
         let target = try await EagleTargetEngine.load(
             aimodelURL: targetURL, vocabSize: vocabSize, hiddenSize: backbone)
@@ -498,7 +506,8 @@ public final class EagleEngine {
         // the real turn boundary instead of overrunning and repeating.
         let stops = LLMEngine.stopTokenIds(tokenizer: tokenizer, tokenizerDir: tokenizerDir)
         return EagleEngine(
-            target: target, draft: draft, tokenizer: tokenizer, draftTokens: draftTokens,
+            target: target, draft: draft, tokenizer: tokenizer,
+            chatRenderer: chatRenderer, draftTokens: draftTokens,
             backbone: resolvedBackbone, slidingWindow: slidingWindow, maxContext: maxContext,
             loadSeconds: Date().timeIntervalSince(t0), stopIds: stops, draftUnrolled: unrolled)
     }
@@ -614,26 +623,66 @@ public final class EagleEngine {
     /// Public server entry: apply the chat template (or raw-encode) to OpenAI/Anthropic-style
     /// `messages`, then run the EAGLE speculative loop. Used by `CoreAIServer` to serve the MTP
     /// model through the same `/v1/chat/completions` path as standard models.
-    public func generate(messages: [[String: String]], options: CoreAIPipeline.Options,
-                         tools: [[String: any Sendable]]? = nil,
-                         onToken: ((String) -> Void)?) async throws -> CoreAIPipeline.SpeculativeResult {
+    public func generate(
+        messages: [[String: any Sendable]],
+        options: CoreAIPipeline.Options,
+        tools: [[String: any Sendable]]? = nil,
+        additionalContext: [String: any Sendable]? = nil,
+        onToken: ((String) -> Void)?
+    ) async throws -> CoreAIPipeline.SpeculativeResult {
         guard options.constrainedJSONSchema == nil else {
             throw CoreAIPipeline.RuntimeError.unsupportedFeature(
                 "JSON-schema constrained decoding is not supported on EAGLE speculative decoding backends")
         }
-        let promptTokens: [Int]
-        if options.applyChatTemplate {
-            if let tools, !tools.isEmpty {
-                promptTokens = try tokenizer.applyChatTemplate(messages: messages, tools: tools)
-            } else {
-                promptTokens = try tokenizer.applyChatTemplate(messages: messages)
-            }
-        } else {
-            promptTokens = tokenizer.encode(text: messages.last?["content"] ?? "")
-        }
+        let promptTokens = try encodePrompt(
+            messages: messages,
+            tools: tools,
+            additionalContext: additionalContext,
+            applyChatTemplate: options.applyChatTemplate)
         // Live speculative metrics are published by the caller (ModelHandle), which knows the
         // served model name.
         return try await generate(promptTokens: promptTokens, options: options, onToken: onToken)
+    }
+
+    /// Compatibility entry for legacy Chat Completions callers. New Responses callers use the
+    /// rich overload above so nested reasoning/tool objects are never flattened.
+    public func generate(
+        messages: [[String: String]],
+        options: CoreAIPipeline.Options,
+        tools: [[String: any Sendable]]? = nil,
+        onToken: ((String) -> Void)?
+    ) async throws -> CoreAIPipeline.SpeculativeResult {
+        let rich: [[String: any Sendable]] = messages.map { message in
+            var value: [String: any Sendable] = [:]
+            for (key, item) in message { value[key] = item }
+            return value
+        }
+        return try await generate(
+            messages: rich,
+            options: options,
+            tools: tools,
+            additionalContext: nil,
+            onToken: onToken)
+    }
+
+    func encodePrompt(
+        messages: [[String: any Sendable]],
+        tools: [[String: any Sendable]]? = nil,
+        additionalContext: [String: any Sendable]? = nil,
+        applyChatTemplate: Bool
+    ) throws -> [Int] {
+        if applyChatTemplate {
+            return try chatRenderer.encode(
+                tokenizer: tokenizer,
+                messages: messages,
+                tools: tools,
+                additionalContext: additionalContext)
+        }
+        guard let text = messages.last?["content"] as? String else {
+            throw CoreAIPipeline.RuntimeError.unsupportedFeature(
+                "raw EAGLE prompting requires a final string content item")
+        }
+        return tokenizer.encode(text: text)
     }
 
     func generate(promptTokens: [Int], options: CoreAIPipeline.Options,

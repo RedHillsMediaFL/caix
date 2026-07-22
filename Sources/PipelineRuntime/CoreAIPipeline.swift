@@ -640,13 +640,9 @@ public enum CoreAIPipeline {
             draftTokens: draftTokens, vocabSize: vocabSize, backbone: backbone,
             slidingWindow: slidingWindow, maxContext: maxContext, verbose: options.verbose,
             unrolledURL: draftUnrolledAimodel.map { URL(fileURLWithPath: $0) })
-        let promptTokens: [Int]
-        if options.applyChatTemplate {
-            promptTokens = try engine.tokenizer.applyChatTemplate(
-                messages: [["role": "user", "content": prompt]])
-        } else {
-            promptTokens = engine.tokenizer.encode(text: prompt)
-        }
+        let promptTokens = try engine.encodePrompt(
+            messages: [["role": "user", "content": prompt]],
+            applyChatTemplate: options.applyChatTemplate)
         if targetOnly {
             return try await engine.generateTargetOnly(
                 promptTokens: promptTokens, options: options, onToken: onToken)

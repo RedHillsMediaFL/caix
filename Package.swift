@@ -40,7 +40,13 @@ if enableCoreAIRuntime {
     packageDependencies.append(
         .package(url: "https://github.com/huggingface/swift-transformers", exact: "1.3.3")
     )
+    // PipelineRuntime renders the SHA-locked July Gemma 4 template directly so rich tool and
+    // reasoning objects can be validated against the exact rendered prompt before tokenization.
+    packageDependencies.append(
+        .package(url: "https://github.com/huggingface/swift-jinja.git", exact: "2.4.2")
+    )
     runtimeDependencies.append(.product(name: "Transformers", package: "swift-transformers"))
+    runtimeDependencies.append(.product(name: "Jinja", package: "swift-jinja"))
     runtimeSwiftSettings.append(.define("COREAI_RUNTIME"))
 }
 
