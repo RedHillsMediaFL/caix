@@ -1,4 +1,5 @@
 import Foundation
+import MachineStats
 import PipelineRuntime
 #if canImport(Darwin)
 import Darwin
@@ -329,6 +330,12 @@ final class ModelHandle: @unchecked Sendable {
         #endif
         }
     }
+    var defaultsToGreedyWhenTemperatureOmitted: Bool {
+        #if COREAI_RUNTIME
+        if case .textStaged = backend { return true }
+        #endif
+        return false
+    }
     var eagleBackbone: Int? {
         #if COREAI_RUNTIME
         if case .eagle(let engine) = backend { return engine.backbone }
@@ -340,9 +347,10 @@ final class ModelHandle: @unchecked Sendable {
     /// guarantees mutual exclusion per model. `tools` (when present) is threaded into the chat
     /// template so the model sees the callable functions (EAGLE path ignores tools).
     func generate(
-        messages: [[String: String]],
+        messages: [[String: any Sendable]],
         options: CoreAIPipeline.Options,
         tools: [[String: any Sendable]]? = nil,
+        additionalContext: [String: any Sendable]? = nil,
         onToken: ((String) -> Void)? = nil
     ) async throws -> CoreAIPipeline.Result {
         await gate.acquire()
@@ -351,13 +359,22 @@ final class ModelHandle: @unchecked Sendable {
             switch backend {
             case .persistent(let model):
                 result = try await model.generate(
-                    messages: messages, options: options, tools: tools, onToken: onToken)
+                    messages: try Self.stringMessages(messages),
+                    options: options,
+                    tools: tools,
+                    onToken: onToken)
             case .multimodalMonolithicGemma(let model):
                 result = try await model.generate(
-                    messages: messages, options: options, tools: tools, onToken: onToken)
+                    messages: try Self.stringMessages(messages),
+                    options: options,
+                    tools: tools,
+                    onToken: onToken)
             case .speculative(let model):
                 let r = try await model.generate(
-                    messages: messages, options: options, tools: tools, onToken: onToken)
+                    messages: try Self.stringMessages(messages),
+                    options: options,
+                    tools: tools,
+                    onToken: onToken)
                 LiveStats.record(SpeculativeStats(
                     model: displayName, tokensPerSecond: r.decodeTokensPerSecond,
                     acceptanceRate: r.acceptanceRate, tokensPerPass: r.tokensPerTargetForward,
@@ -372,7 +389,11 @@ final class ModelHandle: @unchecked Sendable {
             #if COREAI_RUNTIME
             case .eagle(let engine):
                 let r = try await engine.generate(
-                    messages: messages, options: options, tools: tools, onToken: onToken)
+                    messages: messages,
+                    options: options,
+                    tools: tools,
+                    additionalContext: additionalContext,
+                    onToken: onToken)
                 // Publish live speculative metrics for the dashboard, tagged with the served name.
                 LiveStats.record(SpeculativeStats(
                     model: displayName, tokensPerSecond: r.decodeTokensPerSecond,
@@ -390,6 +411,7 @@ final class ModelHandle: @unchecked Sendable {
                     messages: messages,
                     options: options,
                     tools: tools,
+                    additionalContext: additionalContext,
                     onToken: onToken)
             case .multimodalStaged(let model, _):
                 if let tools, !tools.isEmpty {
@@ -397,7 +419,9 @@ final class ModelHandle: @unchecked Sendable {
                         "multimodal staged Gemma does not support tool prompting yet")
                 }
                 result = try await model.generate(
-                    messages: messages, options: options, onToken: onToken)
+                    messages: try Self.stringMessages(messages),
+                    options: options,
+                    onToken: onToken)
             #endif
             }
             await gate.release()
@@ -408,6 +432,20 @@ final class ModelHandle: @unchecked Sendable {
         } catch {
             await gate.release()
             throw error
+        }
+    }
+
+    private static func stringMessages(
+        _ messages: [[String: any Sendable]]
+    ) throws -> [[String: String]] {
+        try messages.map { message in
+            guard let role = message["role"] as? String,
+                  let content = message["content"] as? String
+            else {
+                throw CoreAIPipeline.RuntimeError.unsupportedFeature(
+                    "this backend requires string role/content messages")
+            }
+            return ["role": role, "content": content]
         }
     }
 
@@ -657,6 +695,14 @@ public struct EagleConfig: Sendable {
 /// (actor reentrancy keeps the manager responsive to `listModels`/`isLoaded` meanwhile), and
 /// concurrent loads of the same name are de-duplicated to a single in-flight `Task`.
 public actor ModelManager {
+    struct NativeStagedMemorySnapshot: Sendable {
+        let totalPhysicalMemoryBytes: UInt64
+        let workerResidentBytes: UInt64
+        let availableBytes: UInt64
+        let pressure: ResidentMemoryPressure?
+        let swapUsedBytes: UInt64?
+    }
+
     private struct DiscoveredBundle: Sendable {
         var name: String
         var directoryName: String
@@ -683,6 +729,44 @@ public actor ModelManager {
         self.verbose = verbose
         self.eagleConfig = eagleConfig
         self.heavyTaskLockPath = heavyTaskLockPath ?? Self.defaultHeavyTaskLockPath(exportsDir: exportsDir)
+    }
+
+    static func makeStagedMemorySnapshotProvider(
+        readSnapshot: @escaping @Sendable () -> NativeStagedMemorySnapshot = {
+            let snapshot = MachineStats.memorySafetySnapshot()
+            let pressure: ResidentMemoryPressure?
+            switch snapshot.pressure {
+            case .green: pressure = .green
+            case .yellow: pressure = .yellow
+            case .red: pressure = .red
+            case .unknown: pressure = nil
+            }
+            return NativeStagedMemorySnapshot(
+                totalPhysicalMemoryBytes: snapshot.totalRAMBytes,
+                workerResidentBytes: snapshot.processPhysicalFootprintBytes,
+                availableBytes: snapshot.availableRAMBytes,
+                pressure: pressure,
+                swapUsedBytes: snapshot.swapUsedBytes)
+        }
+    ) -> @Sendable () throws -> DistributedStagedMemorySnapshot {
+        let baseline = readSnapshot()
+        return {
+            let current = readSnapshot()
+            guard let pressure = current.pressure,
+                  let baselineSwap = baseline.swapUsedBytes,
+                  let currentSwap = current.swapUsedBytes
+            else {
+                throw DistributedStagedMemoryAdmissionError.telemetryUnavailable
+            }
+            return DistributedStagedMemorySnapshot(
+                totalPhysicalMemoryBytes: current.totalPhysicalMemoryBytes,
+                workerResidentBytes: current.workerResidentBytes,
+                availableBytes: current.availableBytes,
+                pressure: pressure,
+                swapGrowthBytes: currentSwap >= baselineSwap
+                    ? currentSwap - baselineSwap
+                    : 0)
+        }
     }
 
     // MARK: Discovery
@@ -983,13 +1067,16 @@ public actor ModelManager {
             } else if Self.isTextStagedBundle(at: URL(fileURLWithPath: path, isDirectory: true)) {
                 #if COREAI_RUNTIME
                 let root = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
+                let stagedMemorySnapshotProvider =
+                    Self.makeStagedMemorySnapshotProvider()
                 if verbose {
                     FileHandle.standardError.write(
                         Data("[server] loading text staged bundle \(name)\n".utf8))
                 }
                 let model = try await TextStagedModel.load(
                     manifestURL: root.appendingPathComponent("stage-manifest.json"),
-                    verbose: verbose)
+                    verbose: verbose,
+                    stagedMemorySnapshotProvider: stagedMemorySnapshotProvider)
                 return ModelHandle(
                     textStaged: model,
                     name: name,

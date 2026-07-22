@@ -235,6 +235,7 @@ final class Gemma4ChatTemplateContractTests: XCTestCase {
     }
 
     func testCanonicalRejectsStringToolArgumentsLikeTransformersFiveSix() async throws {
+        let tokenizerDirectory = try tokenizerDirectory()
         let function: [String: any Sendable] = [
             "name": "f",
             "description": "F",
@@ -247,10 +248,13 @@ final class Gemma4ChatTemplateContractTests: XCTestCase {
             "function": ["name": "f", "arguments": "{}"] as [String: any Sendable],
         ]
         do {
-            _ = try await render([
-                ["role": "user", "content": "x"],
-                ["role": "assistant", "content": "", "tool_calls": [call]],
-            ], tools: tools)
+            _ = try await Gemma4ChatTemplateContract.render(
+                tokenizerDirectory: tokenizerDirectory,
+                messages: [
+                    ["role": "user", "content": "x"],
+                    ["role": "assistant", "content": "", "tool_calls": [call]],
+                ],
+                tools: tools)
             XCTFail("expected string tool arguments to be rejected")
         } catch {
             XCTAssertTrue(

@@ -10,14 +10,33 @@ public struct ChatMessage: Codable, Sendable {
     public var role: String          // system | user | assistant | tool
     public var content: String
     public var media: [MediaPart]
+    public var reasoningContent: String?
+    public var toolCalls: [JSONAny]?
+    public var toolCallID: String?
 
-    public init(role: String, content: String, media: [MediaPart] = []) {
+    public init(
+        role: String,
+        content: String,
+        media: [MediaPart] = [],
+        reasoningContent: String? = nil,
+        toolCalls: [JSONAny]? = nil,
+        toolCallID: String? = nil
+    ) {
         self.role = role
         self.content = content
         self.media = media
+        self.reasoningContent = reasoningContent
+        self.toolCalls = toolCalls
+        self.toolCallID = toolCallID
     }
 
-    private enum CodingKeys: String, CodingKey { case role, content }
+    private enum CodingKeys: String, CodingKey {
+        case role
+        case content
+        case reasoningContent = "reasoning_content"
+        case toolCalls = "tool_calls"
+        case toolCallID = "tool_call_id"
+    }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -25,12 +44,35 @@ public struct ChatMessage: Codable, Sendable {
         let parsed = try ContentParts.decode(from: c, forKey: .content)
         self.content = parsed.text
         self.media = parsed.media
+        self.reasoningContent = try c.decodeIfPresent(String.self, forKey: .reasoningContent)
+        self.toolCalls = try c.decodeIfPresent([JSONAny].self, forKey: .toolCalls)
+        self.toolCallID = try c.decodeIfPresent(String.self, forKey: .toolCallID)
     }
 
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(role, forKey: .role)
         try c.encode(content, forKey: .content)
+        try c.encodeIfPresent(reasoningContent, forKey: .reasoningContent)
+        try c.encodeIfPresent(toolCalls, forKey: .toolCalls)
+        try c.encodeIfPresent(toolCallID, forKey: .toolCallID)
+    }
+
+    public var richPayload: [String: any Sendable] {
+        var payload: [String: any Sendable] = [
+            "role": role,
+            "content": content,
+        ]
+        if let reasoningContent {
+            payload["reasoning_content"] = reasoningContent
+        }
+        if let toolCalls {
+            payload["tool_calls"] = toolCalls.map(\.sendable)
+        }
+        if let toolCallID {
+            payload["tool_call_id"] = toolCallID
+        }
+        return payload
     }
 }
 
@@ -58,6 +100,7 @@ public struct GenerationRequest: Sendable {
     public var messages: [ChatMessage]
     public var maxTokens: Int
     public var temperature: Double
+    public var temperatureWasExplicit: Bool
     public var topP: Double?
     public var topK: Int?
     public var stop: [String]
@@ -72,14 +115,19 @@ public struct GenerationRequest: Sendable {
     /// OpenAI structured-output request. Parsed and preserved so the HTTP layer can gate unsupported
     /// constrained decoding explicitly instead of silently ignoring the request.
     public var responseFormat: OpenAIResponseFormat?
+    public var additionalContext: [String: JSONAny]?
     public init(model: String, messages: [ChatMessage], maxTokens: Int = 512, temperature: Double = 0.7,
+                temperatureWasExplicit: Bool = true,
                 topP: Double? = nil, topK: Int? = nil, stop: [String] = [], stream: Bool = false,
                 applyChatTemplate: Bool = true, kvCapacity: Int? = nil, seed: UInt64? = nil,
-                tools: [JSONAny]? = nil, responseFormat: OpenAIResponseFormat? = nil) {
+                tools: [JSONAny]? = nil, responseFormat: OpenAIResponseFormat? = nil,
+                additionalContext: [String: JSONAny]? = nil) {
         self.model = model; self.messages = messages; self.maxTokens = maxTokens
-        self.temperature = temperature; self.topP = topP; self.topK = topK; self.stop = stop
+        self.temperature = temperature; self.temperatureWasExplicit = temperatureWasExplicit
+        self.topP = topP; self.topK = topK; self.stop = stop
         self.stream = stream; self.applyChatTemplate = applyChatTemplate; self.kvCapacity = kvCapacity
         self.seed = seed; self.tools = tools; self.responseFormat = responseFormat
+        self.additionalContext = additionalContext
     }
 
     public var media: [MediaPart] { messages.flatMap(\.media) }
@@ -93,6 +141,14 @@ public struct GenerationRequest: Sendable {
         guard let tools, !tools.isEmpty else { return nil }
         let specs = tools.compactMap { $0.toolSpec }
         return specs.isEmpty ? nil : specs
+    }
+
+    public var chatTemplateContext: [String: any Sendable]? {
+        additionalContext?.mapValues(\.sendable)
+    }
+
+    public func resolvedTemperature(defaultingToGreedy: Bool) -> Double {
+        defaultingToGreedy && !temperatureWasExplicit ? 0 : temperature
     }
 }
 
@@ -200,15 +256,20 @@ public struct OpenAIChatRequest: Codable, Sendable {
     public var seed: Int?
     /// Function/tool definitions (`[{type:"function", function:{name, description, parameters}}]`).
     public var tools: [JSONAny]?
+    /// Non-standard passthrough for model-published chat-template switches.
+    public var chat_template_context: [String: JSONAny]?
     /// OpenAI structured-output hint (`text`, `json_object`, or `json_schema`).
     public var response_format: OpenAIResponseFormat?
     public func toGeneration() -> GenerationRequest {
         GenerationRequest(model: model, messages: messages, maxTokens: max_tokens ?? max_completion_tokens ?? 512,
-                          temperature: temperature ?? 0.7, topP: top_p, topK: top_k,
+                          temperature: temperature ?? 0.7,
+                          temperatureWasExplicit: temperature != nil,
+                          topP: top_p, topK: top_k,
                           stop: stop?.values ?? [], stream: stream ?? false,
                           applyChatTemplate: apply_chat_template ?? true, kvCapacity: kv_capacity,
                           seed: seed.map { UInt64(bitPattern: Int64($0)) }, tools: tools,
-                          responseFormat: response_format)
+                          responseFormat: response_format,
+                          additionalContext: chat_template_context)
     }
 }
 
@@ -307,6 +368,7 @@ public struct AnthropicMessagesRequest: Codable, Sendable {
     public var seed: Int?
     /// Anthropic tool defs (`[{name, description, input_schema}]`).
     public var tools: [JSONAny]?
+    public var chat_template_context: [String: JSONAny]?
     public func toGeneration() -> GenerationRequest {
         var msgs: [ChatMessage] = []
         if let system { msgs.append(ChatMessage(role: "system", content: system)) }
@@ -314,9 +376,12 @@ public struct AnthropicMessagesRequest: Codable, Sendable {
             msgs.append(ChatMessage(role: m.role, content: m.content.text, media: m.content.media))
         }
         return GenerationRequest(model: model, messages: msgs, maxTokens: max_tokens, temperature: temperature ?? 1.0,
+                                 temperatureWasExplicit: temperature != nil,
                                  topP: top_p, topK: top_k, stop: stop_sequences ?? [], stream: stream ?? false,
                                  applyChatTemplate: apply_chat_template ?? true, kvCapacity: kv_capacity,
-                                 seed: seed.map { UInt64(bitPattern: Int64($0)) }, tools: Self.normalizeTools(tools))
+                                 seed: seed.map { UInt64(bitPattern: Int64($0)) },
+                                 tools: Self.normalizeTools(tools),
+                                 additionalContext: chat_template_context)
     }
 
     /// Convert Anthropic tool defs (`{name, description, input_schema}`) into the OpenAI

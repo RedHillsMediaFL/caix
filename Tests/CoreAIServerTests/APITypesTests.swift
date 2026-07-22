@@ -1,4 +1,5 @@
 import XCTest
+import PipelineRuntime
 
 @testable import CoreAIServer
 
@@ -100,6 +101,75 @@ final class APITypesTests: XCTestCase {
         let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
         XCTAssertEqual(request.stream, true)
         XCTAssertEqual(request.stream_options?.include_usage, true)
+    }
+
+    func testOpenAITemperatureExplicitnessSurvivesRequestMapping() throws {
+        let omitted = try JSONDecoder().decode(
+            OpenAIChatRequest.self,
+            from: Data(
+                #"{"model":"local","messages":[{"role":"user","content":"Hi"}]}"#.utf8))
+        let explicit = try JSONDecoder().decode(
+            OpenAIChatRequest.self,
+            from: Data(
+                #"{"model":"local","messages":[{"role":"user","content":"Hi"}],"temperature":0.7}"#.utf8))
+
+        let omittedGeneration = omitted.toGeneration()
+        let explicitGeneration = explicit.toGeneration()
+
+        XCTAssertFalse(omittedGeneration.temperatureWasExplicit)
+        XCTAssertTrue(explicitGeneration.temperatureWasExplicit)
+        XCTAssertEqual(
+            omittedGeneration.resolvedTemperature(defaultingToGreedy: true),
+            0)
+        XCTAssertEqual(
+            explicitGeneration.resolvedTemperature(defaultingToGreedy: true),
+            0.7)
+    }
+
+    func testOpenAIRichToolLoopPayloadPreservesReasoningCallsAndToolResponse() throws {
+        let data = Data(
+            """
+            {
+              "model": "local",
+              "messages": [
+                {"role": "user", "content": "Weather?"},
+                {
+                  "role": "assistant",
+                  "reasoning_content": "I should check.",
+                  "content": "",
+                  "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                      "name": "get_weather",
+                      "arguments": {"city": "Tallahassee"}
+                    }
+                  }]
+                },
+                {
+                  "role": "tool",
+                  "tool_call_id": "call_1",
+                  "content": "sunny, 91 F"
+                }
+              ]
+            }
+            """.utf8)
+
+        let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+        let payload = ServerRuntime.messagePayload(request.toGeneration().messages)
+
+        XCTAssertEqual(payload[1]["reasoning_content"] as? String, "I should check.")
+        let calls = try XCTUnwrap(payload[1]["tool_calls"] as? [any Sendable])
+        XCTAssertEqual(calls.count, 1)
+        let call = try XCTUnwrap(calls.first as? [String: any Sendable])
+        XCTAssertEqual(call["id"] as? String, "call_1")
+        let function = try XCTUnwrap(call["function"] as? [String: any Sendable])
+        XCTAssertEqual(function["name"] as? String, "get_weather")
+        let arguments = try XCTUnwrap(
+            function["arguments"] as? [String: any Sendable])
+        XCTAssertEqual(arguments["city"] as? String, "Tallahassee")
+        XCTAssertEqual(payload[2]["tool_call_id"] as? String, "call_1")
+        XCTAssertEqual(payload[2]["content"] as? String, "sunny, 91 F")
     }
 
     func testOpenAIResponseFormatJsonObjectMapsToGeneration() throws {
@@ -344,12 +414,13 @@ final class APITypesTests: XCTestCase {
                     schema: .object(["type": .string("object")]),
                     strict: true)))
 
-        #if COREAI_RUNTIME
-        XCTAssertNil(ServerRuntime.rejectUnsupportedResponseFormatIfNeeded(generation))
-        #else
-        let response = try XCTUnwrap(ServerRuntime.rejectUnsupportedResponseFormatIfNeeded(generation))
-        XCTAssertEqual(response.status.code, 400)
-        #endif
+        if CoreAIPipeline.supportsConstrainedDecoding {
+            XCTAssertNil(ServerRuntime.rejectUnsupportedResponseFormatIfNeeded(generation))
+        } else {
+            let response = try XCTUnwrap(
+                ServerRuntime.rejectUnsupportedResponseFormatIfNeeded(generation))
+            XCTAssertEqual(response.status.code, 400)
+        }
     }
 
     func testServerRejectsStructuredResponseFormatOnUnsupportedBackend() throws {

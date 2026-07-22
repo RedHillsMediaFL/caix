@@ -6,6 +6,13 @@ import Tokenizers
 /// Persistent same-machine staged text generation for model families whose export contract is
 /// expressed as a caix `stage-manifest.json` rather than a single monolithic Core AI language bundle.
 public final class TextStagedModel {
+    struct ResidentLoadConfiguration {
+        let maxContextLength: Int
+        let contextSelection: DistributedStagedContextSelection?
+        let streamedPrefillAdmission: DistributedStagedMemoryAdmission?
+        let requiresDecodeResidentFactory: Bool
+    }
+
     public let manifestURL: URL
     public let manifest: DistributedStageManifest
     public let name: String
@@ -16,6 +23,7 @@ public final class TextStagedModel {
     private let pipeline: DistributedSameMachinePipeline
     private let tokenizer: any Tokenizer
     private let tokenizerDir: URL
+    private let chatRenderer: Gemma4ChatTemplateContract.ResidentRenderer?
     private let stopTokenIDs: Set<Int32>
 
     private init(
@@ -24,6 +32,7 @@ public final class TextStagedModel {
         pipeline: DistributedSameMachinePipeline,
         tokenizer: any Tokenizer,
         tokenizerDir: URL,
+        chatRenderer: Gemma4ChatTemplateContract.ResidentRenderer?,
         maxContextLength: Int,
         bundleByteSize: UInt64,
         loadSeconds: Double
@@ -34,6 +43,7 @@ public final class TextStagedModel {
         self.pipeline = pipeline
         self.tokenizer = tokenizer
         self.tokenizerDir = tokenizerDir
+        self.chatRenderer = chatRenderer
         self.maxContextLength = maxContextLength
         self.bundleByteSize = bundleByteSize
         self.loadSeconds = loadSeconds
@@ -43,34 +53,81 @@ public final class TextStagedModel {
 
     public static func load(
         manifestURL: URL,
-        verbose: Bool = false
+        verbose: Bool = false,
+        stagedMemorySnapshotProvider: (() throws -> DistributedStagedMemorySnapshot)? = nil
     ) async throws -> TextStagedModel {
         let started = Date()
         let resolvedManifestURL = manifestURL.standardizedFileURL
         let manifest = try DistributedStageManifest.load(from: resolvedManifestURL)
         let root = resolvedManifestURL.deletingLastPathComponent()
         let tokenizerDir = root.appendingPathComponent("tokenizer", isDirectory: true)
-        let maxContextLength = try readMaxContextLength(bundleRoot: root)
+        let metadataMaxContextLength = try readMaxContextLength(bundleRoot: root)
+        let configuration = try residentLoadConfiguration(
+            manifest: manifest,
+            metadataMaxContextLength: metadataMaxContextLength,
+            snapshotProvider: stagedMemorySnapshotProvider)
+        let chatRenderer = manifest.requiresStreamedPrefillResidency
+            ? try Gemma4ChatTemplateContract.ResidentRenderer(
+                tokenizerDirectory: tokenizerDir)
+            : nil
         if verbose {
             FileHandle.standardError.write(
                 Data("[text-staged] loading \(resolvedManifestURL.path)\n".utf8))
         }
 
-        async let pipelineTask = DistributedSameMachinePipeline.make(
+        let handleFactory: any DistributedStageHandleFactory =
+            configuration.requiresDecodeResidentFactory
+                ? DistributedCoreAIDecodeResidentStageHandleFactory()
+                : DistributedCoreAIStageHandleFactory()
+        let pipeline = try await DistributedSameMachinePipeline.make(
             manifest: manifest,
-            handleFactory: DistributedCoreAIStageHandleFactory())
-        async let tokenizerTask = AutoTokenizer.from(modelFolder: tokenizerDir)
-        let pipeline = try await pipelineTask
-        let tokenizer = try await tokenizerTask
+            handleFactory: handleFactory,
+            streamedPrefillAdmission: configuration.streamedPrefillAdmission)
+        let tokenizer = try await AutoTokenizer.from(modelFolder: tokenizerDir)
         return TextStagedModel(
             manifestURL: resolvedManifestURL,
             manifest: manifest,
             pipeline: pipeline,
             tokenizer: tokenizer,
             tokenizerDir: tokenizerDir,
-            maxContextLength: maxContextLength,
+            chatRenderer: chatRenderer,
+            maxContextLength: configuration.maxContextLength,
             bundleByteSize: directorySize(root),
             loadSeconds: Date().timeIntervalSince(started))
+    }
+
+    static func residentLoadConfiguration(
+        manifest: DistributedStageManifest,
+        metadataMaxContextLength: Int,
+        snapshotProvider: (() throws -> DistributedStagedMemorySnapshot)?
+    ) throws -> ResidentLoadConfiguration {
+        guard metadataMaxContextLength > 0 else {
+            throw CoreAIPipeline.RuntimeError.invalidBundle(
+                "staged text metadata max context must be positive")
+        }
+        guard let contract = manifest.runtimeMemory else {
+            return ResidentLoadConfiguration(
+                maxContextLength: metadataMaxContextLength,
+                contextSelection: nil,
+                streamedPrefillAdmission: nil,
+                requiresDecodeResidentFactory: false)
+        }
+        guard let snapshotProvider else {
+            throw DistributedStagedMemoryAdmissionError.telemetryUnavailable
+        }
+        let admission = DistributedStagedMemoryAdmission(
+            contract: contract,
+            snapshotProvider: snapshotProvider)
+        let selection = try admission.selectContext()
+        guard selection.contextTokens <= metadataMaxContextLength else {
+            throw CoreAIPipeline.RuntimeError.invalidBundle(
+                "runtime_memory selected context \(selection.contextTokens) exceeds metadata max context \(metadataMaxContextLength)")
+        }
+        return ResidentLoadConfiguration(
+            maxContextLength: selection.contextTokens,
+            contextSelection: selection,
+            streamedPrefillAdmission: admission,
+            requiresDecodeResidentFactory: true)
     }
 
     @discardableResult
@@ -80,9 +137,33 @@ public final class TextStagedModel {
         tools: [[String: any Sendable]]? = nil,
         onToken: ((String) -> Void)? = nil
     ) async throws -> CoreAIPipeline.Result {
+        let rich = messages.map { message -> [String: any Sendable] in
+            var promoted: [String: any Sendable] = [:]
+            for (key, value) in message {
+                promoted[key] = value
+            }
+            return promoted
+        }
+        return try await generate(
+            messages: rich,
+            options: options,
+            tools: tools,
+            additionalContext: nil,
+            onToken: onToken)
+    }
+
+    @discardableResult
+    public func generate(
+        messages: [[String: any Sendable]],
+        options: CoreAIPipeline.Options,
+        tools: [[String: any Sendable]]? = nil,
+        additionalContext: [String: any Sendable]? = nil,
+        onToken: ((String) -> Void)? = nil
+    ) async throws -> CoreAIPipeline.Result {
         let promptTokens = try encodePrompt(
             messages: messages,
             tools: tools,
+            additionalContext: additionalContext,
             applyChatTemplate: options.applyChatTemplate)
         return try await generate(
             promptTokenIDs: promptTokens.map(Int32.init),
@@ -99,18 +180,7 @@ public final class TextStagedModel {
         guard !promptTokenIDs.isEmpty else {
             throw CoreAIPipeline.RuntimeError.invalidBundle("prompt tokenized to 0 tokens")
         }
-        guard options.temperature <= 0 else {
-            throw CoreAIPipeline.RuntimeError.unsupportedFeature(
-                "staged text serving currently supports greedy decoding only")
-        }
-        guard options.constrainedJSONSchema == nil else {
-            throw CoreAIPipeline.RuntimeError.unsupportedFeature(
-                "staged text serving does not support constrained decoding yet")
-        }
-        guard options.maxTokens >= 0 else {
-            throw DistributedStageExecutionError.invalidForwardInput(
-                "max_tokens must be non-negative")
-        }
+        try Self.validateGenerationOptions(options)
         guard options.maxTokens > 0 else {
             return CoreAIPipeline.Result(
                 text: "",
@@ -209,20 +279,49 @@ public final class TextStagedModel {
         }
     }
 
+    static func validateGenerationOptions(_ options: CoreAIPipeline.Options) throws {
+        guard options.temperature <= 0 else {
+            throw CoreAIPipeline.RuntimeError.unsupportedFeature(
+                "staged text serving currently supports greedy decoding only")
+        }
+        guard options.constrainedJSONSchema == nil else {
+            throw CoreAIPipeline.RuntimeError.unsupportedFeature(
+                "staged text serving does not support constrained decoding yet")
+        }
+        guard options.maxTokens >= 0 else {
+            throw DistributedStageExecutionError.invalidForwardInput(
+                "max_tokens must be non-negative")
+        }
+    }
+
     private func encodePrompt(
-        messages: [[String: String]],
+        messages: [[String: any Sendable]],
         tools: [[String: any Sendable]]?,
+        additionalContext: [String: any Sendable]?,
         applyChatTemplate: Bool
     ) throws -> [Int] {
         let tokens: [Int]
         if applyChatTemplate {
-            if let tools, !tools.isEmpty {
-                tokens = try tokenizer.applyChatTemplate(messages: messages, tools: tools)
+            if let chatRenderer {
+                tokens = try chatRenderer.encode(
+                    tokenizer: tokenizer,
+                    messages: messages,
+                    tools: tools,
+                    additionalContext: additionalContext)
             } else {
-                tokens = try tokenizer.applyChatTemplate(messages: messages)
+                let stringMessages = try Self.stringMessages(messages)
+                if let tools, !tools.isEmpty {
+                    tokens = try tokenizer.applyChatTemplate(
+                        messages: stringMessages,
+                        tools: tools)
+                } else {
+                    tokens = try tokenizer.applyChatTemplate(messages: stringMessages)
+                }
             }
         } else {
-            tokens = tokenizer.encode(text: messages.map { $0["content"] ?? "" }.joined())
+            let stringMessages = try Self.stringMessages(messages)
+            tokens = tokenizer.encode(
+                text: stringMessages.map { $0["content"] ?? "" }.joined())
         }
         guard !tokens.isEmpty else {
             throw CoreAIPipeline.RuntimeError.invalidBundle("prompt tokenized to 0 tokens")
@@ -233,6 +332,22 @@ public final class TextStagedModel {
                     + "\(tokens.prefix(40))\(tokens.count > 40 ? " …" : "")\n").utf8))
         }
         return tokens
+    }
+
+    private static func stringMessages(
+        _ messages: [[String: any Sendable]]
+    ) throws -> [[String: String]] {
+        try messages.map { message in
+            guard let role = message["role"] as? String else {
+                throw CoreAIPipeline.RuntimeError.unsupportedFeature(
+                    "staged text message role must be a string")
+            }
+            guard let content = message["content"] as? String else {
+                throw CoreAIPipeline.RuntimeError.unsupportedFeature(
+                    "generic staged text templates require string message content")
+            }
+            return ["role": role, "content": content]
+        }
     }
 
     private struct PrefillResult {

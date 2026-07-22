@@ -73,6 +73,54 @@ final class ModelManagerTests: XCTestCase {
         XCTAssertNil(ServerRuntime.prewarmSkipReason(for: qwen))
     }
 
+    func testLargeStagedGemmaPrewarmIsAllowedButMonolithicSafeguardRemains() {
+        let staged = ModelEntry(
+            name: "gemma-4-31b-it-caix",
+            params: "31B",
+            status: "available",
+            bundle: true,
+            memoryBytes: nil,
+            mode: "staged")
+        let monolithic = ModelEntry(
+            name: "gemma-4-31b-it-coreai",
+            params: "31B",
+            status: "available",
+            bundle: true,
+            memoryBytes: nil,
+            mode: "standard")
+
+        XCTAssertNil(ServerRuntime.prewarmSkipReason(for: staged))
+        XCTAssertNotNil(ServerRuntime.prewarmSkipReason(for: monolithic))
+    }
+
+    func testNativeStagedSnapshotProviderTracksSwapGrowthFromEachLoadBaseline() throws {
+        let snapshots = LockedNativeSnapshots([
+            .init(
+                totalPhysicalMemoryBytes: 64 * 1_073_741_824,
+                workerResidentBytes: 2 * 1_073_741_824,
+                availableBytes: 40 * 1_073_741_824,
+                pressure: .green,
+                swapUsedBytes: 1_000),
+            .init(
+                totalPhysicalMemoryBytes: 64 * 1_073_741_824,
+                workerResidentBytes: 3 * 1_073_741_824,
+                availableBytes: 39 * 1_073_741_824,
+                pressure: .green,
+                swapUsedBytes: 1_512),
+        ])
+        let provider = ModelManager.makeStagedMemorySnapshotProvider {
+            snapshots.next()
+        }
+
+        let actual = try provider()
+
+        XCTAssertEqual(actual.totalPhysicalMemoryBytes, 64 * 1_073_741_824)
+        XCTAssertEqual(actual.workerResidentBytes, 3 * 1_073_741_824)
+        XCTAssertEqual(actual.availableBytes, 39 * 1_073_741_824)
+        XCTAssertEqual(actual.pressure, .green)
+        XCTAssertEqual(actual.swapGrowthBytes, 512)
+    }
+
     func testNestedDraftBundleIsListedAsSpeculative() async throws {
         let root = try makeTempDir()
         let exports = root.appendingPathComponent("exports", isDirectory: true)
@@ -342,5 +390,20 @@ final class ModelManagerTests: XCTestCase {
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: url) }
         return url
+    }
+}
+
+private final class LockedNativeSnapshots: @unchecked Sendable {
+    private let lock = NSLock()
+    private var snapshots: [ModelManager.NativeStagedMemorySnapshot]
+
+    init(_ snapshots: [ModelManager.NativeStagedMemorySnapshot]) {
+        self.snapshots = snapshots
+    }
+
+    func next() -> ModelManager.NativeStagedMemorySnapshot {
+        lock.lock()
+        defer { lock.unlock() }
+        return snapshots.removeFirst()
     }
 }

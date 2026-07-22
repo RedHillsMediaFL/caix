@@ -256,6 +256,37 @@ final class Gemma4StagedResidencyTests: XCTestCase {
             String(describing: type(of: factory))
                 .contains("DistributedCoreAIDecodeResidentStageHandleFactory"))
     }
+
+    func testTextStagedResidentLoadConfigurationSelectsFallbackBeforeAllocation() throws {
+        let manifest = try decodeManifest(runtimeMemory: validRuntimeMemory)
+        var snapshotCount = 0
+
+        let configuration = try TextStagedModel.residentLoadConfiguration(
+            manifest: manifest,
+            metadataMaxContextLength: 262_144,
+            snapshotProvider: {
+                snapshotCount += 1
+                return self.safeSnapshot(
+                    total: 51_000_000_000,
+                    available: 40 * self.gib)
+            })
+
+        XCTAssertEqual(snapshotCount, 1)
+        XCTAssertEqual(configuration.contextSelection?.tier, .fallback)
+        XCTAssertEqual(configuration.maxContextLength, 32_768)
+        XCTAssertTrue(configuration.requiresDecodeResidentFactory)
+        XCTAssertNotNil(configuration.streamedPrefillAdmission)
+    }
+
+    func testTextStagedGenerationValidationRejectsExplicitSampling() {
+        let options = CoreAIPipeline.Options(maxTokens: 8, temperature: 0.7)
+
+        XCTAssertThrowsError(
+            try TextStagedModel.validateGenerationOptions(options)
+        ) { error in
+            XCTAssertTrue(String(describing: error).contains("greedy decoding only"))
+        }
+    }
     #endif
 
     private func decodeManifest(

@@ -229,7 +229,8 @@ final class ServerRuntime: Sendable {
 
     static func prewarmSkipReason(for target: ModelEntry) -> String? {
         let lower = target.name.lowercased()
-        if lower.contains("gemma"),
+        if target.mode != "staged",
+           lower.contains("gemma"),
            let billions = ModelSuitability.inferredBillions(from: target.name),
            billions >= 20 {
             return "large Gemma bundles can hit CoreAI/MPS prewarm threadgroup limits; first real request will load normally"
@@ -1391,8 +1392,11 @@ final class ServerRuntime: Sendable {
 
         let messages = Self.messagePayload(gen.messages)
         var options = Self.options(from: gen)
+        options.temperature = gen.resolvedTemperature(
+            defaultingToGreedy: handle.defaultsToGreedyWhenTemperatureOmitted)
         options.verbose = verbose
         let tools = gen.toolSpecs
+        let additionalContext = gen.chatTemplateContext
         let format = await manager.outputFormat(for: modelName)
         log("output format \(format.family.rawValue) for \(modelName)")
         let id = "chatcmpl-" + Self.shortID()
@@ -1401,6 +1405,7 @@ final class ServerRuntime: Sendable {
         if gen.stream {
             return Self.openAIStream(
                 handle: handle, messages: messages, options: options, tools: tools, format: format,
+                additionalContext: additionalContext,
                 generationRequest: gen.hasMultimodalContent ? gen : nil,
                 model: modelName, id: id, created: created,
                 includeUsage: req.stream_options?.include_usage == true,
@@ -1412,7 +1417,12 @@ final class ServerRuntime: Sendable {
             let result = gen.hasMultimodalContent
                 ? try await handle.generateMultimodal(
                     request: gen, options: options, tools: tools)
-                : try await handle.generate(messages: messages, options: options, tools: tools)
+                : try await handle.generate(
+                    messages: messages,
+                    options: options,
+                    tools: tools,
+                    additionalContext: additionalContext)
+
             let completedAt = Date()
             log("generation done for \(modelName): \(result.generatedTokenCount) tokens")
             // Normalize the raw base-format output into reasoning_content + content + tool_calls.
@@ -1485,14 +1495,18 @@ final class ServerRuntime: Sendable {
         }
 
         let messages = Self.messagePayload(gen.messages)
-        let options = Self.options(from: gen)
+        var options = Self.options(from: gen)
+        options.temperature = gen.resolvedTemperature(
+            defaultingToGreedy: handle.defaultsToGreedyWhenTemperatureOmitted)
         let tools = gen.toolSpecs
+        let additionalContext = gen.chatTemplateContext
         let format = await manager.outputFormat(for: modelName)
         let id = "msg_" + Self.shortID()
 
         if gen.stream {
             return Self.anthropicStream(
                 handle: handle, messages: messages, options: options, tools: tools, format: format,
+                additionalContext: additionalContext,
                 generationRequest: gen.hasMultimodalContent ? gen : nil,
                 model: modelName, id: id, activity: activity, startedAt: started)
         }
@@ -1501,7 +1515,11 @@ final class ServerRuntime: Sendable {
             let result = gen.hasMultimodalContent
                 ? try await handle.generateMultimodal(
                     request: gen, options: options, tools: tools)
-                : try await handle.generate(messages: messages, options: options, tools: tools)
+                : try await handle.generate(
+                    messages: messages,
+                    options: options,
+                    tools: tools,
+                    additionalContext: additionalContext)
             let completedAt = Date()
             // Normalize into thinking + text + tool_use content blocks (in that order).
             let norm = StreamingNormalizer.normalizeComplete(result.text, format: format)
@@ -1629,8 +1647,8 @@ final class ServerRuntime: Sendable {
 
     // MARK: - Mapping helpers
 
-    static func messagePayload(_ messages: [ChatMessage]) -> [[String: String]] {
-        messages.map { ["role": $0.role, "content": $0.content] }
+    static func messagePayload(_ messages: [ChatMessage]) -> [[String: any Sendable]] {
+        messages.map(\.richPayload)
     }
 
     static func rejectMultimodalIfNeeded(

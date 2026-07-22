@@ -115,8 +115,9 @@ extension ServerRuntime {
     /// ``StreamingNormalizer`` and re-emitted as `delta.reasoning_content` (during reasoning),
     /// `delta.content` (final text), and `delta.tool_calls` (one chunk per parsed call).
     static func openAIStream(
-        handle: ModelHandle, messages: [[String: String]], options: CoreAIPipeline.Options,
+        handle: ModelHandle, messages: [[String: any Sendable]], options: CoreAIPipeline.Options,
         tools: [[String: any Sendable]]?, format: OutputFormat,
+        additionalContext: [String: any Sendable]? = nil,
         generationRequest: GenerationRequest? = nil,
         model: String, id: String, created: Int,
         includeUsage: Bool = false,
@@ -135,9 +136,12 @@ extension ServerRuntime {
                     continuation.yield(delta)
                     })
             } else {
-                return try await handle.generate(messages: messages, options: options, tools: tools) { delta in
-                    continuation.yield(delta)
-                }
+                return try await handle.generate(
+                    messages: messages,
+                    options: options,
+                    tools: tools,
+                    additionalContext: additionalContext,
+                    onToken: { delta in continuation.yield(delta) })
             }
         }
 
@@ -218,8 +222,9 @@ extension ServerRuntime {
     /// `text` block, and each tool call a `tool_use` block — emitted in order with
     /// content_block_start / _delta (thinking_delta · text_delta · input_json_delta) / _stop.
     static func anthropicStream(
-        handle: ModelHandle, messages: [[String: String]], options: CoreAIPipeline.Options,
+        handle: ModelHandle, messages: [[String: any Sendable]], options: CoreAIPipeline.Options,
         tools: [[String: any Sendable]]?, format: OutputFormat,
+        additionalContext: [String: any Sendable]? = nil,
         generationRequest: GenerationRequest? = nil,
         model: String, id: String,
         activity: ActivityLog? = nil, startedAt: Date? = nil
@@ -237,9 +242,12 @@ extension ServerRuntime {
                     continuation.yield(delta)
                     })
             } else {
-                return try await handle.generate(messages: messages, options: options, tools: tools) { delta in
-                    continuation.yield(delta)
-                }
+                return try await handle.generate(
+                    messages: messages,
+                    options: options,
+                    tools: tools,
+                    additionalContext: additionalContext,
+                    onToken: { delta in continuation.yield(delta) })
             }
         }
 
