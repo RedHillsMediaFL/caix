@@ -1205,6 +1205,7 @@ public struct DistributedStageManifest: Hashable, Sendable {
     public let boundaryTensor: DistributedBoundaryTensorSpec?
     public let positionMode: DistributedPositionMode
     public let cacheGroups: DistributedStageCacheGroups?
+    public let runtimeMemory: DistributedRuntimeMemoryContract?
     public let runtimePlan: DistributedStagePlan
 
     public init(
@@ -1215,7 +1216,8 @@ public struct DistributedStageManifest: Hashable, Sendable {
         stages: [DistributedStageManifestStage],
         boundaryTensor: DistributedBoundaryTensorSpec? = nil,
         positionMode: DistributedPositionMode = .current,
-        cacheGroups: DistributedStageCacheGroups? = nil
+        cacheGroups: DistributedStageCacheGroups? = nil,
+        runtimeMemory: DistributedRuntimeMemoryContract? = nil
     ) throws {
         self.schema = schema
         self.modelName = modelName
@@ -1225,8 +1227,10 @@ public struct DistributedStageManifest: Hashable, Sendable {
         self.boundaryTensor = boundaryTensor
         self.positionMode = positionMode
         self.cacheGroups = cacheGroups
+        self.runtimeMemory = runtimeMemory
         try boundaryTensor?.validate()
         try cacheGroups?.validate()
+        try runtimeMemory?.validate(stages: stages)
         self.runtimePlan = DistributedStagePlan(
             modelName: modelName,
             totalLayerCount: totalLayerCount,
@@ -1326,7 +1330,8 @@ public struct DistributedStageManifest: Hashable, Sendable {
                 ?? root.boundary?.hiddenState ?? root.boundaryTensor,
             positionMode: body.positionMode ?? body.positionModeCamel ?? root.positionMode
                 ?? root.positionModeCamel ?? .current,
-            cacheGroups: body.cacheGroups ?? root.cacheGroups)
+            cacheGroups: body.cacheGroups ?? root.cacheGroups,
+            runtimeMemory: body.runtimeMemory ?? root.runtimeMemory)
     }
 
     private static func normalizeStage(
@@ -1570,6 +1575,7 @@ private struct RawDistributedStageManifestRoot: Decodable {
     let positionMode: DistributedPositionMode?
     let positionModeCamel: DistributedPositionMode?
     let cacheGroups: DistributedStageCacheGroups?
+    let runtimeMemory: DistributedRuntimeMemoryContract?
 
     enum CodingKeys: String, CodingKey {
         case schema
@@ -1585,6 +1591,7 @@ private struct RawDistributedStageManifestRoot: Decodable {
         case positionMode = "position_mode"
         case positionModeCamel = "positionMode"
         case cacheGroups = "cache_groups"
+        case runtimeMemory = "runtime_memory"
     }
 
     var asBody: RawDistributedStageManifestBody {
@@ -1599,7 +1606,8 @@ private struct RawDistributedStageManifestRoot: Decodable {
             boundaryTensor: boundaryTensor,
             positionMode: positionMode,
             positionModeCamel: positionModeCamel,
-            cacheGroups: cacheGroups)
+            cacheGroups: cacheGroups,
+            runtimeMemory: runtimeMemory)
     }
 }
 
@@ -1615,6 +1623,7 @@ private struct RawDistributedStageManifestBody: Decodable {
     let positionMode: DistributedPositionMode?
     let positionModeCamel: DistributedPositionMode?
     let cacheGroups: DistributedStageCacheGroups?
+    let runtimeMemory: DistributedRuntimeMemoryContract?
 
     enum CodingKeys: String, CodingKey {
         case schema
@@ -1628,6 +1637,7 @@ private struct RawDistributedStageManifestBody: Decodable {
         case positionMode = "position_mode"
         case positionModeCamel = "positionMode"
         case cacheGroups = "cache_groups"
+        case runtimeMemory = "runtime_memory"
     }
 }
 
