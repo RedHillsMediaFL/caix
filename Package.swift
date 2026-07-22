@@ -4,12 +4,21 @@ import Foundation
 
 // caix — native Apple Core AI inference server for Apple silicon (BETA).
 //
-// Apple's Core AI runtime (the `CoreAILM` product from apple/coreai-models plus the `CoreAI`
-// system framework) is currently in BETA and requires a recent macOS / Xcode beta. To keep the
-// package building on stock toolchains, the runtime is opt-in: set COREAI_RUNTIME=1 to link the
-// Apple Swift runtime + tokenizer and raise the deployment target. With the flag unset the package
-// compiles standalone (dashboard + API surface build, inference returns 503). See README.md.
-let enableCoreAIRuntime = ProcessInfo.processInfo.environment["COREAI_RUNTIME"] == "1"
+// Apple's Core AI runtime is currently in BETA and requires a recent macOS / Xcode beta. There are
+// two explicit opt-in build modes:
+//
+// - COREAI_RUNTIME=1 links CoreAILM, CoreAI, and swift-transformers.
+// - COREAI_DIRECT_RUNTIME=1 links CoreAI and swift-transformers without CoreAILM. This keeps
+//   CAIX's direct executors usable when the installed OS and CoreAILM's FoundationModels ABI do
+//   not match. If both are set, direct mode deliberately wins.
+//
+// With both flags unset the package compiles standalone (dashboard + API surface build, inference
+// returns 503). See README.md.
+let enableDirectCoreAIRuntime =
+    ProcessInfo.processInfo.environment["COREAI_DIRECT_RUNTIME"] == "1"
+let enableFullCoreAIRuntime =
+    ProcessInfo.processInfo.environment["COREAI_RUNTIME"] == "1" && !enableDirectCoreAIRuntime
+let enableCoreAIRuntime = enableFullCoreAIRuntime || enableDirectCoreAIRuntime
 
 // Hummingbird powers the HTTP layer — added unconditionally so `serve` builds on stock toolchains.
 var packageDependencies: [Package.Dependency] = [
@@ -18,18 +27,25 @@ var packageDependencies: [Package.Dependency] = [
 var runtimeDependencies: [Target.Dependency] = []
 var runtimeSwiftSettings: [SwiftSetting] = []
 
-if enableCoreAIRuntime {
+if enableFullCoreAIRuntime {
     packageDependencies.append(
         .package(
             url: "https://github.com/apple/coreai-models.git",
             branch: "main")
     )
+    runtimeDependencies.append(.product(name: "CoreAILM", package: "coreai-models"))
+}
+
+if enableCoreAIRuntime {
     packageDependencies.append(
         .package(url: "https://github.com/huggingface/swift-transformers", exact: "1.3.3")
     )
-    runtimeDependencies.append(.product(name: "CoreAILM", package: "coreai-models"))
     runtimeDependencies.append(.product(name: "Transformers", package: "swift-transformers"))
     runtimeSwiftSettings.append(.define("COREAI_RUNTIME"))
+}
+
+if enableDirectCoreAIRuntime {
+    runtimeSwiftSettings.append(.define("COREAI_DIRECT_RUNTIME"))
 }
 
 let platforms: [SupportedPlatform] = enableCoreAIRuntime ? [.macOS("27.0")] : [.macOS("14.0")]

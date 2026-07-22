@@ -25,13 +25,20 @@ public final class PersistentModel {
     public let loadSeconds: Double
 
     #if COREAI_RUNTIME
-    private let generateImpl: PipelinedLanguageHandle.Generate
+    private typealias Generate = (
+        _ messages: [[String: String]],
+        _ options: CoreAIPipeline.Options,
+        _ tools: [[String: any Sendable]]?,
+        _ onToken: ((String) -> Void)?
+    ) async throws -> CoreAIPipeline.Result
+
+    private let generateImpl: Generate
 
     private init(
         bundle: ResolvedBundle,
         loadSeconds: Double,
         supportsConstrainedDecoding: Bool,
-        generate: @escaping PipelinedLanguageHandle.Generate
+        generate: @escaping Generate
     ) {
         self.generateImpl = generate
         self.name = bundle.name
@@ -60,6 +67,7 @@ public final class PersistentModel {
     public static func load(bundlePath: String, verbose: Bool = false) async throws -> PersistentModel {
         #if COREAI_RUNTIME
         let bundle = try ResolvedBundle.load(at: bundlePath)
+        #if !COREAI_DIRECT_RUNTIME
         let env = ProcessInfo.processInfo.environment
         let fastHybridAllowed = env["COREAI_FAST_HYBRID_ENGINE"] != nil
         let fastCompatible = bundle.minKVCapacity == 0 || fastHybridAllowed
@@ -99,6 +107,7 @@ public final class PersistentModel {
                         promptTokens: promptTokens, options: options, onToken: onToken)
                 })
         }
+        #endif
         let engine = try await LLMEngine.load(bundle: bundle, verbose: verbose)
         return PersistentModel(
             bundle: bundle,

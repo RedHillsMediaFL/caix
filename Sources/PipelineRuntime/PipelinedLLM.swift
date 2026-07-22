@@ -4,7 +4,7 @@
 // (blocking `function.run()` plus host-side sampling). Apple's `EngineFactory` can select the
 // pipelined engine for compatible dynamic-shape bundles, so this path drives generation through
 // that engine while preserving caix prompt handling and result accounting.
-#if COREAI_RUNTIME
+#if COREAI_RUNTIME && !COREAI_DIRECT_RUNTIME
 
 import CoreAI
 import CoreAILanguageModels

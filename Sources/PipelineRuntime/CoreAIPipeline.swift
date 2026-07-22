@@ -26,7 +26,7 @@ public enum CoreAIPipeline {
     /// pipelined language engine. Individual model backends can still reject it if they are not
     /// backed by that engine.
     public static var supportsConstrainedDecoding: Bool {
-        #if COREAI_RUNTIME
+        #if COREAI_RUNTIME && !COREAI_DIRECT_RUNTIME
         true
         #else
         false
@@ -335,7 +335,7 @@ public enum CoreAIPipeline {
 
     // MARK: - Entry point
 
-    #if COREAI_RUNTIME
+    #if COREAI_RUNTIME && !COREAI_DIRECT_RUNTIME
     /// Apple's CoreAILanguageModels fast engine currently warms language bundles with a fixed
     /// cache shape that is too small for qwen3_5-style recurrent-state packing. Keep those bundles
     /// on the explicit sequential engine unless the caller opts into the experimental fast path.
@@ -368,6 +368,7 @@ public enum CoreAIPipeline {
         onToken: ((String) -> Void)? = nil
     ) async throws -> Result {
         #if COREAI_RUNTIME
+        #if !COREAI_DIRECT_RUNTIME
         // Fast path: drive LLM generation through Apple's pipelined engine. Returns nil for
         // diffusion / non-language bundles, which fall through to `LLMEngine` (diffusion denoise +
         // the legacy sequential decode). `COREAI_LEGACY_ENGINE=1` forces the old path.
@@ -377,6 +378,7 @@ public enum CoreAIPipeline {
                 return fast
             }
         }
+        #endif
         if options.constrainedJSONSchema != nil {
             throw RuntimeError.unsupportedFeature(
                 "JSON-schema constrained decoding requires the CoreAILM pipelined language engine")
