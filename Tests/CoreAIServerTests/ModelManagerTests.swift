@@ -1,4 +1,5 @@
 import XCTest
+import PipelineRuntime
 
 @testable import CoreAIServer
 
@@ -86,6 +87,42 @@ final class ModelManagerTests: XCTestCase {
                 "google/gemma-4-31B-it",
                 "expected alias \(alias) to resolve")
         }
+    }
+
+    func testStagedMTPConfigurationAttachesOnlyToExactPrimaryBundle() async throws {
+        let root = try makeTempDir()
+        let exports = root.appendingPathComponent("exports", isDirectory: true)
+        let registry = root.appendingPathComponent("models/registry.json")
+        try FileManager.default.createDirectory(
+            at: registry.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try #"{"models":{}}"#.write(to: registry, atomically: true, encoding: .utf8)
+
+        let primaryRoot = root.appendingPathComponent("primary", isDirectory: true)
+        try writeMTPStagedBundle(at: primaryRoot, name: "gemma-mtp-primary")
+        let primary = try XCTUnwrap(PrimaryStagedBundleConfiguration.resolve(
+            bundlePath: primaryRoot.path,
+            modelID: "google/gemma-4-31B-it"))
+        let assistant = root.appendingPathComponent("assistant.aimodel", isDirectory: true)
+        try FileManager.default.createDirectory(at: assistant, withIntermediateDirectories: true)
+        let mtp = try XCTUnwrap(StagedMTPStartupConfiguration.resolve(
+            assistantPath: assistant.path,
+            draftTokens: 4,
+            requireMTP: false,
+            primaryBundleURL: primaryRoot,
+            clusterMode: false,
+            prewarm: "smallest"))
+
+        let manager = try ModelManager(
+            exportsDir: exports,
+            registryPath: registry,
+            primaryStagedBundle: primary,
+            stagedMTPConfiguration: mtp)
+
+        let configured = await manager.stagedMTPConfiguration(for: primaryRoot)
+        let unconfigured = await manager.stagedMTPConfiguration(
+            for: root.appendingPathComponent("other", isDirectory: true))
+        XCTAssertEqual(configured, mtp)
+        XCTAssertNil(unconfigured)
     }
 
     func testExplicitPrimaryStagedBundleRejectsMissingNonStagedAndAliasCollisions() throws {
@@ -441,6 +478,27 @@ final class ModelManagerTests: XCTestCase {
               "model": "\(name)",
               "position_mode": "full_prefix",
               "stages": []
+            }
+            """.write(
+                to: root.appendingPathComponent("stage-manifest.json"),
+                atomically: true,
+                encoding: .utf8)
+    }
+
+    private func writeMTPStagedBundle(at root: URL, name: String) throws {
+        try writeBundle(at: root, name: name)
+        try """
+            {
+              "schema": "caix.cluster.stage_manifest.v0",
+              "model": "\(name)",
+              "total_layer_count": 1,
+              "boundary": {"hidden_state": {"name": "hidden_states", "shape": [1, -1, 2], "scalar_type": "float16"}},
+              "eagle_target": {"stage_id": "layers", "sliding_window": 1024},
+              "stages": [
+                {"id": "embed", "role": "embeddings", "layers": "embeddings", "bundle": "embed.aimodel", "memory_gb": 1},
+                {"id": "layers", "role": "transformer_layers", "layers": [0, 1], "bundle": "layers.aimodel", "memory_gb": 1},
+                {"id": "head", "role": "final_norm_head", "layers": "norm+lm_head", "bundle": "head.aimodel", "memory_gb": 1}
+              ]
             }
             """.write(
                 to: root.appendingPathComponent("stage-manifest.json"),

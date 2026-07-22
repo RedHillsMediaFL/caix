@@ -285,33 +285,9 @@ public final class TextStagedModel {
                 let artifacts = try Self.requirePrefillMTPArtifacts(
                     prefill.eagleTargetArtifacts,
                     promptTokenCount: promptTokenIDs.count)
-                var targetStepIndex = prefill.nextStepIndex
-                let decoder = try Gemma4SequentialMTPDecoder(
-                    draftTokens: mtpDraftTokens,
-                    propose: { request in
-                        try await mtpAssistant.propose(request)
-                    },
-                    targetDecode: { token, position in
-                        let output = try await self.pipeline.forward(
-                            requestID: requestID,
-                            stepIndex: targetStepIndex,
-                            positionRange: DistributedSequenceRange(
-                                lowerBound: position,
-                                upperBound: position + 1),
-                            tokenIDs: [token])
-                        targetStepIndex += 1
-                        guard let tokenID = output.tokenID else {
-                            throw DistributedStageExecutionError.invalidStageOutput(
-                                "staged MTP target Q=1 forward did not return a token id")
-                        }
-                        guard let artifacts = output.eagleTargetArtifacts else {
-                            throw DistributedStageExecutionError.invalidStageOutput(
-                                "staged MTP target Q=1 forward did not return target artifacts")
-                        }
-                        return Gemma4SequentialMTPTargetStep(
-                            tokenID: tokenID,
-                            artifacts: artifacts)
-                    })
+                let decoder = try sequentialMTPDecoder(
+                    requestID: requestID,
+                    firstTargetStepIndex: prefill.nextStepIndex)
                 if commit(prefill.tokenID) {
                     let remainingTokens = min(
                         options.maxTokens - generated.count,
@@ -352,6 +328,51 @@ public final class TextStagedModel {
                 decodeSeconds: decodeSeconds,
                 mtpTelemetry: mtpTelemetry,
                 generatedTokenIDs: generated)
+        } catch {
+            await pipeline.free(requestID: requestID)
+            throw error
+        }
+    }
+
+    /// Runs one private target/assistant verification pass to prove resident staged MTP readiness.
+    /// The request is freed before this method returns and produces no user-visible output.
+    public func prewarmMTPProof() async throws -> Gemma4MTPDecodeTelemetry {
+        guard mtpAssistant != nil else {
+            throw CoreAIPipeline.RuntimeError.unsupportedFeature(
+                "staged MTP assistant is not configured")
+        }
+        let promptTokenIDs = tokenizer.encode(text: "MTP readiness probe").map(Int32.init)
+        guard !promptTokenIDs.isEmpty else {
+            throw CoreAIPipeline.RuntimeError.invalidBundle(
+                "MTP readiness prompt tokenized to 0 tokens")
+        }
+
+        let requestID = UUID().uuidString
+        let capacity = try resolvedKVCapacity(
+            promptCount: promptTokenIDs.count,
+            maxTokens: 2,
+            explicitKVCapacity: nil)
+        try await pipeline.allocate(
+            requestID: requestID,
+            kvCapacity: capacity,
+            cacheCapacities: resolvedCacheCapacities(kvCapacity: capacity))
+        do {
+            let prefill = try await prefillNextToken(
+                promptTokenIDs: promptTokenIDs,
+                requestID: requestID)
+            let artifacts = try Self.requirePrefillMTPArtifacts(
+                prefill.eagleTargetArtifacts,
+                promptTokenCount: promptTokenIDs.count)
+            let decoder = try sequentialMTPDecoder(
+                requestID: requestID,
+                firstTargetStepIndex: prefill.nextStepIndex)
+            let outcome = try await decoder.run(
+                anchorToken: prefill.tokenID,
+                targetArtifacts: artifacts,
+                maximumAdditionalTokens: 1,
+                commit: { _ in true })
+            await pipeline.free(requestID: requestID)
+            return outcome.telemetry
         } catch {
             await pipeline.free(requestID: requestID)
             throw error
@@ -523,6 +544,43 @@ public final class TextStagedModel {
                 "staged Gemma 4 MTP prefill target KV must cover the full prompt")
         }
         return artifacts
+    }
+
+    private func sequentialMTPDecoder(
+        requestID: String,
+        firstTargetStepIndex: Int
+    ) throws -> Gemma4SequentialMTPDecoder {
+        guard let mtpAssistant else {
+            throw CoreAIPipeline.RuntimeError.unsupportedFeature(
+                "staged MTP assistant is not configured")
+        }
+        var targetStepIndex = firstTargetStepIndex
+        return try Gemma4SequentialMTPDecoder(
+            draftTokens: mtpDraftTokens,
+            propose: { request in
+                try await mtpAssistant.propose(request)
+            },
+            targetDecode: { token, position in
+                let output = try await self.pipeline.forward(
+                    requestID: requestID,
+                    stepIndex: targetStepIndex,
+                    positionRange: DistributedSequenceRange(
+                        lowerBound: position,
+                        upperBound: position + 1),
+                    tokenIDs: [token])
+                targetStepIndex += 1
+                guard let tokenID = output.tokenID else {
+                    throw DistributedStageExecutionError.invalidStageOutput(
+                        "staged MTP target Q=1 forward did not return a token id")
+                }
+                guard let artifacts = output.eagleTargetArtifacts else {
+                    throw DistributedStageExecutionError.invalidStageOutput(
+                        "staged MTP target Q=1 forward did not return target artifacts")
+                }
+                return Gemma4SequentialMTPTargetStep(
+                    tokenID: tokenID,
+                    artifacts: artifacts)
+            })
     }
 
     private func nextTokenID(

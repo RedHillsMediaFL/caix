@@ -27,6 +27,7 @@ public enum CoreAIServer {
         verbose: Bool = false,
         eagleConfig: EagleConfig? = nil,
         primaryStagedBundle: PrimaryStagedBundleConfiguration? = nil,
+        stagedMTPConfiguration: StagedMTPStartupConfiguration? = nil,
         statsFile: String? = nil,
         prewarm: String = "smallest",
         conversionGuardEnabled: Bool = true,
@@ -47,12 +48,14 @@ public enum CoreAIServer {
             verbose: verbose,
             eagleConfig: eagleConfig,
             primaryStagedBundle: primaryStagedBundle,
+            stagedMTPConfiguration: stagedMTPConfiguration,
             conversionGuardEnabled: conversionGuardEnabled,
             audioTranscriptionService: whisperTranscriber.map {
                 OpenAIAudioTranscriptionService(transcriber: $0)
             })
 
         _ = await runtime.memorySupervisor.refresh()
+        try await runtime.requireStagedMTPProofIfNeeded()
         await runtime.prewarm(selection: prewarm)
 
         let router = Router()
@@ -114,6 +117,7 @@ final class ServerRuntime: Sendable {
     let chatHTML: String
     let shellHTML: String
     let verbose: Bool
+    let stagedMTPConfiguration: StagedMTPStartupConfiguration?
     let conversionGuard: ConversionGuard
     let memorySupervisor: ResidentMemorySupervisor
     let audioTranscriptionService: OpenAIAudioTranscriptionService?
@@ -123,6 +127,7 @@ final class ServerRuntime: Sendable {
         host: String, port: Int, exportsDir: URL, registryPath: URL, webDir: URL, convertScript: String,
         pythonExecutable: String, caixVersion: String, verbose: Bool, eagleConfig: EagleConfig? = nil,
         primaryStagedBundle: PrimaryStagedBundleConfiguration? = nil,
+        stagedMTPConfiguration: StagedMTPStartupConfiguration? = nil,
         conversionGuardEnabled: Bool = true,
         audioTranscriptionService: OpenAIAudioTranscriptionService? = nil
     ) throws {
@@ -131,7 +136,8 @@ final class ServerRuntime: Sendable {
         self.exportsDir = exportsDir
         self.manager = try ModelManager(
             exportsDir: exportsDir, registryPath: registryPath, verbose: verbose,
-            eagleConfig: eagleConfig, primaryStagedBundle: primaryStagedBundle)
+            eagleConfig: eagleConfig, primaryStagedBundle: primaryStagedBundle,
+            stagedMTPConfiguration: stagedMTPConfiguration)
         self.jobs = JobTracker()
         self.activity = ActivityLog()
         self.webDir = webDir
@@ -140,6 +146,7 @@ final class ServerRuntime: Sendable {
         self.pythonExecutable = pythonExecutable
         self.caixVersion = caixVersion
         self.verbose = verbose
+        self.stagedMTPConfiguration = stagedMTPConfiguration
         self.conversionGuard = ConversionGuard(
             enabled: conversionGuardEnabled,
             lockPaths: ConversionGuard.defaultLockPaths(exportsDir: exportsDir))
@@ -157,6 +164,17 @@ final class ServerRuntime: Sendable {
         self.shellHTML =
             (try? String(contentsOf: shellURL, encoding: .utf8))
             ?? "<!doctype html><title>caix shell</title><p>web/shell.html not found at \(shellURL.path)</p>"
+    }
+
+    func requireStagedMTPProofIfNeeded() async throws {
+        guard let stagedMTPConfiguration, stagedMTPConfiguration.requireMTP else { return }
+        let proof = try await manager.requireStagedMTPProof()
+        try await stagedMTPConfiguration.requireProof { _ in proof }
+        if verbose {
+            let message = "[server] staged MTP startup proof: drafted_tokens=\(proof.draftedTokens) "
+                + "execution_mode=\(proof.executionMode.rawValue) fast=false\\n"
+            FileHandle.standardError.write(Data(message.utf8))
+        }
     }
 
     func prewarm(selection rawSelection: String) async {

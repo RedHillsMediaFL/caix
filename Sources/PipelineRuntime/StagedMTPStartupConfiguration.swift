@@ -6,8 +6,8 @@ import Foundation
 /// `--require-mtp` cannot claim speculative serving until the staged target loop has drafted at
 /// least one token.
 public struct StagedMTPStartupConfiguration: Sendable, Equatable {
-    public static let defaultDraftTokens = 4
-    public static let maximumDraftTokens = 8
+    public static let defaultDraftTokens = Gemma4MTPDecodeConfiguration.defaultDraftTokens
+    public static let maximumDraftTokens = Gemma4MTPDecodeConfiguration.maximumDraftTokens
 
     public enum ConfigurationError: Error, Sendable, Equatable, CustomStringConvertible {
         case missingAssistant
@@ -79,7 +79,7 @@ public struct StagedMTPStartupConfiguration: Sendable, Equatable {
         if requireMTP, clusterMode {
             throw ConfigurationError.clusterUnsupported
         }
-        if requireMTP, prewarm == "off" {
+        if requireMTP, Self.disablesPrewarm(prewarm) {
             throw ConfigurationError.prewarmRequired
         }
 
@@ -117,6 +117,15 @@ public struct StagedMTPStartupConfiguration: Sendable, Equatable {
             primaryBundleURL: primaryBundleURL.standardizedFileURL)
     }
 
+    private static func disablesPrewarm(_ value: String) -> Bool {
+        switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "off", "none", "false", "no":
+            true
+        default:
+            false
+        }
+    }
+
     /// Enforces the proof boundary used only by `--require-mtp`.
     public func requireProof(using prover: StagedMTPStartupProver) async throws {
         guard requireMTP else { return }
@@ -132,20 +141,6 @@ public struct StagedMTPStartupConfiguration: Sendable, Equatable {
         }
     }
 
-    /// Default hook until the staged target-loop owner supplies an actual sequential proof.
-    /// It validates and specializes the assistant when Core AI is linked, then fails closed rather
-    /// than treating a loaded assistant as evidence that MTP drafted tokens.
-    public static func nativeProver(
-        _ configuration: StagedMTPStartupConfiguration
-    ) async throws -> StagedMTPStartupProof {
-        #if COREAI_RUNTIME
-        _ = try await Gemma4MTPNativeRunner.load(aimodelURL: configuration.assistantURL)
-        throw ConfigurationError.proofUnavailable(
-            "the staged target sequential loop has not produced drafted tokens")
-        #else
-        throw ConfigurationError.runtimeUnavailable
-        #endif
-    }
 }
 
 public enum StagedMTPExecutionMode: String, Sendable, Equatable {

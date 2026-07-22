@@ -435,6 +435,33 @@ final class ModelHandle: @unchecked Sendable {
         }
     }
 
+    func stagedMTPStartupProof() async throws -> StagedMTPStartupProof {
+        #if !COREAI_RUNTIME
+        throw CoreAIPipeline.RuntimeError.runtimeUnavailable
+        #else
+        await gate.acquire()
+        do {
+            guard case .textStaged(let model) = backend else {
+                throw CoreAIPipeline.RuntimeError.unsupportedFeature(
+                    "configured staged MTP primary did not load as a text staged model")
+            }
+            let telemetry = try await model.prewarmMTPProof()
+            guard telemetry.strategy == "sequential_no_rollback" else {
+                throw StagedMTPStartupConfiguration.ConfigurationError.proofUnavailable(
+                    "runtime reported unexpected MTP strategy: \(telemetry.strategy)")
+            }
+            await gate.release()
+            return StagedMTPStartupProof(
+                draftedTokens: telemetry.draftedTokens,
+                executionMode: .sequentialNoRollback,
+                fast: telemetry.fastMTP)
+        } catch {
+            await gate.release()
+            throw error
+        }
+        #endif
+    }
+
     private static func stringMessages(
         _ messages: [[String: any Sendable]]
     ) throws -> [[String: String]] {
@@ -720,6 +747,7 @@ public actor ModelManager {
     private let verbose: Bool
     private let eagleConfig: EagleConfig?
     private let primaryStagedBundle: PrimaryStagedBundleConfiguration?
+    private let stagedMTPConfiguration: StagedMTPStartupConfiguration?
     private let heavyTaskLockPath: URL
 
     private var handles: [String: ModelHandle] = [:]
@@ -732,13 +760,22 @@ public actor ModelManager {
     public init(exportsDir: URL, registryPath: URL, verbose: Bool = false,
                 eagleConfig: EagleConfig? = nil,
                 primaryStagedBundle: PrimaryStagedBundleConfiguration? = nil,
+                stagedMTPConfiguration: StagedMTPStartupConfiguration? = nil,
                 heavyTaskLockPath: URL? = nil) throws {
         self.exportsDir = exportsDir
         self.registryPath = registryPath
         self.verbose = verbose
         self.eagleConfig = eagleConfig
         self.primaryStagedBundle = primaryStagedBundle
+        self.stagedMTPConfiguration = stagedMTPConfiguration
         self.heavyTaskLockPath = heavyTaskLockPath ?? Self.defaultHeavyTaskLockPath(exportsDir: exportsDir)
+        if let stagedMTPConfiguration {
+            guard primaryStagedBundle?.bundleURL.standardizedFileURL
+                == stagedMTPConfiguration.primaryBundleURL.standardizedFileURL
+            else {
+                throw StagedMTPStartupConfiguration.ConfigurationError.missingPrimaryStagedBundle
+            }
+        }
         if let primaryStagedBundle {
             try Self.validatePrimaryStagedBundle(primaryStagedBundle, against: exportsDir)
         }
@@ -930,6 +967,27 @@ public actor ModelManager {
         handles.values.reduce(0) { $0 + $1.memoryBytes }
     }
 
+    func stagedMTPConfiguration(for bundleURL: URL) -> StagedMTPStartupConfiguration? {
+        guard let stagedMTPConfiguration,
+              stagedMTPConfiguration.primaryBundleURL.standardizedFileURL
+                == bundleURL.standardizedFileURL
+        else {
+            return nil
+        }
+        return stagedMTPConfiguration
+    }
+
+    func requireStagedMTPProof() async throws -> StagedMTPStartupProof {
+        guard let stagedMTPConfiguration, stagedMTPConfiguration.requireMTP,
+              let primaryStagedBundle
+        else {
+            throw StagedMTPStartupConfiguration.ConfigurationError.proofUnavailable(
+                "no required staged MTP primary is configured")
+        }
+        let handle = try await handle(for: primaryStagedBundle.modelID)
+        return try await handle.stagedMTPStartupProof()
+    }
+
     func eagleSummary() -> ServerInfo.Eagle {
         guard let cfg = eagleConfig else {
             return ServerInfo.Eagle(
@@ -1000,6 +1058,7 @@ public actor ModelManager {
 
         let path = bundlePath(for: name)
         let eagle = eagleConfig
+        let stagedMTP = stagedMTPConfiguration(for: URL(fileURLWithPath: path, isDirectory: true))
         log("load requested for \(name) at \(path)")
         if eagle?.name != name {
             var isDir = ObjCBool(false)
@@ -1099,11 +1158,15 @@ public actor ModelManager {
                 let model = try await TextStagedModel.load(
                     manifestURL: root.appendingPathComponent("stage-manifest.json"),
                     verbose: verbose,
-                    stagedMemorySnapshotProvider: stagedMemorySnapshotProvider)
+                    stagedMemorySnapshotProvider: stagedMemorySnapshotProvider,
+                    mtpAssistantURL: stagedMTP?.assistantURL,
+                    mtpDraftTokens: stagedMTP?.draftTokens
+                        ?? Gemma4MTPDecodeConfiguration.defaultDraftTokens)
                 return ModelHandle(
                     textStaged: model,
                     name: name,
-                    bytes: Self.dirSize(root))
+                    bytes: Self.dirSize(root)
+                        + (stagedMTP.map { Self.dirSize($0.assistantURL) } ?? 0))
                 #else
                 throw CoreAIPipeline.RuntimeError.runtimeUnavailable
                 #endif

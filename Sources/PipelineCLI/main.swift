@@ -925,10 +925,6 @@ func serveCommand(_ argv: [String]) {
     Task {
         defer { semaphore.signal() }
         do {
-            if let stagedMTPConfiguration, stagedMTPConfiguration.requireMTP {
-                try await stagedMTPConfiguration.requireProof(
-                    using: StagedMTPStartupConfiguration.nativeProver)
-            }
             let whisperTranscriber: (any WhisperTranscribing)?
             if let whisperConfiguration {
                 try WhisperStartupMemoryGate.validate(MachineStats.memorySafetySnapshot())
@@ -952,6 +948,7 @@ func serveCommand(_ argv: [String]) {
                 verbose: verbose,
                 eagleConfig: eagleConfig,
                 primaryStagedBundle: primaryStagedConfiguration,
+                stagedMTPConfiguration: stagedMTPConfiguration,
                 statsFile: statsFile,
                 prewarm: prewarm,
                 conversionGuardEnabled: conversionGuardEnabled,

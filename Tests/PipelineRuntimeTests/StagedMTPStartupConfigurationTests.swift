@@ -46,6 +46,21 @@ final class StagedMTPStartupConfigurationTests: XCTestCase {
             prewarm: "off"))
     }
 
+    func testRequireMTPRejectsEveryPrewarmOffSynonym() throws {
+        let assistant = try makeAssistantAsset()
+        let primary = try makeEaglePrimaryBundle()
+
+        for prewarm in ["off", "none", "false", "no"] {
+            XCTAssertThrowsError(try StagedMTPStartupConfiguration.resolve(
+                assistantPath: assistant.path,
+                draftTokens: 4,
+                requireMTP: true,
+                primaryBundleURL: primary,
+                clusterMode: false,
+                prewarm: prewarm), "expected \(prewarm) to disable required MTP startup")
+        }
+    }
+
     func testMTPRejectsWrongAssistantExtensionAndNonEaglePrimary() throws {
         let primary = try makeEaglePrimaryBundle()
         let wrongExtension = FileManager.default.temporaryDirectory
