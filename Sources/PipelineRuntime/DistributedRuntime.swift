@@ -3943,8 +3943,20 @@ public final class DistributedSameMachinePipeline {
 
     public static func make(
         manifest: DistributedStageManifest,
-        handleFactory: DistributedStageHandleFactory
+        handleFactory: DistributedStageHandleFactory,
+        streamedPrefillAdmission: DistributedStagedMemoryAdmission? = nil
     ) async throws -> DistributedSameMachinePipeline {
+        let effectiveAdmission: DistributedStagedMemoryAdmission?
+        if manifest.requiresStreamedPrefillResidency {
+            guard let streamedPrefillAdmission else {
+                throw DistributedStageExecutionError.invalidControlFrame(
+                    "streamed prefill manifest requires memory admission before decode assets load")
+            }
+            effectiveAdmission = streamedPrefillAdmission
+        } else {
+            effectiveAdmission = nil
+        }
+
         var handles: [DistributedStageHandle] = []
         handles.reserveCapacity(manifest.stages.count)
         for stage in manifest.stages {
@@ -3953,9 +3965,13 @@ public final class DistributedSameMachinePipeline {
             }
             let context = DistributedStageHandleFactoryContext(
                 stage: stage, manifest: manifest, descriptor: descriptor)
+            try effectiveAdmission?.checkBeforeAssetLoad()
             handles.append(try await handleFactory.makeStageHandle(for: context))
         }
-        return try DistributedSameMachinePipeline(plan: manifest.runtimePlan, stages: handles)
+        return try DistributedSameMachinePipeline(
+            plan: manifest.runtimePlan,
+            stages: handles,
+            streamedPrefillAdmission: effectiveAdmission)
     }
 
     public func allocate(

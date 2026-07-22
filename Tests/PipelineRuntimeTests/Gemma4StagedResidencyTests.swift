@@ -67,15 +67,50 @@ final class Gemma4StagedResidencyTests: XCTestCase {
             decodeManifest(runtimeMemory: validRuntimeMemory).runtimeMemory)
         let initial = DistributedStagedMemoryAdmission(
             contract: contract,
-            snapshotProvider: { self.safeSnapshot(total: 64 * self.gib) })
+            snapshotProvider: {
+                self.safeSnapshot(total: 64 * self.gib, available: 40 * self.gib)
+            })
         let fallback = DistributedStagedMemoryAdmission(
             contract: contract,
-            snapshotProvider: { self.safeSnapshot(total: 51_000_000_000) })
+            snapshotProvider: {
+                self.safeSnapshot(total: 51_000_000_000, available: 40 * self.gib)
+            })
 
         XCTAssertEqual(try initial.selectContext().contextTokens, 65_536)
         XCTAssertEqual(try initial.selectContext().tier, .initial)
         XCTAssertEqual(try fallback.selectContext().contextTokens, 32_768)
         XCTAssertEqual(try fallback.selectContext().tier, .fallback)
+    }
+
+    func testMemoryAdmissionFallsBackWhenInitialWouldEraseCurrentHeadroom() throws {
+        let contract = try XCTUnwrap(
+            decodeManifest(runtimeMemory: validRuntimeMemory).runtimeMemory)
+        let admission = DistributedStagedMemoryAdmission(
+            contract: contract,
+            snapshotProvider: {
+                self.safeSnapshot(total: 64 * self.gib, available: 28 * self.gib)
+            })
+
+        XCTAssertEqual(try admission.selectContext().tier, .fallback)
+        XCTAssertEqual(try admission.selectContext().contextTokens, 32_768)
+    }
+
+    func testMemoryAdmissionRejectsBothTiersWhenCurrentAvailabilityIsUnsafe() throws {
+        let contract = try XCTUnwrap(
+            decodeManifest(runtimeMemory: validRuntimeMemory).runtimeMemory)
+        let admission = DistributedStagedMemoryAdmission(
+            contract: contract,
+            snapshotProvider: {
+                self.safeSnapshot(total: 64 * self.gib, available: 20 * self.gib)
+            })
+
+        XCTAssertThrowsError(try admission.selectContext()) { error in
+            guard case .insufficientAvailableMemory(let required, let actual) =
+                error as? DistributedStagedMemoryAdmissionError
+            else { return XCTFail("expected insufficientAvailableMemory, got \(error)") }
+            XCTAssertGreaterThan(required, actual)
+            XCTAssertEqual(actual, 20 * self.gib)
+        }
     }
 
     func testMemoryAdmissionFailsClosedOnCurrentPressure() throws {
@@ -173,6 +208,56 @@ final class Gemma4StagedResidencyTests: XCTestCase {
         XCTAssertEqual(fixture.recorder.activePrefillCount, 0)
     }
 
+    func testMakeInstallsAdmissionAndChecksBeforeEveryDecodeAssetLoad() async throws {
+        let manifest = try decodeManifest(runtimeMemory: validRuntimeMemory)
+        let recorder = ResidencyRecorder()
+        let factory = RecordingDecodeResidentFactory(recorder: recorder)
+        let contract = try XCTUnwrap(manifest.runtimeMemory)
+        let admission = DistributedStagedMemoryAdmission(
+            contract: contract,
+            snapshotProvider: {
+                recorder.events.append("admit")
+                return self.safeSnapshot(total: 64 * self.gib)
+            })
+
+        _ = try await DistributedSameMachinePipeline.make(
+            manifest: manifest,
+            handleFactory: factory,
+            streamedPrefillAdmission: admission)
+
+        XCTAssertEqual(recorder.events, [
+            "admit", "factory:embed",
+            "admit", "factory:layers",
+            "admit", "factory:head",
+        ])
+    }
+
+    func testMakeRejectsStreamedManifestWithoutAdmission() async throws {
+        let manifest = try decodeManifest(runtimeMemory: validRuntimeMemory)
+        let recorder = ResidencyRecorder()
+
+        await XCTAssertThrowsErrorAsync(
+            try await DistributedSameMachinePipeline.make(
+                manifest: manifest,
+                handleFactory: RecordingDecodeResidentFactory(recorder: recorder))) { error in
+                    guard case .invalidControlFrame(let message) =
+                        error as? DistributedStageExecutionError
+                    else { return XCTFail("expected invalidControlFrame, got \(error)") }
+                    XCTAssertTrue(message.contains("memory admission"))
+                }
+        XCTAssertTrue(recorder.events.isEmpty)
+    }
+
+    #if COREAI_RUNTIME
+    func testCoreAIDecodeResidentFactoryBindsTheStreamedStageProtocol() {
+        let factory: any DistributedStageHandleFactory =
+            DistributedCoreAIDecodeResidentStageHandleFactory()
+        XCTAssertTrue(
+            String(describing: type(of: factory))
+                .contains("DistributedCoreAIDecodeResidentStageHandleFactory"))
+    }
+    #endif
+
     private func decodeManifest(
         runtimeMemory: String,
         stages: String? = nil
@@ -200,11 +285,14 @@ final class Gemma4StagedResidencyTests: XCTestCase {
             baseURL: URL(fileURLWithPath: "/tmp/gemma4-31b", isDirectory: true))
     }
 
-    private func safeSnapshot(total: UInt64) -> DistributedStagedMemorySnapshot {
+    private func safeSnapshot(
+        total: UInt64,
+        available: UInt64? = nil
+    ) -> DistributedStagedMemorySnapshot {
         DistributedStagedMemorySnapshot(
             totalPhysicalMemoryBytes: total,
             workerResidentBytes: 20 * gib,
-            availableBytes: 20 * gib,
+            availableBytes: available ?? 40 * gib,
             pressure: .green,
             swapGrowthBytes: 0)
     }
@@ -294,6 +382,25 @@ private final class ResidencyRecorder: @unchecked Sendable {
     var events: [String] = []
     var activePrefillCount = 0
     var maximumActivePrefillCount = 0
+}
+
+private final class RecordingDecodeResidentFactory: DistributedStageHandleFactory {
+    private let recorder: ResidencyRecorder
+
+    init(recorder: ResidencyRecorder) {
+        self.recorder = recorder
+    }
+
+    func makeStageHandle(
+        for context: DistributedStageHandleFactoryContext
+    ) async throws -> DistributedStageHandle {
+        recorder.events.append("factory:\(context.descriptor.id)")
+        return RecordingDecodeResidentStage(
+            descriptor: context.descriptor,
+            nextStageID: context.nextStage?.id,
+            recorder: recorder,
+            failForward: false)
+    }
 }
 
 private final class RecordingDecodeResidentStage:

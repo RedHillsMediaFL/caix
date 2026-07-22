@@ -136,6 +136,7 @@ public enum DistributedStagedMemoryAdmissionError: Error, Sendable, Equatable {
     case drain(ResidentServiceHealthGate.DrainReason)
     case restart(ResidentServiceHealthGate.RestartReason)
     case insufficientPhysicalMemory(requiredBytes: UInt64, actualBytes: UInt64)
+    case insufficientAvailableMemory(requiredBytes: UInt64, actualBytes: UInt64)
 }
 
 /// Live, repeatable admission check for resident decode startup and every transient prefill load.
@@ -157,19 +158,32 @@ public struct DistributedStagedMemoryAdmission {
 
     public func selectContext() throws -> DistributedStagedContextSelection {
         let snapshot = try checkedSnapshot()
-        if snapshot.totalPhysicalMemoryBytes >= contract.initial.minimumPhysicalMemoryBytes {
+        if snapshot.totalPhysicalMemoryBytes >= contract.initial.minimumPhysicalMemoryBytes,
+           snapshot.availableBytes >= availableRequirement(
+               for: contract.initial,
+               snapshot: snapshot)
+        {
             return DistributedStagedContextSelection(
                 tier: .initial,
                 contextTokens: contract.initial.contextTokens)
         }
-        if snapshot.totalPhysicalMemoryBytes >= contract.fallback.minimumPhysicalMemoryBytes {
+        if snapshot.totalPhysicalMemoryBytes >= contract.fallback.minimumPhysicalMemoryBytes,
+           snapshot.availableBytes >= availableRequirement(
+               for: contract.fallback,
+               snapshot: snapshot)
+        {
             return DistributedStagedContextSelection(
                 tier: .fallback,
                 contextTokens: contract.fallback.contextTokens)
         }
-        throw DistributedStagedMemoryAdmissionError.insufficientPhysicalMemory(
-            requiredBytes: contract.fallback.minimumPhysicalMemoryBytes,
-            actualBytes: snapshot.totalPhysicalMemoryBytes)
+        if snapshot.totalPhysicalMemoryBytes < contract.fallback.minimumPhysicalMemoryBytes {
+            throw DistributedStagedMemoryAdmissionError.insufficientPhysicalMemory(
+                requiredBytes: contract.fallback.minimumPhysicalMemoryBytes,
+                actualBytes: snapshot.totalPhysicalMemoryBytes)
+        }
+        throw DistributedStagedMemoryAdmissionError.insufficientAvailableMemory(
+            requiredBytes: availableRequirement(for: contract.fallback, snapshot: snapshot),
+            actualBytes: snapshot.availableBytes)
     }
 
     public func checkBeforeAssetLoad() throws {
@@ -196,6 +210,35 @@ public struct DistributedStagedMemoryAdmission {
             throw DistributedStagedMemoryAdmissionError.drain(reason)
         case .restart(let reason):
             throw DistributedStagedMemoryAdmissionError.restart(reason)
+        }
+    }
+
+    /// Projects only the additional worker footprint not already present in the live RSS, then
+    /// preserves both the co-resident-service reserve and OS headroom. This prevents total-RAM
+    /// eligibility from selecting a cache tier that current availability cannot safely absorb.
+    private func availableRequirement(
+        for tier: DistributedRuntimeMemoryContract.Tier,
+        snapshot: DistributedStagedMemorySnapshot
+    ) -> UInt64 {
+        let projectedWorkerBytes = Self.saturatedSum([
+            contract.residentWeightUpperBoundBytes,
+            contract.runtimeOverheadReserveBytes,
+            tier.cacheBytes,
+        ])
+        let incrementalWorkerBytes = projectedWorkerBytes > snapshot.workerResidentBytes
+            ? projectedWorkerBytes - snapshot.workerResidentBytes
+            : 0
+        return Self.saturatedSum([
+            incrementalWorkerBytes,
+            contract.coresidentServicesReserveBytes,
+            contract.systemHeadroomBytes,
+        ])
+    }
+
+    private static func saturatedSum(_ values: [UInt64]) -> UInt64 {
+        values.reduce(0) { partial, value in
+            let (sum, overflow) = partial.addingReportingOverflow(value)
+            return overflow ? UInt64.max : sum
         }
     }
 }
