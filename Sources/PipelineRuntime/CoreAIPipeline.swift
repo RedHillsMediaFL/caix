@@ -107,6 +107,8 @@ public enum CoreAIPipeline {
         public let decodeSeconds: Double
         /// Tokens reused from a warm engine prefix cache for this request, when the backend reports it.
         public let prefixHitCount: Int?
+        /// Raw staged Gemma 4 MTP accounting, present only when that path was configured.
+        public let mtpTelemetry: Gemma4MTPDecodeTelemetry?
         /// Internal diagnostics for parity/determinism tests; not part of the public API surface.
         let generatedTokenIDs: [Int32]
 
@@ -122,7 +124,8 @@ public enum CoreAIPipeline {
             modelLoadSeconds: Double,
             prefillSeconds: Double,
             decodeSeconds: Double,
-            prefixHitCount: Int? = nil
+            prefixHitCount: Int? = nil,
+            mtpTelemetry: Gemma4MTPDecodeTelemetry? = nil
         ) {
             self.init(
                 text: text,
@@ -133,6 +136,7 @@ public enum CoreAIPipeline {
                 prefillSeconds: prefillSeconds,
                 decodeSeconds: decodeSeconds,
                 prefixHitCount: prefixHitCount,
+                mtpTelemetry: mtpTelemetry,
                 generatedTokenIDs: [])
         }
 
@@ -145,6 +149,7 @@ public enum CoreAIPipeline {
             prefillSeconds: Double,
             decodeSeconds: Double,
             prefixHitCount: Int? = nil,
+            mtpTelemetry: Gemma4MTPDecodeTelemetry? = nil,
             generatedTokenIDs: [Int32]
         ) {
             self.text = text
@@ -155,6 +160,7 @@ public enum CoreAIPipeline {
             self.prefillSeconds = prefillSeconds
             self.decodeSeconds = decodeSeconds
             self.prefixHitCount = prefixHitCount
+            self.mtpTelemetry = mtpTelemetry
             self.generatedTokenIDs = generatedTokenIDs
         }
     }

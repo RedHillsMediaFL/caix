@@ -25,6 +25,8 @@ public final class TextStagedModel {
     private let tokenizerDir: URL
     private let chatRenderer: Gemma4ChatTemplateContract.ResidentRenderer?
     private let stopTokenIDs: Set<Int32>
+    private let mtpAssistant: Gemma4MTPNativeRunner?
+    private let mtpDraftTokens: Int
 
     private init(
         manifestURL: URL,
@@ -33,6 +35,8 @@ public final class TextStagedModel {
         tokenizer: any Tokenizer,
         tokenizerDir: URL,
         chatRenderer: Gemma4ChatTemplateContract.ResidentRenderer?,
+        mtpAssistant: Gemma4MTPNativeRunner?,
+        mtpDraftTokens: Int,
         maxContextLength: Int,
         bundleByteSize: UInt64,
         loadSeconds: Double
@@ -44,6 +48,8 @@ public final class TextStagedModel {
         self.tokenizer = tokenizer
         self.tokenizerDir = tokenizerDir
         self.chatRenderer = chatRenderer
+        self.mtpAssistant = mtpAssistant
+        self.mtpDraftTokens = mtpDraftTokens
         self.maxContextLength = maxContextLength
         self.bundleByteSize = bundleByteSize
         self.loadSeconds = loadSeconds
@@ -54,7 +60,9 @@ public final class TextStagedModel {
     public static func load(
         manifestURL: URL,
         verbose: Bool = false,
-        stagedMemorySnapshotProvider: (() throws -> DistributedStagedMemorySnapshot)? = nil
+        stagedMemorySnapshotProvider: (() throws -> DistributedStagedMemorySnapshot)? = nil,
+        mtpAssistantURL: URL? = nil,
+        mtpDraftTokens: Int = Gemma4MTPDecodeConfiguration.defaultDraftTokens
     ) async throws -> TextStagedModel {
         let started = Date()
         let resolvedManifestURL = manifestURL.standardizedFileURL
@@ -66,6 +74,22 @@ public final class TextStagedModel {
             manifest: manifest,
             metadataMaxContextLength: metadataMaxContextLength,
             snapshotProvider: stagedMemorySnapshotProvider)
+        let mtpAssistant: Gemma4MTPNativeRunner?
+        if let mtpAssistantURL {
+            guard manifest.eagleTarget != nil else {
+                throw CoreAIPipeline.RuntimeError.invalidBundle(
+                    "Gemma 4 MTP assistant requires an eagle_target staged manifest contract")
+            }
+            guard (1...Gemma4MTPDecodeConfiguration.maximumDraftTokens).contains(mtpDraftTokens)
+            else {
+                throw CoreAIPipeline.RuntimeError.invalidBundle(
+                    "Gemma 4 MTP draft token count must be in 1...\(Gemma4MTPDecodeConfiguration.maximumDraftTokens)")
+            }
+            mtpAssistant = try await Gemma4MTPNativeRunner.load(
+                aimodelURL: mtpAssistantURL.standardizedFileURL)
+        } else {
+            mtpAssistant = nil
+        }
         let chatRenderer = manifest.requiresStreamedPrefillResidency
             ? try Gemma4ChatTemplateContract.ResidentRenderer(
                 tokenizerDirectory: tokenizerDir)
@@ -91,6 +115,8 @@ public final class TextStagedModel {
             tokenizer: tokenizer,
             tokenizerDir: tokenizerDir,
             chatRenderer: chatRenderer,
+            mtpAssistant: mtpAssistant,
+            mtpDraftTokens: mtpDraftTokens,
             maxContextLength: configuration.maxContextLength,
             bundleByteSize: directorySize(root),
             loadSeconds: Date().timeIntervalSince(started))
@@ -190,6 +216,7 @@ public final class TextStagedModel {
                 modelLoadSeconds: loadSeconds,
                 prefillSeconds: 0,
                 decodeSeconds: 0,
+                mtpTelemetry: mtpAssistant == nil ? nil : .unexercisedSequential,
                 generatedTokenIDs: [])
         }
 
@@ -208,13 +235,15 @@ public final class TextStagedModel {
             let prefill = try await prefillNextToken(
                 promptTokenIDs: promptTokenIDs,
                 requestID: requestID)
-            var nextToken = prefill.tokenID
             let prefillSeconds = Date().timeIntervalSince(prefillStart)
 
             var generated: [Int32] = []
             var streamedText = ""
             var finalTextOverride: String?
             var stopReason = CoreAIPipeline.StopReason.maxTokens
+            var mtpTelemetry: Gemma4MTPDecodeTelemetry? = mtpAssistant == nil
+                ? nil
+                : .unexercisedSequential
             let decodeStart = Date()
 
             func emitIfNeeded() {
@@ -227,17 +256,17 @@ public final class TextStagedModel {
                 streamedText = text
             }
 
-            while generated.count < options.maxTokens {
-                if stopTokenIDs.contains(nextToken) {
+            func commit(_ token: Int32) -> Bool {
+                if stopTokenIDs.contains(token) {
                     stopReason = .eos
-                    break
+                    return false
                 }
                 if promptTokenIDs.count + generated.count >= maxContextLength {
                     stopReason = .contextLimit
-                    break
+                    return false
                 }
 
-                generated.append(nextToken)
+                generated.append(token)
                 emitIfNeeded()
 
                 let decoded = tokenizer.decode(tokens: generated.map(Int.init))
@@ -247,18 +276,67 @@ public final class TextStagedModel {
                 {
                     stopReason = .stopSequence
                     finalTextOverride = String(decoded[..<stopRange.lowerBound])
-                    break
+                    return false
                 }
+                return generated.count < options.maxTokens
+            }
 
-                guard generated.count < options.maxTokens else { break }
-                let decodePosition = promptTokenIDs.count + generated.count - 1
-                nextToken = try await nextTokenID(
-                    requestID: requestID,
-                    stepIndex: prefill.nextStepIndex + generated.count - 1,
-                    positionRange: DistributedSequenceRange(
-                        lowerBound: decodePosition,
-                        upperBound: decodePosition + 1),
-                    tokenIDs: [nextToken])
+            if let mtpAssistant {
+                let artifacts = try Self.requirePrefillMTPArtifacts(
+                    prefill.eagleTargetArtifacts,
+                    promptTokenCount: promptTokenIDs.count)
+                var targetStepIndex = prefill.nextStepIndex
+                let decoder = try Gemma4SequentialMTPDecoder(
+                    draftTokens: mtpDraftTokens,
+                    propose: { request in
+                        try await mtpAssistant.propose(request)
+                    },
+                    targetDecode: { token, position in
+                        let output = try await self.pipeline.forward(
+                            requestID: requestID,
+                            stepIndex: targetStepIndex,
+                            positionRange: DistributedSequenceRange(
+                                lowerBound: position,
+                                upperBound: position + 1),
+                            tokenIDs: [token])
+                        targetStepIndex += 1
+                        guard let tokenID = output.tokenID else {
+                            throw DistributedStageExecutionError.invalidStageOutput(
+                                "staged MTP target Q=1 forward did not return a token id")
+                        }
+                        guard let artifacts = output.eagleTargetArtifacts else {
+                            throw DistributedStageExecutionError.invalidStageOutput(
+                                "staged MTP target Q=1 forward did not return target artifacts")
+                        }
+                        return Gemma4SequentialMTPTargetStep(
+                            tokenID: tokenID,
+                            artifacts: artifacts)
+                    })
+                if commit(prefill.tokenID) {
+                    let remainingTokens = min(
+                        options.maxTokens - generated.count,
+                        maxContextLength - promptTokenIDs.count - generated.count)
+                    let outcome = try await decoder.run(
+                        anchorToken: prefill.tokenID,
+                        targetArtifacts: artifacts,
+                        maximumAdditionalTokens: max(0, remainingTokens),
+                        commit: commit)
+                    mtpTelemetry = outcome.telemetry
+                }
+            } else {
+                var nextToken = prefill.tokenID
+                var running = commit(nextToken)
+                while running {
+                    let decodePosition = promptTokenIDs.count + generated.count - 1
+                    nextToken = try await nextTokenID(
+                        requestID: requestID,
+                        stepIndex: prefill.nextStepIndex + generated.count - 1,
+                        positionRange: DistributedSequenceRange(
+                            lowerBound: decodePosition,
+                            upperBound: decodePosition + 1),
+                        tokenIDs: [nextToken])
+                    running = commit(nextToken)
+                }
             }
 
             await pipeline.free(requestID: requestID)
@@ -272,6 +350,7 @@ public final class TextStagedModel {
                 modelLoadSeconds: loadSeconds,
                 prefillSeconds: prefillSeconds,
                 decodeSeconds: decodeSeconds,
+                mtpTelemetry: mtpTelemetry,
                 generatedTokenIDs: generated)
         } catch {
             await pipeline.free(requestID: requestID)
@@ -353,6 +432,7 @@ public final class TextStagedModel {
     private struct PrefillResult {
         let tokenID: Int32
         let nextStepIndex: Int
+        let eagleTargetArtifacts: DistributedEagleTargetArtifacts?
     }
 
     private func prefillNextToken(
@@ -365,14 +445,21 @@ public final class TextStagedModel {
                 requestID: requestID,
                 chunkSize: chunkSize)
         }
-        let tokenID = try await nextTokenID(
+        let output = try await pipeline.forward(
             requestID: requestID,
             stepIndex: 0,
             positionRange: DistributedSequenceRange(
                 lowerBound: 0,
                 upperBound: promptTokenIDs.count),
             tokenIDs: promptTokenIDs)
-        return PrefillResult(tokenID: tokenID, nextStepIndex: 1)
+        guard let tokenID = output.tokenID else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "staged prefill did not return a token id")
+        }
+        return PrefillResult(
+            tokenID: tokenID,
+            nextStepIndex: 1,
+            eagleTargetArtifacts: output.eagleTargetArtifacts)
     }
 
     private func chunkedPrefillNextToken(
@@ -387,6 +474,7 @@ public final class TextStagedModel {
         var lowerBound = 0
         var stepIndex = 0
         var tokenID: Int32?
+        var eagleTargetArtifacts: DistributedEagleTargetArtifacts?
         while lowerBound < promptTokenIDs.count {
             let upperBound = min(promptTokenIDs.count, lowerBound + chunkSize)
             let range = lowerBound..<upperBound
@@ -405,6 +493,7 @@ public final class TextStagedModel {
                         "final staged prefill chunk did not return a token id")
                 }
                 tokenID = emittedTokenID
+                eagleTargetArtifacts = output.eagleTargetArtifacts
             }
             lowerBound = upperBound
             stepIndex += 1
@@ -413,7 +502,27 @@ public final class TextStagedModel {
             throw DistributedStageExecutionError.invalidForwardInput(
                 "chunked staged prefill produced no observations")
         }
-        return PrefillResult(tokenID: tokenID, nextStepIndex: stepIndex)
+        return PrefillResult(
+            tokenID: tokenID,
+            nextStepIndex: stepIndex,
+            eagleTargetArtifacts: eagleTargetArtifacts)
+    }
+
+    private static func requirePrefillMTPArtifacts(
+        _ artifacts: DistributedEagleTargetArtifacts?,
+        promptTokenCount: Int
+    ) throws -> DistributedEagleTargetArtifacts {
+        guard let artifacts else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "staged Gemma 4 MTP prefill did not return target artifacts")
+        }
+        guard artifacts.fullPositionRange
+            == DistributedSequenceRange(lowerBound: 0, upperBound: promptTokenCount)
+        else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "staged Gemma 4 MTP prefill target KV must cover the full prompt")
+        }
+        return artifacts
     }
 
     private func nextTokenID(
