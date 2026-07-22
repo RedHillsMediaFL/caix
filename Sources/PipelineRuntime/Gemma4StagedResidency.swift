@@ -213,9 +213,11 @@ public struct DistributedStagedMemoryAdmission {
         }
     }
 
-    /// Projects only the additional worker footprint not already present in the live RSS, then
-    /// preserves both the co-resident-service reserve and OS headroom. This prevents total-RAM
-    /// eligibility from selecting a cache tier that current availability cannot safely absorb.
+    /// Projects only the additional worker footprint not already present in the live RSS.
+    /// `availableBytes` already excludes the live OS and co-resident services; adding their
+    /// reserves again would double-count them. The tier's minimum physical-memory floor retains
+    /// the whole-machine reserve contract, while `checkBeforeAssetLoad()` preserves the live
+    /// green-pressure, 8 GiB-available, and swap-growth gates before every specialization.
     private func availableRequirement(
         for tier: DistributedRuntimeMemoryContract.Tier,
         snapshot: DistributedStagedMemorySnapshot
@@ -228,11 +230,7 @@ public struct DistributedStagedMemoryAdmission {
         let incrementalWorkerBytes = projectedWorkerBytes > snapshot.workerResidentBytes
             ? projectedWorkerBytes - snapshot.workerResidentBytes
             : 0
-        return Self.saturatedSum([
-            incrementalWorkerBytes,
-            contract.coresidentServicesReserveBytes,
-            contract.systemHeadroomBytes,
-        ])
+        return incrementalWorkerBytes
     }
 
     private static func saturatedSum(_ values: [UInt64]) -> UInt64 {

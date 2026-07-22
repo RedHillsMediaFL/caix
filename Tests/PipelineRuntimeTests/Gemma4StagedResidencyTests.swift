@@ -82,13 +82,13 @@ final class Gemma4StagedResidencyTests: XCTestCase {
         XCTAssertEqual(try fallback.selectContext().tier, .fallback)
     }
 
-    func testMemoryAdmissionFallsBackWhenInitialWouldEraseCurrentHeadroom() throws {
+    func testMemoryAdmissionFallsBackWhenInitialExceedsIncrementalWorkerFootprint() throws {
         let contract = try XCTUnwrap(
             decodeManifest(runtimeMemory: validRuntimeMemory).runtimeMemory)
         let admission = DistributedStagedMemoryAdmission(
             contract: contract,
             snapshotProvider: {
-                self.safeSnapshot(total: 64 * self.gib, available: 28 * self.gib)
+                self.safeSnapshot(total: 64 * self.gib, available: 13 * self.gib)
             })
 
         XCTAssertEqual(try admission.selectContext().tier, .fallback)
@@ -101,7 +101,7 @@ final class Gemma4StagedResidencyTests: XCTestCase {
         let admission = DistributedStagedMemoryAdmission(
             contract: contract,
             snapshotProvider: {
-                self.safeSnapshot(total: 64 * self.gib, available: 20 * self.gib)
+                self.safeSnapshot(total: 64 * self.gib, available: 12 * self.gib)
             })
 
         XCTAssertThrowsError(try admission.selectContext()) { error in
@@ -109,7 +109,48 @@ final class Gemma4StagedResidencyTests: XCTestCase {
                 error as? DistributedStagedMemoryAdmissionError
             else { return XCTFail("expected insufficientAvailableMemory, got \(error)") }
             XCTAssertGreaterThan(required, actual)
-            XCTAssertEqual(actual, 20 * self.gib)
+            XCTAssertEqual(actual, 12 * self.gib)
+        }
+    }
+
+    func testProductionScaleAdmissionSelectsFallbackFromIncrementalWorkerFootprint() throws {
+        let contract = try XCTUnwrap(
+            decodeManifest(runtimeMemory: productionRuntimeMemory).runtimeMemory)
+        let admission = DistributedStagedMemoryAdmission(
+            contract: contract,
+            snapshotProvider: {
+                DistributedStagedMemorySnapshot(
+                    totalPhysicalMemoryBytes: 64 * self.gib,
+                    workerResidentBytes: 8_979_152,
+                    availableBytes: 41_494_396_928,
+                    pressure: .green,
+                    swapGrowthBytes: 0)
+            })
+
+        XCTAssertEqual(try admission.selectContext().tier, .fallback)
+    }
+
+    func testProductionScaleAdmissionRejectsAvailabilityBelowFallbackIncrement() throws {
+        let contract = try XCTUnwrap(
+            decodeManifest(runtimeMemory: productionRuntimeMemory).runtimeMemory)
+        let fallbackIncrement = UInt64(39_551_696_176)
+        let admission = DistributedStagedMemoryAdmission(
+            contract: contract,
+            snapshotProvider: {
+                DistributedStagedMemorySnapshot(
+                    totalPhysicalMemoryBytes: 64 * self.gib,
+                    workerResidentBytes: 8_979_152,
+                    availableBytes: fallbackIncrement - 1,
+                    pressure: .green,
+                    swapGrowthBytes: 0)
+            })
+
+        XCTAssertThrowsError(try admission.selectContext()) { error in
+            guard case .insufficientAvailableMemory(let required, let actual) =
+                error as? DistributedStagedMemoryAdmissionError
+            else { return XCTFail("expected insufficientAvailableMemory, got \(error)") }
+            XCTAssertEqual(required, fallbackIncrement)
+            XCTAssertEqual(actual, fallbackIncrement - 1)
         }
     }
 
@@ -383,6 +424,30 @@ final class Gemma4StagedResidencyTests: XCTestCase {
             "context_tokens": 32768,
             "cache_bytes": 5200936960,
             "minimum_physical_memory_bytes": 50000000000
+          }
+        }
+        """
+    }
+
+    private var productionRuntimeMemory: String {
+        """
+        {
+          "allocation_policy": "preflight_initial_then_fallback",
+          "asset_residency_policy": "decode_set_plus_one_streamed_prefill_stage",
+          "full_prefill_and_decode_sets_may_not_be_dual_resident": true,
+          "resident_weight_upper_bound_bytes": 25769803776,
+          "runtime_overhead_reserve_bytes": 8589934592,
+          "coresident_services_reserve_bytes": 6442450944,
+          "system_headroom_bytes": 12884901888,
+          "initial": {
+            "context_tokens": 65536,
+            "cache_bytes": 7885291520,
+            "minimum_physical_memory_bytes": 61572382720
+          },
+          "fallback": {
+            "context_tokens": 32768,
+            "cache_bytes": 5200936960,
+            "minimum_physical_memory_bytes": 58888028160
           }
         }
         """
