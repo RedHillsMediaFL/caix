@@ -243,7 +243,26 @@ struct RawDistributedEagleTargetContract: Decodable {
 public struct DistributedEagleTargetTensor: Hashable, Sendable {
     public let shape: [Int]
     public let scalarType: DistributedStageIOScalarType
-    public let float16BitPatterns: [UInt16]
+    private let storage: Storage
+
+    public var float16BitPatterns: [UInt16] {
+        switch storage {
+        case .contiguous(let values):
+            return values
+        case .appendOnly(let sequence):
+            return Self.materialize(
+                sequence.segmentsChronological(),
+                heads: sequence.heads,
+                headDimension: sequence.headDimension,
+                sequenceCount: sequence.sequenceCount)
+        case .bounded(let sequence):
+            return Self.materialize(
+                sequence.segments,
+                heads: sequence.heads,
+                headDimension: sequence.headDimension,
+                sequenceCount: sequence.sequenceCount)
+        }
+    }
 
     public init(
         shape: [Int],
@@ -273,8 +292,263 @@ public struct DistributedEagleTargetTensor: Hashable, Sendable {
         }
         self.shape = shape
         self.scalarType = scalarType
-        self.float16BitPatterns = float16BitPatterns
+        self.storage = .contiguous(float16BitPatterns)
     }
+
+    public static func == (
+        lhs: DistributedEagleTargetTensor,
+        rhs: DistributedEagleTargetTensor
+    ) -> Bool {
+        lhs.shape == rhs.shape
+            && lhs.scalarType == rhs.scalarType
+            && lhs.float16BitPatterns == rhs.float16BitPatterns
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(shape)
+        hasher.combine(scalarType)
+        hasher.combine(float16BitPatterns)
+    }
+
+    var storageProfile: DistributedEagleTargetTensorStorageProfile {
+        switch storage {
+        case .contiguous(let values):
+            return DistributedEagleTargetTensorStorageProfile(
+                kind: .contiguous,
+                segmentCount: 1,
+                retainedElementCount: values.count,
+                eagerlyMaterializedElementCount: values.count)
+        case .appendOnly(let sequence):
+            return DistributedEagleTargetTensorStorageProfile(
+                kind: .appendOnlySequence,
+                segmentCount: sequence.tail.segmentCount,
+                retainedElementCount: sequence.tail.retainedElementCount,
+                eagerlyMaterializedElementCount: 0)
+        case .bounded(let sequence):
+            return DistributedEagleTargetTensorStorageProfile(
+                kind: .boundedSequence,
+                segmentCount: sequence.segments.count,
+                retainedElementCount: sequence.segments.reduce(0) { $0 + $1.values.count },
+                eagerlyMaterializedElementCount: 0)
+        }
+    }
+
+    fileprivate static func appendingAppendOnly(
+        _ prefix: DistributedEagleTargetTensor?,
+        _ suffix: DistributedEagleTargetTensor,
+        label: String
+    ) throws -> DistributedEagleTargetTensor {
+        try validateSequenceLayout(prefix, suffix, label: label)
+        let heads = suffix.shape[1]
+        let headDimension = suffix.shape[3]
+        let prefixSequence = prefix?.shape[2] ?? 0
+        var tail: SequenceNode?
+        if let prefix {
+            switch prefix.storage {
+            case .appendOnly(let sequence):
+                tail = sequence.tail
+            default:
+                for segment in prefix.sequenceSegments() {
+                    tail = SequenceNode(previous: tail, segment: segment)
+                }
+            }
+        }
+        for segment in suffix.sequenceSegments() {
+            tail = SequenceNode(previous: tail, segment: segment)
+        }
+        guard let tail else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "EAGLE target \(label) cannot append an empty sequence")
+        }
+        return DistributedEagleTargetTensor(
+            shape: [1, heads, prefixSequence + suffix.shape[2], headDimension],
+            storage: .appendOnly(AppendOnlySequence(
+                tail: tail,
+                heads: heads,
+                headDimension: headDimension,
+                sequenceCount: prefixSequence + suffix.shape[2])))
+    }
+
+    fileprivate static func appendingBounded(
+        _ prefix: DistributedEagleTargetTensor?,
+        _ suffix: DistributedEagleTargetTensor,
+        retainingSequenceCount: Int,
+        label: String
+    ) throws -> DistributedEagleTargetTensor {
+        try validateSequenceLayout(prefix, suffix, label: label)
+        let heads = suffix.shape[1]
+        let headDimension = suffix.shape[3]
+        var segments = prefix?.sequenceSegments() ?? []
+        segments.append(contentsOf: suffix.sequenceSegments())
+        var sequenceCount = segments.reduce(0) { $0 + $1.sequenceCount }
+        var positionsToDrop = sequenceCount - retainingSequenceCount
+        guard retainingSequenceCount > 0, positionsToDrop >= 0 else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "EAGLE target \(label) cannot retain \(retainingSequenceCount) positions")
+        }
+        while positionsToDrop > 0, let first = segments.first {
+            if positionsToDrop >= first.sequenceCount {
+                positionsToDrop -= first.sequenceCount
+                sequenceCount -= first.sequenceCount
+                segments.removeFirst()
+            } else {
+                segments[0] = first.droppingFirst(
+                    positionsToDrop,
+                    heads: heads,
+                    headDimension: headDimension)
+                sequenceCount -= positionsToDrop
+                positionsToDrop = 0
+            }
+        }
+        guard sequenceCount == retainingSequenceCount, !segments.isEmpty else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "EAGLE target \(label) bounded sequence is inconsistent")
+        }
+        return DistributedEagleTargetTensor(
+            shape: [1, heads, sequenceCount, headDimension],
+            storage: .bounded(BoundedSequence(
+                segments: segments,
+                heads: heads,
+                headDimension: headDimension,
+                sequenceCount: sequenceCount)))
+    }
+
+    private init(shape: [Int], storage: Storage) {
+        self.shape = shape
+        self.scalarType = .float16
+        self.storage = storage
+    }
+
+    private func sequenceSegments() -> [SequenceSegment] {
+        switch storage {
+        case .contiguous(let values):
+            return [SequenceSegment(sequenceCount: shape[2], values: values)]
+        case .appendOnly(let sequence):
+            return sequence.segmentsChronological()
+        case .bounded(let sequence):
+            return sequence.segments
+        }
+    }
+
+    private static func validateSequenceLayout(
+        _ prefix: DistributedEagleTargetTensor?,
+        _ suffix: DistributedEagleTargetTensor,
+        label: String
+    ) throws {
+        guard suffix.shape.count == 4, suffix.shape[0] == 1 else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "EAGLE target \(label) must use [1, heads, sequence, head_dim]")
+        }
+        guard let prefix else { return }
+        guard prefix.shape.count == 4,
+            prefix.shape[0] == suffix.shape[0],
+            prefix.shape[1] == suffix.shape[1],
+            prefix.shape[3] == suffix.shape[3]
+        else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "EAGLE target \(label) layout changed between streamed chunks")
+        }
+    }
+
+    private static func materialize(
+        _ segments: [SequenceSegment],
+        heads: Int,
+        headDimension: Int,
+        sequenceCount: Int
+    ) -> [UInt16] {
+        var values: [UInt16] = []
+        values.reserveCapacity(heads * sequenceCount * headDimension)
+        for head in 0..<heads {
+            for segment in segments {
+                let start = head * segment.sequenceCount * headDimension
+                values.append(contentsOf: segment.values[
+                    start..<(start + segment.sequenceCount * headDimension)])
+            }
+        }
+        return values
+    }
+
+    private enum Storage: Sendable {
+        case contiguous([UInt16])
+        case appendOnly(AppendOnlySequence)
+        case bounded(BoundedSequence)
+    }
+
+    private struct AppendOnlySequence: Sendable {
+        let tail: SequenceNode
+        let heads: Int
+        let headDimension: Int
+        let sequenceCount: Int
+
+        func segmentsChronological() -> [SequenceSegment] {
+            var segments: [SequenceSegment] = []
+            segments.reserveCapacity(tail.segmentCount)
+            var node: SequenceNode? = tail
+            while let current = node {
+                segments.append(current.segment)
+                node = current.previous
+            }
+            segments.reverse()
+            return segments
+        }
+    }
+
+    private struct BoundedSequence: Sendable {
+        let segments: [SequenceSegment]
+        let heads: Int
+        let headDimension: Int
+        let sequenceCount: Int
+    }
+
+    private struct SequenceSegment: Sendable {
+        let sequenceCount: Int
+        let values: [UInt16]
+
+        func droppingFirst(
+            _ count: Int,
+            heads: Int,
+            headDimension: Int
+        ) -> SequenceSegment {
+            let retainedSequence = sequenceCount - count
+            var retained: [UInt16] = []
+            retained.reserveCapacity(heads * retainedSequence * headDimension)
+            for head in 0..<heads {
+                let start = (head * sequenceCount + count) * headDimension
+                retained.append(contentsOf: values[
+                    start..<(start + retainedSequence * headDimension)])
+            }
+            return SequenceSegment(
+                sequenceCount: retainedSequence,
+                values: retained)
+        }
+    }
+
+    private final class SequenceNode: @unchecked Sendable {
+        let previous: SequenceNode?
+        let segment: SequenceSegment
+        let segmentCount: Int
+        let retainedElementCount: Int
+
+        init(previous: SequenceNode?, segment: SequenceSegment) {
+            self.previous = previous
+            self.segment = segment
+            self.segmentCount = (previous?.segmentCount ?? 0) + 1
+            self.retainedElementCount = (previous?.retainedElementCount ?? 0) + segment.values.count
+        }
+    }
+}
+
+enum DistributedEagleTargetTensorStorageKind: Equatable, Sendable {
+    case contiguous
+    case appendOnlySequence
+    case boundedSequence
+}
+
+struct DistributedEagleTargetTensorStorageProfile: Equatable, Sendable {
+    let kind: DistributedEagleTargetTensorStorageKind
+    let segmentCount: Int
+    let retainedElementCount: Int
+    let eagerlyMaterializedElementCount: Int
 }
 
 /// New-position representative K/V emitted by the final transformer stage.
@@ -450,17 +724,21 @@ public struct DistributedEagleTargetKVAccumulator: Sendable {
                 "EAGLE target accumulated length \(nextProcessed) exceeds kv_capacity \(kvCapacity)")
         }
 
-        let fullKey = try Self.concatenating(accumulatedKV?.fullKey, chunk.fullKey, label: "full key")
-        let fullValue = try Self.concatenating(accumulatedKV?.fullValue, chunk.fullValue, label: "full value")
-        let uncroppedSlidingKey = try Self.concatenating(
-            accumulatedKV?.slidingKey, chunk.slidingKey, label: "sliding key")
-        let uncroppedSlidingValue = try Self.concatenating(
-            accumulatedKV?.slidingValue, chunk.slidingValue, label: "sliding value")
+        let fullKey = try DistributedEagleTargetTensor.appendingAppendOnly(
+            accumulatedKV?.fullKey, chunk.fullKey, label: "full key")
+        let fullValue = try DistributedEagleTargetTensor.appendingAppendOnly(
+            accumulatedKV?.fullValue, chunk.fullValue, label: "full value")
         let slidingLength = min(nextProcessed, slidingWindow)
-        let slidingKey = try Self.suffix(
-            uncroppedSlidingKey, sequenceCount: slidingLength, label: "sliding key")
-        let slidingValue = try Self.suffix(
-            uncroppedSlidingValue, sequenceCount: slidingLength, label: "sliding value")
+        let slidingKey = try DistributedEagleTargetTensor.appendingBounded(
+            accumulatedKV?.slidingKey,
+            chunk.slidingKey,
+            retainingSequenceCount: slidingLength,
+            label: "sliding key")
+        let slidingValue = try DistributedEagleTargetTensor.appendingBounded(
+            accumulatedKV?.slidingValue,
+            chunk.slidingValue,
+            retainingSequenceCount: slidingLength,
+            label: "sliding value")
 
         let accumulatedKV = try DistributedEagleTargetKVChunk(
             fullKey: fullKey,
@@ -488,64 +766,4 @@ public struct DistributedEagleTargetKVAccumulator: Sendable {
         accumulatedKV = nil
     }
 
-    private static func concatenating(
-        _ prefix: DistributedEagleTargetTensor?,
-        _ suffix: DistributedEagleTargetTensor,
-        label: String
-    ) throws -> DistributedEagleTargetTensor {
-        guard let prefix else { return suffix }
-        guard prefix.shape.count == 4, suffix.shape.count == 4,
-            prefix.shape[0] == suffix.shape[0],
-            prefix.shape[1] == suffix.shape[1],
-            prefix.shape[3] == suffix.shape[3]
-        else {
-            throw DistributedStageExecutionError.invalidStageOutput(
-                "EAGLE target \(label) layout changed between streamed chunks")
-        }
-        let heads = prefix.shape[1]
-        let prefixSequence = prefix.shape[2]
-        let suffixSequence = suffix.shape[2]
-        let headDimension = prefix.shape[3]
-        var values: [UInt16] = []
-        values.reserveCapacity(heads * (prefixSequence + suffixSequence) * headDimension)
-        for head in 0..<heads {
-            let prefixStart = head * prefixSequence * headDimension
-            values.append(contentsOf: prefix.float16BitPatterns[
-                prefixStart..<(prefixStart + prefixSequence * headDimension)])
-            let suffixStart = head * suffixSequence * headDimension
-            values.append(contentsOf: suffix.float16BitPatterns[
-                suffixStart..<(suffixStart + suffixSequence * headDimension)])
-        }
-        return try DistributedEagleTargetTensor(
-            shape: [1, heads, prefixSequence + suffixSequence, headDimension],
-            scalarType: .float16,
-            float16BitPatterns: values)
-    }
-
-    private static func suffix(
-        _ tensor: DistributedEagleTargetTensor,
-        sequenceCount: Int,
-        label: String
-    ) throws -> DistributedEagleTargetTensor {
-        guard tensor.shape.count == 4, sequenceCount > 0, sequenceCount <= tensor.shape[2] else {
-            throw DistributedStageExecutionError.invalidStageOutput(
-                "EAGLE target \(label) cannot retain \(sequenceCount) positions from shape \(tensor.shape)")
-        }
-        guard sequenceCount < tensor.shape[2] else { return tensor }
-        let heads = tensor.shape[1]
-        let sourceSequence = tensor.shape[2]
-        let headDimension = tensor.shape[3]
-        let firstSequence = sourceSequence - sequenceCount
-        var values: [UInt16] = []
-        values.reserveCapacity(heads * sequenceCount * headDimension)
-        for head in 0..<heads {
-            let start = (head * sourceSequence + firstSequence) * headDimension
-            values.append(contentsOf: tensor.float16BitPatterns[
-                start..<(start + sequenceCount * headDimension)])
-        }
-        return try DistributedEagleTargetTensor(
-            shape: [1, heads, sequenceCount, headDimension],
-            scalarType: .float16,
-            float16BitPatterns: values)
-    }
 }

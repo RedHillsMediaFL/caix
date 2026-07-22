@@ -216,6 +216,32 @@ final class DistributedEagleTargetTests: XCTestCase {
         XCTAssertEqual(snapshot.slidingValue.float16BitPatterns, [131, 132, 133, 231, 232, 233])
     }
 
+    func testKVAccumulatorKeepsFullPrefixChunkBackedAndSlidingPayloadBounded() throws {
+        var accumulator = try DistributedEagleTargetKVAccumulator(
+            kvCapacity: 64,
+            slidingWindow: 3)
+
+        for position in 0..<64 {
+            try accumulator.append(artifacts(
+                range: position..<(position + 1),
+                hidden: [UInt16(position), UInt16(position + 1)],
+                fullKey: [UInt16(10 + position), UInt16(110 + position)],
+                fullValue: [UInt16(210 + position), UInt16(310 + position)],
+                slidingKey: [UInt16(410 + position), UInt16(510 + position)],
+                slidingValue: [UInt16(610 + position), UInt16(710 + position)]))
+        }
+
+        let snapshot = try XCTUnwrap(accumulator.snapshot)
+        XCTAssertEqual(snapshot.fullKey.storageProfile.kind, .appendOnlySequence)
+        XCTAssertEqual(snapshot.fullKey.storageProfile.segmentCount, 64)
+        XCTAssertEqual(snapshot.fullKey.storageProfile.retainedElementCount, 128)
+        XCTAssertEqual(snapshot.fullKey.storageProfile.eagerlyMaterializedElementCount, 0)
+        XCTAssertEqual(snapshot.slidingKey.storageProfile.kind, .boundedSequence)
+        XCTAssertEqual(snapshot.slidingKey.storageProfile.segmentCount, 3)
+        XCTAssertEqual(snapshot.slidingKey.storageProfile.retainedElementCount, 6)
+        XCTAssertEqual(snapshot.slidingKey.float16BitPatterns, [471, 472, 473, 571, 572, 573])
+    }
+
     func testEagleTargetArtifactsRejectMalformedTensorDTypeAndPairShape() throws {
         XCTAssertThrowsError(try DistributedEagleTargetTensor(
             shape: [1, 1, 1, 1],
