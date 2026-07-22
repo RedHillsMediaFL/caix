@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import torch
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_CONTRACT = REPOSITORY_ROOT / "models" / "whisper-large-v2-source.json"
@@ -31,6 +32,25 @@ def test_large_v2_weight_plan_is_exact_and_bounds_conversion_memory() -> None:
     assert plan.fp16_parameter_bytes == 3_086_609_920
     assert plan.largest_source_tensor_bytes == 265_548_800
     assert plan.bounded_weight_working_set_bytes == 3_352_158_720
+
+
+def test_full_export_inputs_and_authoring_stack_are_frozen() -> None:
+    convert = importlib.import_module("whisper_large_v2.convert")
+
+    features, token_id = convert.full_export_inputs()
+
+    assert features.shape == (1, 80, 3000)
+    assert features.dtype == torch.float16
+    assert torch.count_nonzero(features) == 0
+    assert token_id.tolist() == [[50_258]]
+    assert token_id.dtype == torch.int32
+    assert convert.require_exact_authoring_stack() == {
+        "coreai-core": "1.0.0b2",
+        "coreai-opt": "0.2.0",
+        "coreai-torch": "0.4.1",
+        "torch": "2.9.0",
+        "transformers": "4.57.6",
+    }
 
 
 def test_pinned_cli_dry_run_reports_identity_and_does_not_create_output(

@@ -343,8 +343,8 @@ def create_coreai_program(
     from coreai_models.export.mlir_ops import register_custom_torch_lowering
 
     state = split.new_state(dtype=input_features.dtype, device=input_features.device)
-    with torch.no_grad():
-        cross_key_payload, cross_value_payload = split.encode(input_features)
+    cross_key_payload = torch.zeros_like(state.cross_key_cache)
+    cross_value_payload = torch.zeros_like(state.cross_value_cache)
 
     converter = TorchConverter()
     converter.add_exported_program(

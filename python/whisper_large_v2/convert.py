@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+import importlib.metadata
 import json
 import math
 import resource
@@ -29,11 +30,20 @@ from whisper_large_v2.export import (
     WhisperExportError,
     WhisperLoadCrossKV,
     WhisperSplitModules,
+    create_coreai_program,
 )
 
 _FP32_BYTES = 4
 _FP16_BYTES = 2
 _DEFAULT_MAX_RESIDENT_BYTES = 12 * 1024**3
+_MINIMUM_AVAILABLE_BYTES = 8 * 1024**3
+_EXACT_AUTHORING_STACK = {
+    "coreai-core": "1.0.0b2",
+    "coreai-opt": "0.2.0",
+    "coreai-torch": "0.4.1",
+    "torch": "2.9.0",
+    "transformers": "4.57.6",
+}
 
 
 def _is_encoder_cross_key(key: str) -> bool:
@@ -91,6 +101,27 @@ class LoadedWhisperLargeV2:
     source_sha256: str
 
 
+def require_exact_authoring_stack() -> dict[str, str]:
+    actual = {
+        distribution: importlib.metadata.version(distribution)
+        for distribution in _EXACT_AUTHORING_STACK
+    }
+    if actual != _EXACT_AUTHORING_STACK:
+        raise WhisperExportError(
+            f"Whisper authoring stack differs: expected={_EXACT_AUTHORING_STACK!r}, "
+            f"actual={actual!r}"
+        )
+    return actual
+
+
+def full_export_inputs() -> tuple[torch.Tensor, torch.Tensor]:
+    """Return fixed-shape inputs for the pinned large-v2 ABI."""
+    return (
+        torch.zeros((1, 80, 3000), dtype=torch.float16),
+        torch.tensor([[50_258]], dtype=torch.int32),
+    )
+
+
 def _resident_bytes() -> int:
     import psutil
 
@@ -108,6 +139,16 @@ def _enforce_resident_budget(max_resident_bytes: int, *, phase: str) -> None:
         raise WhisperExportError(
             f"Whisper conversion exceeded resident cap during {phase}: "
             f"{resident} > {max_resident_bytes} bytes"
+        )
+
+
+def _enforce_available_memory() -> None:
+    import psutil
+
+    available = psutil.virtual_memory().available
+    if available < _MINIMUM_AVAILABLE_BYTES:
+        raise WhisperExportError(
+            f"Whisper conversion requires 8 GiB available memory; found {available} bytes"
         )
 
 
@@ -246,6 +287,45 @@ def save_program_atomically(program: object, output: Path) -> None:
         shutil.rmtree(staging_root, ignore_errors=True)
 
 
+def export_pinned_large_v2(
+    snapshot: Path,
+    source_contract_path: Path,
+    output: Path,
+    *,
+    max_resident_bytes: int,
+) -> dict[str, object]:
+    """Author and atomically save the complete FP16 three-entrypoint AIProgram."""
+    stack = require_exact_authoring_stack()
+    _enforce_available_memory()
+    loaded = load_pinned_large_v2(
+        snapshot,
+        source_contract_path,
+        max_resident_bytes=max_resident_bytes,
+    )
+    _enforce_resident_budget(max_resident_bytes, phase="full checkpoint load")
+    input_features, token_id = full_export_inputs()
+    program = create_coreai_program(
+        loaded.split,
+        input_features=input_features,
+        token_id=token_id,
+    )
+    _enforce_resident_budget(max_resident_bytes, phase="CoreAI graph authoring")
+    del loaded
+    gc.collect()
+    save_program_atomically(program, output)
+    _enforce_resident_budget(max_resident_bytes, phase="CoreAI asset save")
+    asset_bytes = sum(path.stat().st_size for path in output.rglob("*") if path.is_file())
+    return {
+        "asset_bytes": asset_bytes,
+        "authoring_stack": stack,
+        "dtype": "float16",
+        "entrypoints": ["encode", "load_cross_kv", "decode_step"],
+        "output": str(output.resolve()),
+        "peak_resident_bytes": _peak_resident_bytes(),
+        "schema": "caix.whisper-split.v1",
+    }
+
+
 def _dry_run_payload(
     contract: WhisperSourceContract,
     *,
@@ -285,11 +365,12 @@ def _main() -> None:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--load-proof", action="store_true")
+    parser.add_argument("--export", action="store_true")
     parser.add_argument("--max-resident-gib", type=float, default=12.0)
     args = parser.parse_args()
 
-    if args.dry_run == args.load_proof:
-        parser.error("select exactly one of --dry-run or --load-proof")
+    if sum((args.dry_run, args.load_proof, args.export)) != 1:
+        parser.error("select exactly one of --dry-run, --load-proof, or --export")
     contract = load_source_contract(args.source_contract)
     if args.snapshot.name != contract.revision:
         parser.error("--snapshot must name the pinned revision")
@@ -298,13 +379,22 @@ def _main() -> None:
         if args.output is None:
             parser.error("--output is required with --dry-run")
         payload = _dry_run_payload(contract, output=args.output)
-    else:
+    elif args.load_proof:
         loaded = load_pinned_large_v2(
             args.snapshot,
             args.source_contract,
             max_resident_bytes=int(args.max_resident_gib * 1024**3),
         )
         payload = _load_proof_payload(loaded)
+    else:
+        if args.output is None:
+            parser.error("--output is required with --export")
+        payload = export_pinned_large_v2(
+            args.snapshot,
+            args.source_contract,
+            args.output,
+            max_resident_bytes=int(args.max_resident_gib * 1024**3),
+        )
     print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
 
 
