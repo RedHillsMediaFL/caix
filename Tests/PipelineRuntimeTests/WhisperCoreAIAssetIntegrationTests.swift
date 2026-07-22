@@ -18,7 +18,9 @@ final class WhisperCoreAIAssetIntegrationTests: XCTestCase {
             return
         }
 
-        let factory = try await WhisperCoreAIModelFactory.specialize(assetURL: assetURL)
+        let authenticatedAsset = try WhisperAssetAuthenticator.authenticateAsset(at: assetURL)
+        let factory = try await WhisperCoreAIModelFactory.specialize(
+            authenticatedAsset: authenticatedAsset)
         let session = try await factory.makeSession()
         do {
             try await session.encode(

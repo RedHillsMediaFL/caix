@@ -2,12 +2,13 @@
 
 import CoreAI
 import Foundation
+import Hub
 import Tokenizers
 
 /// One specialized, resident Core AI model and its three immutable function handles.
 ///
-/// Asset provenance is intentionally not accepted here: the public loader must authenticate the
-/// CAIX manifest and asset bytes before calling this low-level adapter.
+/// The specialization boundary accepts only the capability returned after the CAIX manifest and
+/// asset bytes pass `WhisperAssetAuthenticator`.
 final class WhisperCoreAIModelFactory: @unchecked Sendable, WhisperNativeSessionFactory {
     private let model: AIModel
     private let encodeFunction: InferenceFunction
@@ -17,12 +18,14 @@ final class WhisperCoreAIModelFactory: @unchecked Sendable, WhisperNativeSession
     private let loadDescriptor: InferenceFunctionDescriptor
     private let decodeDescriptor: InferenceFunctionDescriptor
 
-    static func specialize(assetURL: URL) async throws -> WhisperCoreAIModelFactory {
+    static func specialize(
+        authenticatedAsset: WhisperAuthenticatedAsset
+    ) async throws -> WhisperCoreAIModelFactory {
         var options = SpecializationOptions(
             preferredComputeUnitKind: LLMEngine.preferredComputeUnit())
         options.expectFrequentReshapes = false
         let model = try await AIModel.specialize(
-            contentsOf: assetURL,
+            contentsOf: authenticatedAsset.assetURL,
             options: options,
             cache: .default,
             cachePolicy: .persistent)
@@ -480,9 +483,35 @@ private final class WhisperCoreAISession: @unchecked Sendable, WhisperNativeSess
 final class WhisperTokenizerDecoder: @unchecked Sendable, WhisperTextDecoding {
     private let tokenizer: any Tokenizer
 
-    static func load(directory: URL) async throws -> WhisperTokenizerDecoder {
-        let tokenizer = try await AutoTokenizer.from(modelFolder: directory)
+    static func load(
+        authenticatedTokenizerJSON: Data,
+        authenticatedTokenizerConfigurationJSON: Data
+    ) throws -> WhisperTokenizerDecoder {
+        let tokenizerData = try configuration(
+            authenticatedTokenizerJSON,
+            filename: "tokenizer.json")
+        let tokenizerConfiguration = try configuration(
+            authenticatedTokenizerConfigurationJSON,
+            filename: "tokenizer_config.json")
+        let tokenizer = try AutoTokenizer.from(
+            tokenizerConfig: tokenizerConfiguration,
+            tokenizerData: tokenizerData)
         return WhisperTokenizerDecoder(tokenizer: tokenizer)
+    }
+
+    private static func configuration(_ data: Data, filename: String) throws -> Config {
+        let object: Any
+        do {
+            object = try JSONSerialization.jsonObject(with: data)
+        } catch {
+            throw WhisperResidentEngine.LoadError.metadataJSONInvalid(filename: filename)
+        }
+        guard let dictionary = object as? [String: Any] else {
+            throw WhisperResidentEngine.LoadError.metadataJSONInvalid(filename: filename)
+        }
+        return Config(Dictionary(uniqueKeysWithValues: dictionary.map {
+            ($0.key as NSString, $0.value)
+        }))
     }
 
     private init(tokenizer: any Tokenizer) {
