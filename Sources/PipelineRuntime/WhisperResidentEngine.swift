@@ -6,9 +6,14 @@ import Foundation
 /// must keep encoded features, cross-KV payloads, token IDs, and decoder state in memory only.
 protocol WhisperNativeSession: AnyObject, Sendable {
     func encode(inputFeatures: [Float16]) async throws
-    func loadCrossKV() async throws
-    func step(tokenID: Int32) async throws -> [Float]
+    func loadCrossKV() async throws -> Int32
+    func step(tokenID: Int32) async throws -> WhisperNativeStepOutput
     func finish() async
+}
+
+struct WhisperNativeStepOutput: Sendable {
+    var status: Int32
+    var logits: [Float]
 }
 
 /// Factory retained beside one specialized Core AI model. Every call creates fresh request state,
@@ -30,14 +35,24 @@ protocol WhisperTextDecoding: Sendable {
 /// keeps exactly one native session alive while still allowing queued callers to cancel promptly.
 public actor WhisperResidentEngine {
     public static let featureCount = 1 * 80 * 3_000
+    public static let defaultMaximumQueuedRequests = 8
 
     public enum EngineError: Error, Sendable, Equatable, CustomStringConvertible {
         case invalidFeatureCount(expected: Int, actual: Int)
+        case queueFull(maximumQueuedRequests: Int)
+        case invalidNativeStatus(operation: String, actual: Int32)
+        case invalidNativeLogits
 
         public var description: String {
             switch self {
             case .invalidFeatureCount(let expected, let actual):
                 return "Whisper input requires \(expected) Float16 features; got \(actual)"
+            case .queueFull(let maximumQueuedRequests):
+                return "Whisper transcription queue is full (maximum \(maximumQueuedRequests))"
+            case .invalidNativeStatus(let operation, let actual):
+                return "Whisper native \(operation) returned invalid status \(actual)"
+            case .invalidNativeLogits:
+                return "Whisper native decode_step returned invalid logits"
             }
         }
     }
@@ -96,19 +111,23 @@ public actor WhisperResidentEngine {
     private let policy: WhisperDecodingPolicy
     private let textDecoder: any WhisperTextDecoding
     private let expectedFeatureCount: Int
-    private let admission = WhisperInferenceAdmission()
+    private let admission: WhisperInferenceAdmission
 
     init(
         factory: any WhisperNativeSessionFactory,
         policy: WhisperDecodingPolicy,
         textDecoder: any WhisperTextDecoding,
-        expectedFeatureCount: Int = WhisperResidentEngine.featureCount
+        expectedFeatureCount: Int = WhisperResidentEngine.featureCount,
+        maximumQueuedRequests: Int = WhisperResidentEngine.defaultMaximumQueuedRequests
     ) {
         precondition(expectedFeatureCount > 0)
+        precondition(maximumQueuedRequests >= 0)
         self.factory = factory
         self.policy = policy
         self.textDecoder = textDecoder
         self.expectedFeatureCount = expectedFeatureCount
+        self.admission = WhisperInferenceAdmission(
+            maximumQueuedRequests: maximumQueuedRequests)
     }
 
     public func transcribe(
@@ -117,6 +136,12 @@ public actor WhisperResidentEngine {
         includeTimestamps: Bool = false,
         onTextToken: (@Sendable (Int32) -> Void)? = nil
     ) async throws -> Result {
+        guard !includeTimestamps else {
+            throw WhisperDecodingPolicy.PolicyError.timestampsUnsupported
+        }
+        if let requestedLanguage {
+            _ = try policy.requireLanguageTokenID(for: requestedLanguage)
+        }
         guard inputFeatures.count == expectedFeatureCount else {
             throw EngineError.invalidFeatureCount(
                 expected: expectedFeatureCount,
@@ -133,6 +158,7 @@ public actor WhisperResidentEngine {
             try Task.checkCancellation()
             let created = try await factory.makeSession()
             session = created
+            try Task.checkCancellation()
 
             let encodeStart = ContinuousClock.now
             try await created.encode(inputFeatures: inputFeatures)
@@ -140,7 +166,12 @@ public actor WhisperResidentEngine {
             try Task.checkCancellation()
 
             let loadStart = ContinuousClock.now
-            try await created.loadCrossKV()
+            let loadStatus = try await created.loadCrossKV()
+            guard loadStatus == 1 else {
+                throw EngineError.invalidNativeStatus(
+                    operation: "load_cross_kv",
+                    actual: loadStatus)
+            }
             let crossKVLoadSeconds = Self.seconds(since: loadStart)
             try Task.checkCancellation()
 
@@ -150,7 +181,18 @@ public actor WhisperResidentEngine {
                 requestedLanguage: requestedLanguage,
                 includeTimestamps: includeTimestamps,
                 step: { tokenID in
-                    try await created.step(tokenID: tokenID)
+                    let output = try await created.step(tokenID: tokenID)
+                    guard output.status == 1 else {
+                        throw EngineError.invalidNativeStatus(
+                            operation: "decode_step",
+                            actual: output.status)
+                    }
+                    guard output.logits.count == WhisperDecodingPolicy.vocabularySize,
+                        output.logits.allSatisfy(\.isFinite)
+                    else {
+                        throw EngineError.invalidNativeLogits
+                    }
+                    return output.logits
                 },
                 onTextToken: onTextToken)
             let decodeSeconds = Self.seconds(since: decodeStart)
@@ -185,6 +227,12 @@ public actor WhisperResidentEngine {
         return Double(duration.components.seconds)
             + Double(duration.components.attoseconds) / 1_000_000_000_000_000_000
     }
+
+    func waitUntilQueuedRequestCountForTesting(_ expected: Int) async {
+        while await admission.queuedRequestCount() < expected {
+            await Task.yield()
+        }
+    }
 }
 
 private actor WhisperInferenceAdmission {
@@ -195,12 +243,21 @@ private actor WhisperInferenceAdmission {
 
     private var occupied = false
     private var waiters: [Waiter] = []
+    private let maximumQueuedRequests: Int
+
+    init(maximumQueuedRequests: Int) {
+        self.maximumQueuedRequests = maximumQueuedRequests
+    }
 
     func acquire() async throws {
         try Task.checkCancellation()
         guard occupied else {
             occupied = true
             return
+        }
+        guard waiters.count < maximumQueuedRequests else {
+            throw WhisperResidentEngine.EngineError.queueFull(
+                maximumQueuedRequests: maximumQueuedRequests)
         }
 
         let id = UUID()
@@ -233,4 +290,6 @@ private actor WhisperInferenceAdmission {
         let waiter = waiters.remove(at: index)
         waiter.continuation.resume(throwing: CancellationError())
     }
+
+    func queuedRequestCount() -> Int { waiters.count }
 }
