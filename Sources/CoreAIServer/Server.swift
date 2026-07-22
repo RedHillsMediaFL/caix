@@ -26,6 +26,7 @@ public enum CoreAIServer {
         caixVersion: String = "unknown",
         verbose: Bool = false,
         eagleConfig: EagleConfig? = nil,
+        primaryStagedBundle: PrimaryStagedBundleConfiguration? = nil,
         statsFile: String? = nil,
         prewarm: String = "smallest",
         conversionGuardEnabled: Bool = true,
@@ -34,7 +35,7 @@ public enum CoreAIServer {
         // Persist usage stats (totals + per-model) across restarts, ollama/omlx-style.
         let statsPath = statsFile ?? (NSHomeDirectory() + "/.caix/usage.json")
         Usage.configure(path: statsPath)
-        let runtime = ServerRuntime(
+        let runtime = try ServerRuntime(
             host: host,
             port: port,
             exportsDir: URL(fileURLWithPath: exportsDir, isDirectory: true),
@@ -45,6 +46,7 @@ public enum CoreAIServer {
             caixVersion: caixVersion,
             verbose: verbose,
             eagleConfig: eagleConfig,
+            primaryStagedBundle: primaryStagedBundle,
             conversionGuardEnabled: conversionGuardEnabled,
             audioTranscriptionService: whisperTranscriber.map {
                 OpenAIAudioTranscriptionService(transcriber: $0)
@@ -120,15 +122,16 @@ final class ServerRuntime: Sendable {
     init(
         host: String, port: Int, exportsDir: URL, registryPath: URL, webDir: URL, convertScript: String,
         pythonExecutable: String, caixVersion: String, verbose: Bool, eagleConfig: EagleConfig? = nil,
+        primaryStagedBundle: PrimaryStagedBundleConfiguration? = nil,
         conversionGuardEnabled: Bool = true,
         audioTranscriptionService: OpenAIAudioTranscriptionService? = nil
-    ) {
+    ) throws {
         self.host = host
         self.port = port
         self.exportsDir = exportsDir
-        self.manager = ModelManager(
+        self.manager = try ModelManager(
             exportsDir: exportsDir, registryPath: registryPath, verbose: verbose,
-            eagleConfig: eagleConfig)
+            eagleConfig: eagleConfig, primaryStagedBundle: primaryStagedBundle)
         self.jobs = JobTracker()
         self.activity = ActivityLog()
         self.webDir = webDir

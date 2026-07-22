@@ -17,7 +17,7 @@ final class OpenAIAudioTranscriptionTests: XCTestCase {
                     samples: [0.25, -0.5, 1], sampleRate: 16_000, wasTruncated: false)
             },
             extractFeatures: { _ in [0.5, -1.25] })
-        let runtime = makeServerRuntime(audioService: service)
+        let runtime = try makeServerRuntime(audioService: service)
         let router = Router()
         runtime.register(on: router)
         let app = Application(responder: router.buildResponder())
@@ -51,7 +51,7 @@ final class OpenAIAudioTranscriptionTests: XCTestCase {
     }
 
     func testHTTPRouteFailsClosedBeforeReadingAudioWhenWhisperIsUnavailable() async throws {
-        let runtime = makeServerRuntime(audioService: nil)
+        let runtime = try makeServerRuntime(audioService: nil)
         let router = Router()
         runtime.register(on: router)
         let app = Application(responder: router.buildResponder())
@@ -325,10 +325,10 @@ final class OpenAIAudioTranscriptionTests: XCTestCase {
 
     private func makeServerRuntime(
         audioService: OpenAIAudioTranscriptionService?
-    ) -> ServerRuntime {
+    ) throws -> ServerRuntime {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("caix-audio-route-\(UUID().uuidString)", isDirectory: true)
-        return ServerRuntime(
+        return try ServerRuntime(
             host: "127.0.0.1",
             port: 1237,
             exportsDir: root.appendingPathComponent("exports", isDirectory: true),

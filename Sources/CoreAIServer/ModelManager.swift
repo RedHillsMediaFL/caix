@@ -707,12 +707,19 @@ public actor ModelManager {
         var name: String
         var directoryName: String
         var mode: String
+        var rootURL: URL
+        var aliases: [String] = []
+
+        var identifiers: [String] {
+            Array(Set(([name, directoryName] + aliases).filter { !$0.isEmpty }))
+        }
     }
 
     private let exportsDir: URL
     private let registryPath: URL
     private let verbose: Bool
     private let eagleConfig: EagleConfig?
+    private let primaryStagedBundle: PrimaryStagedBundleConfiguration?
     private let heavyTaskLockPath: URL
 
     private var handles: [String: ModelHandle] = [:]
@@ -723,12 +730,18 @@ public actor ModelManager {
     private var formats: [String: OutputFormat] = [:]
 
     public init(exportsDir: URL, registryPath: URL, verbose: Bool = false,
-                eagleConfig: EagleConfig? = nil, heavyTaskLockPath: URL? = nil) {
+                eagleConfig: EagleConfig? = nil,
+                primaryStagedBundle: PrimaryStagedBundleConfiguration? = nil,
+                heavyTaskLockPath: URL? = nil) throws {
         self.exportsDir = exportsDir
         self.registryPath = registryPath
         self.verbose = verbose
         self.eagleConfig = eagleConfig
+        self.primaryStagedBundle = primaryStagedBundle
         self.heavyTaskLockPath = heavyTaskLockPath ?? Self.defaultHeavyTaskLockPath(exportsDir: exportsDir)
+        if let primaryStagedBundle {
+            try Self.validatePrimaryStagedBundle(primaryStagedBundle, against: exportsDir)
+        }
     }
 
     static func makeStagedMemorySnapshotProvider(
@@ -779,7 +792,13 @@ public actor ModelManager {
            now.timeIntervalSince(cache.updatedAt) < bundleDiscoveryCacheSeconds {
             return cache.entries
         }
-        let entries = Self.discoverBundleEntries(in: exportsDir)
+        var entries = Self.discoverBundleEntries(in: exportsDir)
+        if let primaryStagedBundle {
+            let root = primaryStagedBundle.bundleURL.standardizedFileURL
+            entries.removeAll { $0.rootURL.standardizedFileURL == root }
+            entries.append(Self.primaryStagedBundleEntry(primaryStagedBundle))
+        }
+        entries.sort { $0.name < $1.name }
         bundleCache = (updatedAt: now, entries: entries)
         return entries
     }
@@ -808,7 +827,8 @@ public actor ModelManager {
                 DiscoveredBundle(
                     name: servedName,
                     directoryName: name,
-                    mode: mode))
+                    mode: mode,
+                    rootURL: url))
         }
         return entries.sorted { $0.name < $1.name }
     }
@@ -856,8 +876,7 @@ public actor ModelManager {
             if seen.contains(Self.normalize(name)) { continue }
             seen.insert(Self.normalize(name))
             let loaded = handles[name] != nil
-            let capabilities = Self.multimodalCapabilities(
-                at: exportsDir.appendingPathComponent(bundle.directoryName, isDirectory: true))
+            let capabilities = Self.multimodalCapabilities(at: bundle.rootURL)
             entries.append(
                 ModelEntry(
                     name: name,
@@ -890,6 +909,9 @@ public actor ModelManager {
         listModels()
             .filter { $0.bundle }
             .sorted {
+                let lhsIsPrimary = $0.name == primaryStagedBundle?.modelID
+                let rhsIsPrimary = $1.name == primaryStagedBundle?.modelID
+                if lhsIsPrimary != rhsIsPrimary { return lhsIsPrimary }
                 let lhs = ModelSuitability.score($0.name, mode: $0.mode)
                 let rhs = ModelSuitability.score($1.name, mode: $1.mode)
                 if lhs == rhs { return $0.name < $1.name }
@@ -925,8 +947,8 @@ public actor ModelManager {
 
     /// Resolve a bundle directory name to its path under `exportsDir`.
     private func bundlePath(for name: String) -> String {
-        let directoryName = resolvedBundle(for: name)?.directoryName ?? name
-        return exportsDir.appendingPathComponent(directoryName).path
+        resolvedBundle(for: name)?.rootURL.path
+            ?? exportsDir.appendingPathComponent(name).path
     }
 
     public func resolveServedModelName(_ requested: String) -> String? {
@@ -951,8 +973,9 @@ public actor ModelManager {
         if let cfg = eagleConfig, cfg.name == name {
             tokenizerDir = URL(fileURLWithPath: cfg.tokenizerDir)
         } else {
-            let directoryName = resolvedBundle(for: name)?.directoryName ?? name
-            tokenizerDir = exportsDir.appendingPathComponent(directoryName).appendingPathComponent("tokenizer")
+            let root = resolvedBundle(for: name)?.rootURL
+                ?? exportsDir.appendingPathComponent(name, isDirectory: true)
+            tokenizerDir = root.appendingPathComponent("tokenizer")
         }
         let format = OutputFormat.detect(modelName: name, tokenizerDir: tokenizerDir)
         formats[name] = format
@@ -1122,13 +1145,17 @@ public actor ModelManager {
         if let cfg = eagleConfig, cfg.name == name {
             return "refusing to delete the built-in MTP model"
         }
+        if let primaryStagedBundle,
+           resolvedBundle(for: name)?.rootURL.standardizedFileURL
+                == primaryStagedBundle.bundleURL.standardizedFileURL {
+            return "refusing to delete the configured primary staged bundle"
+        }
         if FileManager.default.fileExists(atPath: heavyTaskLockPath.path) {
             return "refusing to delete bundle while heavy-task lock exists: \(heavyTaskLockPath.path)"
         }
         let bundle = resolvedBundle(for: name)
         let servedName = bundle?.name ?? name
-        let directoryName = bundle?.directoryName ?? name
-        let dir = exportsDir.appendingPathComponent(directoryName)
+        let dir = bundle?.rootURL ?? exportsDir.appendingPathComponent(name)
         guard Self.isDirectory(dir),
               Self.isLoadableBundle(at: dir) else {
             return "no bundle named '\(name)' under exports"
@@ -1147,11 +1174,49 @@ public actor ModelManager {
     // MARK: Helpers
 
     private func resolvedBundle(for name: String) -> DiscoveredBundle? {
-        bundleEntries().first { $0.name == name || $0.directoryName == name }
+        bundleEntries().first { $0.identifiers.contains(name) }
     }
 
     private func canonicalName(for name: String) -> String {
         resolvedBundle(for: name)?.name ?? name
+    }
+
+    private static func primaryStagedBundleEntry(
+        _ configuration: PrimaryStagedBundleConfiguration
+    ) -> DiscoveredBundle {
+        let identity = bundleIdentity(at: configuration.bundleURL)
+        let aliases = [
+            configuration.bundleURL.lastPathComponent,
+            identity.metadataName,
+            identity.sourceModelID,
+        ].compactMap { $0 }.filter { $0 != configuration.modelID }
+        return DiscoveredBundle(
+            name: configuration.modelID,
+            directoryName: configuration.bundleURL.lastPathComponent,
+            mode: "staged",
+            rootURL: configuration.bundleURL,
+            aliases: aliases)
+    }
+
+    private static func validatePrimaryStagedBundle(
+        _ configuration: PrimaryStagedBundleConfiguration,
+        against exportsDir: URL
+    ) throws {
+        let primary = primaryStagedBundleEntry(configuration)
+        let root = configuration.bundleURL.standardizedFileURL
+        let automatic = discoverBundleEntries(in: exportsDir).filter {
+            $0.rootURL.standardizedFileURL != root
+        }
+        for alias in primary.identifiers {
+            let normalizedAlias = normalize(alias)
+            if let collision = automatic.first(where: {
+                $0.identifiers.contains { normalize($0) == normalizedAlias }
+            }) {
+                throw PrimaryStagedBundleConfiguration.ConfigurationError.aliasCollision(
+                    alias: alias,
+                    conflictingModel: collision.name)
+            }
+        }
     }
 
     private static func defaultHeavyTaskLockPath(exportsDir: URL) -> URL {
@@ -1251,7 +1316,11 @@ public actor ModelManager {
                 ?? item["directory_name"] as? String
                 ?? name
             let mode = item["mode"] as? String ?? "standard"
-            return DiscoveredBundle(name: name, directoryName: directoryName, mode: mode)
+            return DiscoveredBundle(
+                name: name,
+                directoryName: directoryName,
+                mode: mode,
+                rootURL: exportsDir.appendingPathComponent(directoryName, isDirectory: true))
         }
         return entries.sorted { $0.name < $1.name }
     }

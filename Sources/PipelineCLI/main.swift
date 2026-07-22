@@ -101,6 +101,9 @@ func printUsage() {
                                   Warm model before listening (default: smallest)
           --no-prewarm            Start serving without first-request compile warmup
           --no-conversion-guard   Allow generation while conversion is active
+          --primary-staged-bundle <dir>
+                                  Exact text staged bundle to advertise as the primary model
+          --primary-model-id <id> Canonical public model ID for --primary-staged-bundle
           --whisper-asset <dir>   Authenticated Whisper large-v2 .aimodel directory
           --whisper-tokenizer <dir>
                                   Pinned Whisper tokenizer snapshot directory
@@ -719,6 +722,8 @@ func serveCommand(_ argv: [String]) {
     var statsFile: String? = nil   // usage-stats persistence (default ~/.caix/usage.json)
     var prewarm = "smallest"
     var conversionGuardEnabled = true
+    var primaryStagedBundle: String? = nil
+    var primaryModelID: String? = nil
     var whisperAsset: String? = nil
     var whisperTokenizer: String? = nil
     var residentModelLock: String? = nil
@@ -768,6 +773,8 @@ func serveCommand(_ argv: [String]) {
         case "--prewarm": prewarm = value(arg)
         case "--no-prewarm": prewarm = "off"
         case "--no-conversion-guard": conversionGuardEnabled = false
+        case "--primary-staged-bundle": primaryStagedBundle = value(arg)
+        case "--primary-model-id": primaryModelID = value(arg)
         case "--whisper-asset": whisperAsset = value(arg)
         case "--whisper-tokenizer": whisperTokenizer = value(arg)
         case "--resident-model-lock": residentModelLock = value(arg)
@@ -820,8 +827,21 @@ func serveCommand(_ argv: [String]) {
         fail("\(error)")
     }
 
+    let primaryStagedConfiguration: PrimaryStagedBundleConfiguration?
+    do {
+        primaryStagedConfiguration = try PrimaryStagedBundleConfiguration.resolve(
+            bundlePath: primaryStagedBundle,
+            modelID: primaryModelID)
+    } catch {
+        fail("\(error)")
+    }
+
     if clusterManifest != nil, whisperConfiguration != nil {
         fail("resident Whisper options cannot be combined with --cluster")
+    }
+
+    if clusterManifest != nil, primaryStagedConfiguration != nil {
+        fail("primary staged serving options cannot be combined with --cluster")
     }
 
     if whisperConfiguration != nil, !CoreAIPipeline.isLinked {
@@ -904,6 +924,7 @@ func serveCommand(_ argv: [String]) {
                 caixVersion: CaixBuildInfo.version,
                 verbose: verbose,
                 eagleConfig: eagleConfig,
+                primaryStagedBundle: primaryStagedConfiguration,
                 statsFile: statsFile,
                 prewarm: prewarm,
                 conversionGuardEnabled: conversionGuardEnabled,
