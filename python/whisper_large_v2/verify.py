@@ -15,6 +15,7 @@ import torch
 
 from whisper_large_v2.abi import NativeWhisperABI
 from whisper_large_v2.export import WhisperExportError
+from whisper_large_v2.manifest import validate_caix_asset
 
 
 def _peak_resident_bytes() -> int:
@@ -32,6 +33,7 @@ def _check_cap(max_resident_bytes: int, *, phase: str) -> None:
 
 
 async def _verify(asset: Path, max_resident_bytes: int) -> dict[str, object]:
+    asset_validation = validate_caix_asset(asset)
     from coreai.runtime import AIModel, NDArray
 
     if not asset.is_dir() or asset.suffix != ".aimodel":
@@ -106,6 +108,7 @@ async def _verify(asset: Path, max_resident_bytes: int) -> dict[str, object]:
         "load_seconds": load_seconds,
         "logits_all_finite": bool(np.isfinite(logits).all()),
         "logits_shape": list(logits.shape),
+        "main_sha256": asset_validation.main_sha256,
         "peak_resident_bytes": _peak_resident_bytes(),
         "position": state["position"].numpy().reshape(-1).tolist(),
         "self_key_tail_nonzero": int(np.count_nonzero(self_keys[..., 1:, :])),

@@ -19,4 +19,4 @@ exec "$python_bin" -m whisper_large_v2.convert \
   --authoring-temp-root "$authoring_temp_root" \
   --output "$output" \
   --export \
-  --max-resident-gib 42
+  --max-resident-gib 12

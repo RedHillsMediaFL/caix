@@ -8,7 +8,7 @@ import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pytest
 import torch
@@ -65,6 +65,22 @@ def _hide_loaded_coreai_models(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in tuple(sys.modules):
         if name == "coreai_models" or name.startswith("coreai_models."):
             monkeypatch.delitem(sys.modules, name)
+
+
+def _write_coreai_asset(asset: Path, main: bytes) -> Path:
+    asset.mkdir()
+    (asset / "metadata.json").write_bytes(b'{"producer":"test"}')
+    (asset / "main.mlirb").write_bytes(main)
+    (asset / "main.hash").write_bytes(hashlib.sha256(main).digest())
+    return asset
+
+
+def _directory_bytes(directory: Path) -> dict[str, bytes]:
+    return {
+        str(path.relative_to(directory)): path.read_bytes()
+        for path in sorted(directory.rglob("*"))
+        if path.is_file()
+    }
 
 
 def test_large_v2_weight_plan_is_exact_and_bounds_conversion_memory() -> None:
@@ -297,35 +313,195 @@ def test_pinned_cli_dry_run_reports_identity_and_does_not_create_output(
     assert not output.exists()
 
 
-def test_atomic_asset_save_refuses_overwrite_and_cleans_failed_staging(tmp_path: Path) -> None:
+def test_disk_preflight_requires_expected_asset_plus_headroom(tmp_path: Path) -> None:
     convert = importlib.import_module("whisper_large_v2.convert")
+    output = tmp_path / "whisper-large-v2-fp16.aimodel"
+
+    with pytest.raises(convert.WhisperExportError, match="available disk"):
+        convert.require_available_disk(
+            output,
+            expected_asset_bytes=100,
+            headroom_bytes=25,
+            disk_usage=lambda _path: SimpleNamespace(free=124),
+        )
+
+    assert convert.require_available_disk(
+        output,
+        expected_asset_bytes=100,
+        headroom_bytes=25,
+        disk_usage=lambda _path: SimpleNamespace(free=125),
+    ) == 125
+
+
+def test_atomic_candidate_save_validates_and_publishes_a_new_asset(tmp_path: Path) -> None:
+    convert = importlib.import_module("whisper_large_v2.convert")
+    manifest = importlib.import_module("whisper_large_v2.manifest")
     output = tmp_path / "whisper-large-v2-fp16.aimodel"
 
     class Program:
         def save_asset(self, path: Path) -> Path:
+            return _write_coreai_asset(path, b"new native payload")
+
+    validation = convert.save_program_atomically(
+        Program(),
+        output,
+        max_resident_bytes=10,
+        peak_reader=lambda: 1,
+    )
+
+    assert validation == manifest.validate_caix_asset(output)
+    assert (output / "main.mlirb").read_bytes() == b"new native payload"
+    assert not tuple(tmp_path.glob(".*.staging-*"))
+    assert not tuple(tmp_path.glob(".*.candidate-*"))
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="RENAME_SWAP is a Darwin API")
+def test_existing_verified_final_is_swapped_only_after_candidate_validation(
+    tmp_path: Path,
+) -> None:
+    convert = importlib.import_module("whisper_large_v2.convert")
+    manifest = importlib.import_module("whisper_large_v2.manifest")
+    output = _write_coreai_asset(
+        tmp_path / "whisper-large-v2-fp16.aimodel",
+        b"prior verified payload",
+    )
+    manifest.write_caix_manifest(output)
+    prior = _directory_bytes(output)
+
+    class Program:
+        def save_asset(self, path: Path) -> Path:
+            return _write_coreai_asset(path, b"replacement verified payload")
+
+    convert.save_program_atomically(
+        Program(),
+        output,
+        max_resident_bytes=10,
+        peak_reader=lambda: 1,
+    )
+
+    assert _directory_bytes(output) != prior
+    assert (output / "main.mlirb").read_bytes() == b"replacement verified payload"
+    manifest.validate_caix_asset(output)
+    assert not tuple(tmp_path.glob(".*.staging-*"))
+    assert not tuple(tmp_path.glob(".*.candidate-*"))
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ("save", "hash", "manifest", "validation", "peak", "promotion"),
+)
+def test_publication_faults_clean_task_artifacts_and_preserve_prior_final_exactly(
+    tmp_path: Path,
+    failure: str,
+) -> None:
+    convert = importlib.import_module("whisper_large_v2.convert")
+    output = tmp_path / "whisper-large-v2-fp16.aimodel"
+    output.mkdir()
+    (output / "prior.bin").write_bytes(b"prior final bytes")
+    prior = _directory_bytes(output)
+
+    class Program:
+        def save_asset(self, path: Path) -> Path:
             path.mkdir()
-            (path / "model.bin").write_bytes(b"native")
+            (path / "metadata.json").write_bytes(b'{"producer":"test"}')
+            (path / "main.mlirb").write_bytes(b"candidate")
+            raw_hash = (
+                b"\x00" * 32
+                if failure == "hash"
+                else hashlib.sha256(b"candidate").digest()
+            )
+            (path / "main.hash").write_bytes(raw_hash)
+            if failure == "save":
+                raise RuntimeError("injected save failure")
             return path
 
-    convert.save_program_atomically(Program(), output)
-    assert (output / "model.bin").read_bytes() == b"native"
+    def manifest_writer(asset: Path) -> object:
+        if failure == "manifest":
+            raise RuntimeError("injected manifest failure")
+        manifest = importlib.import_module("whisper_large_v2.manifest")
+        return manifest.write_caix_manifest(asset)
 
-    with pytest.raises(FileExistsError):
-        convert.save_program_atomically(Program(), output)
-    assert not tuple(tmp_path.glob(".whisper-large-v2-fp16.aimodel.staging-*"))
+    def asset_validator(asset: Path) -> object:
+        if failure == "validation":
+            raise RuntimeError("injected candidate validation failure")
+        manifest = importlib.import_module("whisper_large_v2.manifest")
+        return manifest.validate_caix_asset(asset)
 
-    failed_output = tmp_path / "failed.aimodel"
+    def promoter(_candidate: Path, _output: Path) -> None:
+        raise RuntimeError("injected promotion failure")
 
-    class FailingProgram:
-        def save_asset(self, path: Path) -> None:
-            path.mkdir()
-            (path / "partial.bin").write_bytes(b"partial")
-            raise RuntimeError("compiler save failed")
+    peaks = iter((1, 11)) if failure == "peak" else None
 
-    with pytest.raises(RuntimeError, match="compiler save failed"):
-        convert.save_program_atomically(FailingProgram(), failed_output)
-    assert not failed_output.exists()
-    assert not tuple(tmp_path.glob(".failed.aimodel.staging-*"))
+    with pytest.raises(Exception, match="failure|main.hash|resident peak"):
+        convert.save_program_atomically(
+            Program(),
+            output,
+            max_resident_bytes=10,
+            manifest_writer=manifest_writer,
+            asset_validator=asset_validator,
+            candidate_promoter=promoter if failure == "promotion" else None,
+            peak_reader=(lambda: next(peaks)) if peaks is not None else (lambda: 1),
+        )
+
+    assert _directory_bytes(output) == prior
+    assert not tuple(tmp_path.glob(".*.staging-*"))
+    assert not tuple(tmp_path.glob(".*.candidate-*"))
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="RENAME_SWAP is a Darwin API")
+def test_failed_post_swap_recovery_retains_both_verified_assets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    convert = importlib.import_module("whisper_large_v2.convert")
+    manifest = importlib.import_module("whisper_large_v2.manifest")
+    output = _write_coreai_asset(tmp_path / "whisper.aimodel", b"prior")
+    manifest.write_caix_manifest(output)
+    original_renameatx = convert._renameatx
+    original_validate = convert.validate_caix_asset
+    rename_calls = 0
+    validation_calls = 0
+
+    def rename_then_fail_recovery(source: Path, destination: Path, flags: int) -> None:
+        nonlocal rename_calls
+        if flags != convert._RENAME_SWAP:
+            original_renameatx(source, destination, flags)
+            return
+        rename_calls += 1
+        if rename_calls == 1:
+            original_renameatx(source, destination, flags)
+            return
+        raise OSError("injected rollback failure")
+
+    def fail_new_final_validation(asset: Path) -> object:
+        nonlocal validation_calls
+        validation_calls += 1
+        if validation_calls == 2:
+            raise RuntimeError("injected post-swap validation failure")
+        return original_validate(asset)
+
+    monkeypatch.setattr(convert, "_renameatx", rename_then_fail_recovery)
+    monkeypatch.setattr(convert, "validate_caix_asset", fail_new_final_validation)
+
+    class Program:
+        def save_asset(self, path: Path) -> Path:
+            return _write_coreai_asset(path, b"replacement")
+
+    with pytest.raises(convert.AssetPromotionRecoveryError, match="retained"):
+        convert.save_program_atomically(
+            Program(),
+            output,
+            max_resident_bytes=10,
+            peak_reader=lambda: 1,
+        )
+
+    candidates = tuple(tmp_path.glob(".*.candidate-*"))
+    assert len(candidates) == 1
+    assert (output / "main.mlirb").read_bytes() == b"replacement"
+    assert (candidates[0] / "main.mlirb").read_bytes() == b"prior"
+    manifest.validate_caix_asset(output)
+    manifest.validate_caix_asset(candidates[0])
+
 
 
 @pytest.mark.skipif(

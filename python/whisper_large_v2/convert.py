@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import gc
 import importlib.metadata
 import json
 import math
+import os
 import resource
 import shutil
 import sys
 import tempfile
+import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import torch
 from safetensors import safe_open
@@ -37,18 +42,26 @@ from whisper_large_v2.export import (
     WhisperSplitModules,
     create_coreai_program,
 )
+from whisper_large_v2.manifest import (
+    EXACT_AUTHORING_STACK,
+    AssetValidation,
+    validate_caix_asset,
+    write_caix_manifest,
+)
 
 _FP32_BYTES = 4
 _FP16_BYTES = 2
 _DEFAULT_MAX_RESIDENT_BYTES = 12 * 1024**3
 _MINIMUM_AVAILABLE_BYTES = 8 * 1024**3
-_EXACT_AUTHORING_STACK = {
-    "coreai-core": "1.0.0b2",
-    "coreai-opt": "0.2.0",
-    "coreai-torch": "0.4.1",
-    "torch": "2.9.0",
-    "transformers": "4.57.6",
-}
+_EXPECTED_ASSET_BYTES = 3_100_000_000
+_DISK_HEADROOM_BYTES = 2 * 1024**3
+_AT_FDCWD = -2
+_RENAME_SWAP = 0x00000002
+_RENAME_EXCL = 0x00000004
+
+
+class AssetPromotionRecoveryError(RuntimeError):
+    """Promotion changed the final path but retained both assets for recovery."""
 
 
 def _is_encoder_cross_key(key: str) -> bool:
@@ -109,11 +122,11 @@ class LoadedWhisperLargeV2:
 def require_exact_authoring_stack() -> dict[str, str]:
     actual = {
         distribution: importlib.metadata.version(distribution)
-        for distribution in _EXACT_AUTHORING_STACK
+        for distribution in EXACT_AUTHORING_STACK
     }
-    if actual != _EXACT_AUTHORING_STACK:
+    if actual != EXACT_AUTHORING_STACK:
         raise WhisperExportError(
-            f"Whisper authoring stack differs: expected={_EXACT_AUTHORING_STACK!r}, "
+            f"Whisper authoring stack differs: expected={EXACT_AUTHORING_STACK!r}, "
             f"actual={actual!r}"
         )
     return actual
@@ -138,13 +151,19 @@ def _peak_resident_bytes() -> int:
     return peak if sys.platform == "darwin" else peak * 1024
 
 
-def _enforce_resident_budget(max_resident_bytes: int, *, phase: str) -> None:
-    resident = _resident_bytes()
-    if resident > max_resident_bytes:
+def _enforce_peak_resident_budget(
+    max_resident_bytes: int,
+    *,
+    phase: str,
+    peak_reader: Callable[[], int] = _peak_resident_bytes,
+) -> int:
+    peak = peak_reader()
+    if peak > max_resident_bytes:
         raise WhisperExportError(
-            f"Whisper conversion exceeded resident cap during {phase}: "
-            f"{resident} > {max_resident_bytes} bytes"
+            f"Whisper conversion resident peak exceeded cap during {phase}: "
+            f"{peak} > {max_resident_bytes} bytes"
         )
+    return peak
 
 
 def _enforce_available_memory() -> None:
@@ -155,6 +174,27 @@ def _enforce_available_memory() -> None:
         raise WhisperExportError(
             f"Whisper conversion requires 8 GiB available memory; found {available} bytes"
         )
+
+
+def require_available_disk(
+    output: Path,
+    *,
+    expected_asset_bytes: int = _EXPECTED_ASSET_BYTES,
+    headroom_bytes: int = _DISK_HEADROOM_BYTES,
+    disk_usage: Callable[[Path], Any] = shutil.disk_usage,
+) -> int:
+    """Require space for a complete sibling candidate plus conservative headroom."""
+    probe = output.absolute().parent
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    available = int(disk_usage(probe).free)
+    required = expected_asset_bytes + headroom_bytes
+    if available < required:
+        raise WhisperExportError(
+            f"Whisper conversion has insufficient available disk: "
+            f"{available} < {required} bytes"
+        )
+    return available
 
 
 def _empty_model(config: object) -> torch.nn.Module:
@@ -249,7 +289,7 @@ def load_pinned_large_v2(
         _require_materialized(encode, label="Whisper encoder/cross partition")
         del encoder_model
         gc.collect()
-        _enforce_resident_budget(max_resident_bytes, phase="encoder load")
+        _enforce_peak_resident_budget(max_resident_bytes, phase="encoder load")
 
         decoder_model = _load_partition(
             handle,
@@ -261,7 +301,7 @@ def load_pinned_large_v2(
         _require_materialized(decode_step, label="Whisper decoder partition")
         del decoder_model
         gc.collect()
-        _enforce_resident_budget(max_resident_bytes, phase="decoder load")
+        _enforce_peak_resident_budget(max_resident_bytes, phase="decoder load")
 
     split = WhisperSplitModules(
         encode=encode,
@@ -279,12 +319,92 @@ def load_pinned_large_v2(
     )
 
 
-def save_program_atomically(program: object, output: Path) -> None:
-    """Save one asset through a sibling staging directory without partial output."""
-    output = output.resolve()
+def _renameatx(source: Path, destination: Path, flags: int) -> None:
+    if sys.platform != "darwin":
+        if flags == _RENAME_EXCL and not os.path.lexists(destination):
+            os.rename(source, destination)
+            return
+        raise WhisperExportError("recoverable asset promotion requires Darwin renameatx_np")
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameatx_np = libc.renameatx_np
+    renameatx_np.argtypes = (
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    )
+    renameatx_np.restype = ctypes.c_int
+    result = renameatx_np(
+        _AT_FDCWD,
+        os.fsencode(source),
+        _AT_FDCWD,
+        os.fsencode(destination),
+        flags,
+    )
+    if result != 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number), str(destination))
+
+
+def _fsync_parent(path: Path) -> None:
+    descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def promote_candidate(candidate: Path, output: Path) -> None:
+    """Atomically promote a verified sibling while retaining the prior asset."""
+    if os.path.lexists(output):
+        validate_caix_asset(output)
+        _renameatx(candidate, output, _RENAME_SWAP)
+        try:
+            validate_caix_asset(output)
+            _fsync_parent(output)
+        except Exception as promotion_error:
+            try:
+                _renameatx(candidate, output, _RENAME_SWAP)
+                _fsync_parent(output)
+            except Exception as recovery_error:
+                raise AssetPromotionRecoveryError(
+                    "asset promotion recovery failed; both verified assets were retained"
+                ) from recovery_error
+            raise promotion_error
+        try:
+            shutil.rmtree(candidate)
+            _fsync_parent(output)
+        except Exception as cleanup_error:
+            raise AssetPromotionRecoveryError(
+                "new asset is published and the prior verified asset was retained"
+            ) from cleanup_error
+        return
+    _renameatx(candidate, output, _RENAME_EXCL)
+    _fsync_parent(output)
+
+
+def save_program_atomically(
+    program: object,
+    output: Path,
+    *,
+    max_resident_bytes: int,
+    manifest_writer: Callable[[Path], object] = write_caix_manifest,
+    asset_validator: Callable[[Path], AssetValidation] = validate_caix_asset,
+    candidate_promoter: Callable[[Path, Path], None] | None = None,
+    peak_reader: Callable[[], int] = _peak_resident_bytes,
+) -> AssetValidation:
+    """Save, authenticate, and recoverably promote one sibling candidate asset."""
+    output = Path(os.path.abspath(output))
     output.parent.mkdir(parents=True, exist_ok=True)
-    if output.exists():
-        raise FileExistsError(f"CoreAI output already exists: {output}")
+    _enforce_peak_resident_budget(
+        max_resident_bytes,
+        phase="before CoreAI asset save",
+        peak_reader=peak_reader,
+    )
+    candidate = output.parent / (
+        f".{output.name}.candidate-{uuid.uuid4().hex}.aimodel"
+    )
     staging_root = Path(
         tempfile.mkdtemp(
             prefix=f".{output.name}.staging-",
@@ -292,13 +412,33 @@ def save_program_atomically(program: object, output: Path) -> None:
         )
     )
     staged_asset = staging_root / output.name
+    preserve_candidate = False
     try:
         program.save_asset(staged_asset)
-        if output.exists():
-            raise FileExistsError(f"CoreAI output appeared while saving: {output}")
-        staged_asset.replace(output)
+        manifest_writer(staged_asset)
+        _renameatx(staged_asset, candidate, _RENAME_EXCL)
+        _fsync_parent(candidate)
+        validation = asset_validator(candidate)
+        _enforce_peak_resident_budget(
+            max_resident_bytes,
+            phase="pre-publication callback",
+            peak_reader=peak_reader,
+        )
+        promoter = candidate_promoter or promote_candidate
+        try:
+            promoter(candidate, output)
+        except AssetPromotionRecoveryError:
+            preserve_candidate = True
+            raise
+        except Exception:
+            if os.path.lexists(candidate):
+                shutil.rmtree(candidate, ignore_errors=True)
+            raise
+        return validation
     finally:
         shutil.rmtree(staging_root, ignore_errors=True)
+        if not preserve_candidate and os.path.lexists(candidate):
+            shutil.rmtree(candidate, ignore_errors=True)
 
 
 def export_pinned_large_v2(
@@ -313,40 +453,48 @@ def export_pinned_large_v2(
 ) -> dict[str, object]:
     """Author and atomically save the complete FP16 three-entrypoint AIProgram."""
     authoring_contract = load_authoring_source_contract(authoring_source_path)
+    require_available_disk(output)
+    _enforce_available_memory()
     with authenticated_authoring_source(
         coreai_models_repository,
         authoring_contract,
         temp_root=authoring_temp_root,
     ):
         stack = require_exact_authoring_stack()
-        _enforce_available_memory()
         loaded = load_pinned_large_v2(
             snapshot,
             source_contract_path,
             max_resident_bytes=max_resident_bytes,
         )
-        _enforce_resident_budget(max_resident_bytes, phase="full checkpoint load")
+        _enforce_peak_resident_budget(
+            max_resident_bytes,
+            phase="full checkpoint load",
+        )
         input_features, token_id = full_export_inputs()
         program = create_coreai_program(
             loaded.split,
             input_features=input_features,
             token_id=token_id,
         )
-        _enforce_resident_budget(max_resident_bytes, phase="CoreAI graph authoring")
+        _enforce_peak_resident_budget(
+            max_resident_bytes,
+            phase="CoreAI graph authoring",
+        )
         del loaded
         gc.collect()
-        save_program_atomically(program, output)
-        _enforce_resident_budget(max_resident_bytes, phase="CoreAI asset save")
-        asset_bytes = sum(
-            path.stat().st_size for path in output.rglob("*") if path.is_file()
+        validation = save_program_atomically(
+            program,
+            output,
+            max_resident_bytes=max_resident_bytes,
         )
         return {
-            "asset_bytes": asset_bytes,
+            "asset_bytes": validation.asset_bytes,
             "authoring_stack": stack,
             "coreai_models_revision": authoring_contract.revision,
             "coreai_models_tree": authoring_contract.package_tree,
             "dtype": "float16",
             "entrypoints": ["encode", "load_cross_kv", "decode_step"],
+            "main_sha256": validation.main_sha256,
             "output": str(output.resolve()),
             "peak_resident_bytes": _peak_resident_bytes(),
             "schema": "caix.whisper-split.v2",
