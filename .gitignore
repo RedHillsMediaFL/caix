@@ -1,5 +1,6 @@
 # build
 .build/
+.build-*/
 dist/
 *.o
 *.swiftmodule
@@ -13,6 +14,11 @@ __pycache__/
 # downloaded models (large; users provide their own)
 models/exports/*
 !models/exports/.gitkeep
+/exports/
+
+# isolated feature worktrees and local execution ledgers
+/.worktrees/
+/.superpowers/
 
 # local coordination / benchmark artifacts
 .agent-heavy-task.lock
