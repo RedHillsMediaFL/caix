@@ -88,7 +88,7 @@ final class Gemma4StagedResidencyTests: XCTestCase {
         let admission = DistributedStagedMemoryAdmission(
             contract: contract,
             snapshotProvider: {
-                self.safeSnapshot(total: 64 * self.gib, available: 13 * self.gib)
+                self.safeSnapshot(total: 64 * self.gib, available: 34 * self.gib)
             })
 
         XCTAssertEqual(try admission.selectContext().tier, .fallback)
@@ -98,7 +98,7 @@ final class Gemma4StagedResidencyTests: XCTestCase {
     func testMemoryAdmissionReservesPendingAssistantBeforeItBecomesResident() throws {
         let contract = try XCTUnwrap(
             decodeManifest(runtimeMemory: validRuntimeMemory).runtimeMemory)
-        let available = 17 * gib
+        let available = 37 * gib
         let withoutAssistant = DistributedStagedMemoryAdmission(
             contract: contract,
             snapshotProvider: {
@@ -121,7 +121,7 @@ final class Gemma4StagedResidencyTests: XCTestCase {
         let admission = DistributedStagedMemoryAdmission(
             contract: contract,
             snapshotProvider: {
-                self.safeSnapshot(total: 64 * self.gib, available: 12 * self.gib)
+                self.safeSnapshot(total: 64 * self.gib, available: 32 * self.gib)
             })
 
         XCTAssertThrowsError(try admission.selectContext()) { error in
@@ -129,7 +129,7 @@ final class Gemma4StagedResidencyTests: XCTestCase {
                 error as? DistributedStagedMemoryAdmissionError
             else { return XCTFail("expected insufficientAvailableMemory, got \(error)") }
             XCTAssertGreaterThan(required, actual)
-            XCTAssertEqual(actual, 12 * self.gib)
+            XCTAssertEqual(actual, 32 * self.gib)
         }
     }
 
@@ -143,6 +143,7 @@ final class Gemma4StagedResidencyTests: XCTestCase {
                     totalPhysicalMemoryBytes: 64 * self.gib,
                     workerResidentBytes: 8_979_152,
                     availableBytes: 41_494_396_928,
+                    allocationCapacityBytes: 41_494_396_928,
                     pressure: .green,
                     swapGrowthBytes: 0)
             })
@@ -161,6 +162,7 @@ final class Gemma4StagedResidencyTests: XCTestCase {
                     totalPhysicalMemoryBytes: 64 * self.gib,
                     workerResidentBytes: 8_979_152,
                     availableBytes: fallbackIncrement - 1,
+                    allocationCapacityBytes: fallbackIncrement - 1,
                     pressure: .green,
                     swapGrowthBytes: 0)
             })
@@ -174,25 +176,33 @@ final class Gemma4StagedResidencyTests: XCTestCase {
         }
     }
 
-    func testProductionScaleAdmissionIncludesPendingAssistantAtExactBoundary() throws {
+    func testProductionScaleAdmissionUsesAllocationCapacityAndProjectedResidentCap() throws {
         let contract = try XCTUnwrap(
             decodeManifest(runtimeMemory: productionRuntimeMemory).runtimeMemory)
-        let fallbackIncrement = UInt64(39_551_696_176)
         let assistantBytes = UInt64(3_757_662_899)
-        let exactRequirement = fallbackIncrement + assistantBytes
-
-        let admitted = DistributedStagedMemoryAdmission(
+        let admission = DistributedStagedMemoryAdmission(
             contract: contract,
             pendingResidentBytes: assistantBytes,
             snapshotProvider: {
                 DistributedStagedMemorySnapshot(
                     totalPhysicalMemoryBytes: 64 * self.gib,
-                    workerResidentBytes: 8_979_152,
-                    availableBytes: exactRequirement,
+                    workerResidentBytes: 488_066_264,
+                    availableBytes: 29_600_000_000,
+                    allocationCapacityBytes: 48 * self.gib,
                     pressure: .green,
                     swapGrowthBytes: 0)
             })
-        XCTAssertEqual(try admitted.selectContext().tier, .fallback)
+
+        XCTAssertEqual(try admission.selectContext().tier, .fallback)
+    }
+
+    func testProductionScaleAdmissionRejectsInsufficientAllocationCapacity() throws {
+        let contract = try XCTUnwrap(
+            decodeManifest(runtimeMemory: productionRuntimeMemory).runtimeMemory)
+        let currentWorkerBytes = UInt64(488_066_264)
+        let fallbackProjection = UInt64(39_560_675_328)
+        let assistantBytes = UInt64(3_757_662_899)
+        let exactRequirement = fallbackProjection - currentWorkerBytes + assistantBytes
 
         let rejected = DistributedStagedMemoryAdmission(
             contract: contract,
@@ -200,8 +210,9 @@ final class Gemma4StagedResidencyTests: XCTestCase {
             snapshotProvider: {
                 DistributedStagedMemorySnapshot(
                     totalPhysicalMemoryBytes: 64 * self.gib,
-                    workerResidentBytes: 8_979_152,
-                    availableBytes: exactRequirement - 1,
+                    workerResidentBytes: currentWorkerBytes,
+                    availableBytes: 29_600_000_000,
+                    allocationCapacityBytes: exactRequirement - 1,
                     pressure: .green,
                     swapGrowthBytes: 0)
             })
@@ -211,6 +222,28 @@ final class Gemma4StagedResidencyTests: XCTestCase {
             else { return XCTFail("expected insufficientAvailableMemory, got \(error)") }
             XCTAssertEqual(required, exactRequirement)
             XCTAssertEqual(actual, exactRequirement - 1)
+        }
+    }
+
+    func testPerAssetGateStillUsesLiveAvailableHeadroom() throws {
+        let contract = try XCTUnwrap(
+            decodeManifest(runtimeMemory: productionRuntimeMemory).runtimeMemory)
+        let admission = DistributedStagedMemoryAdmission(
+            contract: contract,
+            snapshotProvider: {
+                DistributedStagedMemorySnapshot(
+                    totalPhysicalMemoryBytes: 64 * self.gib,
+                    workerResidentBytes: 20 * self.gib,
+                    availableBytes: 7 * self.gib,
+                    allocationCapacityBytes: 48 * self.gib,
+                    pressure: .green,
+                    swapGrowthBytes: 0)
+            })
+
+        XCTAssertThrowsError(try admission.checkBeforeAssetLoad()) { error in
+            XCTAssertEqual(
+                error as? DistributedStagedMemoryAdmissionError,
+                .drain(.insufficientAvailableMemory))
         }
     }
 
@@ -224,6 +257,7 @@ final class Gemma4StagedResidencyTests: XCTestCase {
                     totalPhysicalMemoryBytes: 64 * self.gib,
                     workerResidentBytes: 20 * self.gib,
                     availableBytes: 20 * self.gib,
+                    allocationCapacityBytes: 40 * self.gib,
                     pressure: .yellow,
                     swapGrowthBytes: 0)
             })
@@ -248,9 +282,9 @@ final class Gemma4StagedResidencyTests: XCTestCase {
         XCTAssertEqual(fixture.recorder.maximumActivePrefillCount, 1)
         XCTAssertEqual(fixture.recorder.activePrefillCount, 0)
         XCTAssertEqual(fixture.recorder.events, [
-            "admit", "load:embed", "forward:embed", "unload:embed",
-            "admit", "load:layers", "forward:layers", "unload:layers",
-            "admit", "load:head", "forward:head", "unload:head",
+            "admit", "load:embed", "admit", "forward:embed", "unload:embed",
+            "admit", "load:layers", "admit", "forward:layers", "unload:layers",
+            "admit", "load:head", "admit", "forward:head", "unload:head",
         ])
         XCTAssertTrue(fixture.handles.allSatisfy { !$0.isPrefillResident })
     }
@@ -286,7 +320,7 @@ final class Gemma4StagedResidencyTests: XCTestCase {
             XCTAssertEqual(fixture.recorder.activePrefillCount, 0)
             XCTAssertTrue(fixture.handles.allSatisfy { !$0.isPrefillResident })
             XCTAssertEqual(Array(fixture.recorder.events.suffix(3)), [
-                "load:layers", "forward:layers", "unload:layers",
+                "admit", "forward:layers", "unload:layers",
             ])
         }
     }
@@ -309,7 +343,28 @@ final class Gemma4StagedResidencyTests: XCTestCase {
         XCTAssertEqual(fixture.recorder.activePrefillCount, 0)
     }
 
-    func testMakeInstallsAdmissionAndChecksBeforeEveryDecodeAssetLoad() async throws {
+    func testPipelineUnloadsPrefillWhenPostLoadAdmissionFails() async throws {
+        let fixture = try makePipelineFixture(admissionPressures: [.green, .yellow])
+        try await fixture.pipeline.allocate(requestID: "post-load-pressure", kvCapacity: 16)
+
+        await XCTAssertThrowsErrorAsync(
+            try await fixture.pipeline.forward(
+                requestID: "post-load-pressure",
+                stepIndex: 0,
+                positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 2),
+                tokenIDs: [11, 12])) { error in
+                    XCTAssertEqual(
+                        error as? DistributedStagedMemoryAdmissionError,
+                        .drain(.memoryPressure))
+                }
+        XCTAssertEqual(fixture.recorder.events, [
+            "admit", "load:embed", "admit", "unload:embed",
+        ])
+        XCTAssertEqual(fixture.recorder.activePrefillCount, 0)
+        XCTAssertTrue(fixture.handles.allSatisfy { !$0.isPrefillResident })
+    }
+
+    func testMakeChecksBeforeAndAfterEveryDecodeAssetLoad() async throws {
         let manifest = try decodeManifest(runtimeMemory: validRuntimeMemory)
         let recorder = ResidencyRecorder()
         let factory = RecordingDecodeResidentFactory(recorder: recorder)
@@ -321,15 +376,46 @@ final class Gemma4StagedResidencyTests: XCTestCase {
                 return self.safeSnapshot(total: 64 * self.gib)
             })
 
-        _ = try await DistributedSameMachinePipeline.make(
+        let pipeline = try await DistributedSameMachinePipeline.make(
             manifest: manifest,
             handleFactory: factory,
             streamedPrefillAdmission: admission)
 
+        withExtendedLifetime(pipeline) {
+            XCTAssertEqual(recorder.events, [
+                "admit", "factory:embed", "admit",
+                "admit", "factory:layers", "admit",
+                "admit", "factory:head", "admit",
+            ])
+        }
+    }
+
+    func testMakeReleasesResidentHandlesWhenPostLoadAdmissionFails() async throws {
+        let manifest = try decodeManifest(runtimeMemory: validRuntimeMemory)
+        let recorder = ResidencyRecorder(admissionPressures: [.green, .yellow])
+        let factory = RecordingDecodeResidentFactory(recorder: recorder)
+        let contract = try XCTUnwrap(manifest.runtimeMemory)
+        let admission = DistributedStagedMemoryAdmission(
+            contract: contract,
+            snapshotProvider: {
+                recorder.events.append("admit")
+                return self.safeSnapshot(
+                    total: 64 * self.gib,
+                    allocationCapacity: 48 * self.gib,
+                    pressure: recorder.nextAdmissionPressure())
+            })
+
+        await XCTAssertThrowsErrorAsync(
+            try await DistributedSameMachinePipeline.make(
+                manifest: manifest,
+                handleFactory: factory,
+                streamedPrefillAdmission: admission)) { error in
+                    XCTAssertEqual(
+                        error as? DistributedStagedMemoryAdmissionError,
+                        .drain(.memoryPressure))
+                }
         XCTAssertEqual(recorder.events, [
-            "admit", "factory:embed",
-            "admit", "factory:layers",
-            "admit", "factory:head",
+            "admit", "factory:embed", "admit", "release:embed",
         ])
     }
 
@@ -388,7 +474,8 @@ final class Gemma4StagedResidencyTests: XCTestCase {
             snapshotProvider: {
                 self.safeSnapshot(
                     total: 64 * self.gib,
-                    available: 17 * self.gib)
+                    available: 17 * self.gib,
+                    allocationCapacity: 37 * self.gib)
             },
             pendingResidentBytes: 3_757_662_899)
 
@@ -436,22 +523,27 @@ final class Gemma4StagedResidencyTests: XCTestCase {
 
     private func safeSnapshot(
         total: UInt64,
-        available: UInt64? = nil
+        available: UInt64? = nil,
+        allocationCapacity: UInt64? = nil,
+        pressure: ResidentMemoryPressure = .green,
+        workerResident: UInt64? = nil
     ) -> DistributedStagedMemorySnapshot {
         DistributedStagedMemorySnapshot(
             totalPhysicalMemoryBytes: total,
-            workerResidentBytes: 20 * gib,
+            workerResidentBytes: workerResident ?? 128 * 1_048_576,
             availableBytes: available ?? 40 * gib,
-            pressure: .green,
+            allocationCapacityBytes: allocationCapacity ?? available ?? 40 * gib,
+            pressure: pressure,
             swapGrowthBytes: 0)
     }
 
     private func makePipelineFixture(
         pressure: ResidentMemoryPressure = .green,
+        admissionPressures: [ResidentMemoryPressure] = [],
         failingStageID: String? = nil
     ) throws -> PipelineFixture {
         let manifest = try decodeManifest(runtimeMemory: validRuntimeMemory)
-        let recorder = ResidencyRecorder()
+        let recorder = ResidencyRecorder(admissionPressures: admissionPressures)
         let handles = manifest.runtimePlan.stages.enumerated().map { index, descriptor in
             RecordingDecodeResidentStage(
                 descriptor: descriptor,
@@ -469,7 +561,8 @@ final class Gemma4StagedResidencyTests: XCTestCase {
                     totalPhysicalMemoryBytes: 64 * self.gib,
                     workerResidentBytes: 20 * self.gib,
                     availableBytes: 20 * self.gib,
-                    pressure: pressure,
+                    allocationCapacityBytes: 40 * self.gib,
+                    pressure: recorder.nextAdmissionPressure(default: pressure),
                     swapGrowthBytes: 0)
             })
         let pipeline = try DistributedSameMachinePipeline(
@@ -555,6 +648,18 @@ private final class ResidencyRecorder: @unchecked Sendable {
     var events: [String] = []
     var activePrefillCount = 0
     var maximumActivePrefillCount = 0
+    private var admissionPressures: [ResidentMemoryPressure]
+
+    init(admissionPressures: [ResidentMemoryPressure] = []) {
+        self.admissionPressures = admissionPressures
+    }
+
+    func nextAdmissionPressure(
+        default fallback: ResidentMemoryPressure = .green
+    ) -> ResidentMemoryPressure {
+        guard !admissionPressures.isEmpty else { return fallback }
+        return admissionPressures.removeFirst()
+    }
 }
 
 private final class RecordingDecodeResidentFactory: DistributedStageHandleFactory {
@@ -597,6 +702,10 @@ private final class RecordingDecodeResidentStage:
         self.nextStageID = nextStageID
         self.recorder = recorder
         self.failForward = failForward
+    }
+
+    deinit {
+        recorder.events.append("release:\(descriptor.id)")
     }
 
     func loadPrefill() async throws {

@@ -98,6 +98,7 @@ public struct DistributedStagedMemorySnapshot: Sendable, Equatable {
     public let totalPhysicalMemoryBytes: UInt64
     public let workerResidentBytes: UInt64
     public let availableBytes: UInt64
+    public let allocationCapacityBytes: UInt64
     public let pressure: ResidentMemoryPressure
     public let swapGrowthBytes: UInt64
 
@@ -105,12 +106,14 @@ public struct DistributedStagedMemorySnapshot: Sendable, Equatable {
         totalPhysicalMemoryBytes: UInt64,
         workerResidentBytes: UInt64,
         availableBytes: UInt64,
+        allocationCapacityBytes: UInt64,
         pressure: ResidentMemoryPressure,
         swapGrowthBytes: UInt64
     ) {
         self.totalPhysicalMemoryBytes = totalPhysicalMemoryBytes
         self.workerResidentBytes = workerResidentBytes
         self.availableBytes = availableBytes
+        self.allocationCapacityBytes = allocationCapacityBytes
         self.pressure = pressure
         self.swapGrowthBytes = swapGrowthBytes
     }
@@ -162,7 +165,9 @@ public struct DistributedStagedMemoryAdmission {
     public func selectContext() throws -> DistributedStagedContextSelection {
         let snapshot = try checkedSnapshot()
         if snapshot.totalPhysicalMemoryBytes >= contract.initial.minimumPhysicalMemoryBytes,
-           snapshot.availableBytes >= availableRequirement(
+           projectedResidentBytes(for: contract.initial, snapshot: snapshot)
+               < gate.limits.drainResidentBytes,
+           snapshot.allocationCapacityBytes >= availableRequirement(
                for: contract.initial,
                snapshot: snapshot)
         {
@@ -171,7 +176,9 @@ public struct DistributedStagedMemoryAdmission {
                 contextTokens: contract.initial.contextTokens)
         }
         if snapshot.totalPhysicalMemoryBytes >= contract.fallback.minimumPhysicalMemoryBytes,
-           snapshot.availableBytes >= availableRequirement(
+           projectedResidentBytes(for: contract.fallback, snapshot: snapshot)
+               < gate.limits.drainResidentBytes,
+           snapshot.allocationCapacityBytes >= availableRequirement(
                for: contract.fallback,
                snapshot: snapshot)
         {
@@ -184,9 +191,14 @@ public struct DistributedStagedMemoryAdmission {
                 requiredBytes: contract.fallback.minimumPhysicalMemoryBytes,
                 actualBytes: snapshot.totalPhysicalMemoryBytes)
         }
+        if projectedResidentBytes(for: contract.fallback, snapshot: snapshot)
+            >= gate.limits.drainResidentBytes
+        {
+            throw DistributedStagedMemoryAdmissionError.drain(.residentLimit)
+        }
         throw DistributedStagedMemoryAdmissionError.insufficientAvailableMemory(
             requiredBytes: availableRequirement(for: contract.fallback, snapshot: snapshot),
-            actualBytes: snapshot.availableBytes)
+            actualBytes: snapshot.allocationCapacityBytes)
     }
 
     public func checkBeforeAssetLoad() throws {
@@ -216,12 +228,9 @@ public struct DistributedStagedMemoryAdmission {
         }
     }
 
-    /// Projects only the additional target footprint not already present in the live RSS, plus
-    /// explicitly pending assets (such as an MTP assistant) that are not resident at snapshot time.
-    /// `availableBytes` already excludes the live OS and co-resident services; adding their
-    /// reserves again would double-count them. The tier's minimum physical-memory floor retains
-    /// the whole-machine reserve contract, while `checkBeforeAssetLoad()` preserves the live
-    /// green-pressure, 8 GiB-available, and swap-growth gates before every specialization.
+    /// Projects only the incremental target allocation not already represented in the live worker
+    /// RSS, plus explicitly pending assets such as an MTP assistant. This requirement is compared
+    /// with macOS non-compressed allocation capacity, not live pressure headroom.
     private func availableRequirement(
         for tier: DistributedRuntimeMemoryContract.Tier,
         snapshot: DistributedStagedMemorySnapshot
@@ -235,6 +244,21 @@ public struct DistributedStagedMemoryAdmission {
             ? projectedWorkerBytes - snapshot.workerResidentBytes
             : 0
         return Self.saturatedSum([incrementalWorkerBytes, pendingResidentBytes])
+    }
+
+    /// Caps the full projected process footprint before any model allocation begins. This is
+    /// intentionally independent from incremental allocation capacity.
+    private func projectedResidentBytes(
+        for tier: DistributedRuntimeMemoryContract.Tier,
+        snapshot: DistributedStagedMemorySnapshot
+    ) -> UInt64 {
+        Self.saturatedSum([
+            snapshot.workerResidentBytes,
+            contract.residentWeightUpperBoundBytes,
+            contract.runtimeOverheadReserveBytes,
+            tier.cacheBytes,
+            pendingResidentBytes,
+        ])
     }
 
     private static func saturatedSum(_ values: [UInt64]) -> UInt64 {

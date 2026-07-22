@@ -4139,7 +4139,9 @@ public final class DistributedSameMachinePipeline {
             let context = DistributedStageHandleFactoryContext(
                 stage: stage, manifest: manifest, descriptor: descriptor)
             try effectiveAdmission?.checkBeforeAssetLoad()
-            handles.append(try await handleFactory.makeStageHandle(for: context))
+            let handle = try await handleFactory.makeStageHandle(for: context)
+            handles.append(handle)
+            try effectiveAdmission?.checkBeforeAssetLoad()
         }
         return try DistributedSameMachinePipeline(
             plan: manifest.runtimePlan,
@@ -4353,6 +4355,7 @@ public final class DistributedSameMachinePipeline {
                 throw DistributedStageExecutionError.invalidControlFrame(
                     "stage \(stage.descriptor.id) did not retain its admitted prefill asset")
             }
+            try streamedPrefillAdmission.checkBeforeAssetLoad()
             let output = try await stage.forward(input)
             resident.unloadPrefill()
             activePrefillStageID = nil

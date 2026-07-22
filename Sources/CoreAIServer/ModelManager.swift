@@ -726,6 +726,7 @@ public actor ModelManager {
         let totalPhysicalMemoryBytes: UInt64
         let workerResidentBytes: UInt64
         let availableBytes: UInt64
+        let allocationCapacityBytes: UInt64
         let pressure: ResidentMemoryPressure?
         let swapUsedBytes: UInt64?
     }
@@ -805,6 +806,7 @@ public actor ModelManager {
                 totalPhysicalMemoryBytes: snapshot.totalRAMBytes,
                 workerResidentBytes: snapshot.processPhysicalFootprintBytes,
                 availableBytes: snapshot.availableRAMBytes,
+                allocationCapacityBytes: snapshot.allocationCapacityBytes,
                 pressure: pressure,
                 swapUsedBytes: snapshot.swapUsedBytes)
         }
@@ -822,6 +824,7 @@ public actor ModelManager {
                 totalPhysicalMemoryBytes: current.totalPhysicalMemoryBytes,
                 workerResidentBytes: current.workerResidentBytes,
                 availableBytes: current.availableBytes,
+                allocationCapacityBytes: current.allocationCapacityBytes,
                 pressure: pressure,
                 swapGrowthBytes: currentSwap >= baselineSwap
                     ? currentSwap - baselineSwap

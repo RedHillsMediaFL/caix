@@ -27,6 +27,8 @@ final class MachineStatsTests: XCTestCase {
         XCTAssertEqual(
             snapshot.availableRAMBytes,
             snapshot.totalRAMBytes - snapshot.usedRAMBytes)
+        XCTAssertGreaterThan(snapshot.allocationCapacityBytes, 0)
+        XCTAssertLessThanOrEqual(snapshot.allocationCapacityBytes, snapshot.totalRAMBytes)
         XCTAssertGreaterThan(snapshot.processPhysicalFootprintBytes, 0)
         XCTAssertNotEqual(snapshot.pressure, .unknown)
     }

@@ -55,6 +55,7 @@ final class WhisperStartupMemoryGateTests: XCTestCase {
                 availableBytes,
                 64 * 1_073_741_824),
             availableRAMBytes: availableBytes,
+            allocationCapacityBytes: availableBytes,
             processPhysicalFootprintBytes: 128 * 1_048_576,
             pressure: pressure,
             swapUsedBytes: 0)

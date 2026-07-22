@@ -103,6 +103,7 @@ final class ResidentMemorySupervisorTests: XCTestCase {
             totalRAMBytes: 64 * gib,
             usedRAMBytes: 64 * gib - available,
             availableRAMBytes: available,
+            allocationCapacityBytes: available,
             processPhysicalFootprintBytes: resident,
             pressure: pressure,
             swapUsedBytes: swap)

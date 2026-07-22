@@ -245,12 +245,14 @@ final class ModelManagerTests: XCTestCase {
                 totalPhysicalMemoryBytes: 64 * 1_073_741_824,
                 workerResidentBytes: 2 * 1_073_741_824,
                 availableBytes: 40 * 1_073_741_824,
+                allocationCapacityBytes: 48 * 1_073_741_824,
                 pressure: .green,
                 swapUsedBytes: 1_000),
             .init(
                 totalPhysicalMemoryBytes: 64 * 1_073_741_824,
                 workerResidentBytes: 3 * 1_073_741_824,
                 availableBytes: 39 * 1_073_741_824,
+                allocationCapacityBytes: 47 * 1_073_741_824,
                 pressure: .green,
                 swapUsedBytes: 1_512),
         ])
@@ -263,6 +265,7 @@ final class ModelManagerTests: XCTestCase {
         XCTAssertEqual(actual.totalPhysicalMemoryBytes, 64 * 1_073_741_824)
         XCTAssertEqual(actual.workerResidentBytes, 3 * 1_073_741_824)
         XCTAssertEqual(actual.availableBytes, 39 * 1_073_741_824)
+        XCTAssertEqual(actual.allocationCapacityBytes, 47 * 1_073_741_824)
         XCTAssertEqual(actual.pressure, .green)
         XCTAssertEqual(actual.swapGrowthBytes, 512)
     }

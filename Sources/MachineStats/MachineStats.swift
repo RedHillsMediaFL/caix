@@ -35,6 +35,7 @@ public struct MachineMemorySafetySnapshot: Codable, Sendable, Equatable {
     public var totalRAMBytes: UInt64
     public var usedRAMBytes: UInt64
     public var availableRAMBytes: UInt64
+    public var allocationCapacityBytes: UInt64
     public var processPhysicalFootprintBytes: UInt64
     public var pressure: MachineMemoryPressure
     public var swapUsedBytes: UInt64?
@@ -43,6 +44,7 @@ public struct MachineMemorySafetySnapshot: Codable, Sendable, Equatable {
         totalRAMBytes: UInt64,
         usedRAMBytes: UInt64,
         availableRAMBytes: UInt64,
+        allocationCapacityBytes: UInt64,
         processPhysicalFootprintBytes: UInt64,
         pressure: MachineMemoryPressure,
         swapUsedBytes: UInt64?
@@ -50,6 +52,7 @@ public struct MachineMemorySafetySnapshot: Codable, Sendable, Equatable {
         self.totalRAMBytes = totalRAMBytes
         self.usedRAMBytes = usedRAMBytes
         self.availableRAMBytes = availableRAMBytes
+        self.allocationCapacityBytes = allocationCapacityBytes
         self.processPhysicalFootprintBytes = processPhysicalFootprintBytes
         self.pressure = pressure
         self.swapUsedBytes = swapUsedBytes
@@ -90,6 +93,12 @@ public enum MachineStats {
 
     /// Used unified memory ≈ (active + wired + compressed) * page size.
     public static func usedRAMBytes() -> UInt64 {
+        memoryPageByteCounts()?.used ?? 0
+    }
+
+    /// Returns both the live-pressure footprint and macOS's non-compressed allocation capacity
+    /// from one HOST_VM_INFO64 observation.
+    private static func memoryPageByteCounts() -> (used: UInt64, allocationCapacity: UInt64)? {
         var stats = vm_statistics64_data_t()
         var count = mach_msg_type_number_t(
             MemoryLayout<vm_statistics64_data_t>.stride / MemoryLayout<integer_t>.stride)
@@ -98,12 +107,36 @@ public enum MachineStats {
                 host_statistics64(mach_host_self(), HOST_VM_INFO64, $0, &count)
             }
         }
-        guard kr == KERN_SUCCESS else { return 0 }
+        guard kr == KERN_SUCCESS else { return nil }
         var pageSize: vm_size_t = 0
-        host_page_size(mach_host_self(), &pageSize)
+        guard host_page_size(mach_host_self(), &pageSize) == KERN_SUCCESS,
+              pageSize > 0
+        else { return nil }
         let page = UInt64(pageSize)
-        return (UInt64(stats.active_count) + UInt64(stats.wire_count)
-            + UInt64(stats.compressor_page_count)) * page
+        let used = saturatedPageBytes([
+            UInt64(stats.active_count),
+            UInt64(stats.wire_count),
+            UInt64(stats.compressor_page_count),
+        ], pageSize: page)
+        let allocationCapacity = saturatedPageBytes([
+            UInt64(stats.active_count),
+            UInt64(stats.inactive_count),
+            UInt64(stats.free_count),
+            UInt64(stats.speculative_count),
+        ], pageSize: page)
+        return (used, allocationCapacity)
+    }
+
+    private static func saturatedPageBytes(
+        _ counts: [UInt64],
+        pageSize: UInt64
+    ) -> UInt64 {
+        let pages = counts.reduce(UInt64(0)) { partial, count in
+            let (sum, overflow) = partial.addingReportingOverflow(count)
+            return overflow ? UInt64.max : sum
+        }
+        let (bytes, overflow) = pages.multipliedReportingOverflow(by: pageSize)
+        return overflow ? UInt64.max : bytes
     }
 
     /// Current process physical footprint, including compressed resident pages attributed by the
@@ -129,7 +162,9 @@ public enum MachineStats {
     /// admission are safe. No model or large backing allocation is created by this probe.
     public static func memorySafetySnapshot() -> MachineMemorySafetySnapshot {
         let total = sysctlUInt64("hw.memsize") ?? 0
-        let used = min(usedRAMBytes(), total)
+        let pageBytes = memoryPageByteCounts()
+        let used = min(pageBytes?.used ?? 0, total)
+        let allocationCapacity = min(pageBytes?.allocationCapacity ?? 0, total)
 
         var rawPressure: Int32 = 0
         var pressureSize = MemoryLayout<Int32>.size
@@ -148,6 +183,7 @@ public enum MachineStats {
             totalRAMBytes: total,
             usedRAMBytes: used,
             availableRAMBytes: total - used,
+            allocationCapacityBytes: allocationCapacity,
             processPhysicalFootprintBytes: processPhysicalFootprintBytes(),
             pressure: MachineMemoryPressure(
                 rawDarwinValue: pressureStatus == 0 ? rawPressure : nil),
