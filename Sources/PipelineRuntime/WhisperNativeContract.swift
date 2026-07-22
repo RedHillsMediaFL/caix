@@ -57,6 +57,27 @@ enum WhisperNativeContract {
         }
     }
 
+    static func validateExactRelationship<Descriptor: Equatable>(
+        _ actual: Descriptor,
+        matches expected: Descriptor,
+        relationship: String
+    ) throws {
+        guard actual == expected else {
+            throw ContractError.invalid(
+                "descriptor relationship '\(relationship)' must match exactly")
+        }
+    }
+
+    static func requirePackedStateStorage(
+        isContiguous: Bool,
+        stateName: String
+    ) throws {
+        guard isContiguous else {
+            throw ContractError.invalid(
+                "state \(stateName) requires packed contiguous storage")
+        }
+    }
+
     private static func validate(
         _ actual: [String: WhisperNativeTensorDescriptor],
         expected: [String: WhisperNativeTensorDescriptor],

@@ -47,6 +47,10 @@ final class WhisperCoreAIModelFactory: @unchecked Sendable, WhisperNativeSession
             descriptors[name] = descriptor
         }
         try WhisperNativeContract.validate(projected)
+        try Self.validateBridgeRelationships(
+            encode: descriptors["encode"]!,
+            load: descriptors["load_cross_kv"]!,
+            decode: descriptors["decode_step"]!)
 
         guard let encodeFunction = try model.loadFunction(named: "encode"),
             let loadFunction = try model.loadFunction(named: "load_cross_kv"),
@@ -136,6 +140,116 @@ final class WhisperCoreAIModelFactory: @unchecked Sendable, WhisperNativeSession
             outputs: outputs,
             states: states)
     }
+
+    private static func validateBridgeRelationships(
+        encode: InferenceFunctionDescriptor,
+        load: InferenceFunctionDescriptor,
+        decode: InferenceFunctionDescriptor
+    ) throws {
+        try WhisperNativeContract.validateExactRelationship(
+            try output("cross_key_payload", from: encode),
+            matches: try input("cross_key_payload", from: load),
+            relationship: "encode cross_key_payload -> load_cross_kv input")
+        try WhisperNativeContract.validateExactRelationship(
+            try output("cross_value_payload", from: encode),
+            matches: try input("cross_value_payload", from: load),
+            relationship: "encode cross_value_payload -> load_cross_kv input")
+        for stateName in ["cross_key_cache", "cross_value_cache", "cross_ready"] {
+            try WhisperNativeContract.validateExactRelationship(
+                try state(stateName, from: load),
+                matches: try state(stateName, from: decode),
+                relationship: "load_cross_kv \(stateName) -> decode_step state")
+        }
+    }
+
+    private static func input(
+        _ name: String,
+        from descriptor: InferenceFunctionDescriptor
+    ) throws -> NDArrayDescriptor {
+        guard case .ndArray(let value) = descriptor.inputDescriptor(of: name) else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "Whisper input '\(name)' is not an NDArray")
+        }
+        return value
+    }
+
+    private static func output(
+        _ name: String,
+        from descriptor: InferenceFunctionDescriptor
+    ) throws -> NDArrayDescriptor {
+        guard case .ndArray(let value) = descriptor.outputDescriptor(of: name) else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "Whisper output '\(name)' is not an NDArray")
+        }
+        return value
+    }
+
+    private static func state(
+        _ name: String,
+        from descriptor: InferenceFunctionDescriptor
+    ) throws -> NDArrayDescriptor {
+        guard case .ndArray(let value) = descriptor.stateDescriptor(of: name) else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "Whisper state '\(name)' is not an NDArray")
+        }
+        return value
+    }
+}
+
+struct WhisperCoreAISessionResources {
+    var crossKeyCache: NDArray?
+    var crossValueCache: NDArray?
+    var selfKeyCache: NDArray?
+    var selfValueCache: NDArray?
+    var position: NDArray?
+    var crossReady: NDArray?
+    private(set) var crossKeyPayload: NDArray?
+    private(set) var crossValuePayload: NDArray?
+
+    init(
+        crossKeyCache: NDArray,
+        crossValueCache: NDArray,
+        selfKeyCache: NDArray,
+        selfValueCache: NDArray,
+        position: NDArray,
+        crossReady: NDArray
+    ) {
+        self.crossKeyCache = crossKeyCache
+        self.crossValueCache = crossValueCache
+        self.selfKeyCache = selfKeyCache
+        self.selfValueCache = selfValueCache
+        self.position = position
+        self.crossReady = crossReady
+    }
+
+    mutating func installEncoderPayloads(key: NDArray, value: NDArray) {
+        crossKeyPayload = key
+        crossValuePayload = value
+    }
+
+    mutating func releaseEncoderPayloads() {
+        crossKeyPayload = nil
+        crossValuePayload = nil
+    }
+
+    mutating func dispose() {
+        releaseEncoderPayloads()
+        crossKeyCache = nil
+        crossValueCache = nil
+        selfKeyCache = nil
+        selfValueCache = nil
+        position = nil
+        crossReady = nil
+    }
+
+    var retainedEncoderPayloadCount: Int {
+        [crossKeyPayload, crossValuePayload].compactMap { $0 }.count
+    }
+
+    var retainedStateCount: Int {
+        [crossKeyCache, crossValueCache, selfKeyCache, selfValueCache, position, crossReady]
+            .compactMap { $0 }.count
+    }
 }
 
 /// Exclusive mutable state for one audio window. `WhisperResidentEngine` is the only owner and its
@@ -159,14 +273,7 @@ private final class WhisperCoreAISession: @unchecked Sendable, WhisperNativeSess
     private let logitsDescriptor: NDArrayDescriptor
     private let decodeStatusDescriptor: NDArrayDescriptor
 
-    private var crossKeyCache: NDArray
-    private var crossValueCache: NDArray
-    private var selfKeyCache: NDArray
-    private var selfValueCache: NDArray
-    private var position: NDArray
-    private var crossReady: NDArray
-    private var crossKeyPayload: NDArray?
-    private var crossValuePayload: NDArray?
+    private var resources: WhisperCoreAISessionResources
     private var lifecycle = Lifecycle.fresh
 
     init(
@@ -191,16 +298,13 @@ private final class WhisperCoreAISession: @unchecked Sendable, WhisperNativeSess
         self.logitsDescriptor = try Self.output("logits", from: decodeDescriptor)
         self.decodeStatusDescriptor = try Self.output("decode_status", from: decodeDescriptor)
 
-        self.crossKeyCache = try Self.zeroedState(
-            "cross_key_cache", from: decodeDescriptor)
-        self.crossValueCache = try Self.zeroedState(
-            "cross_value_cache", from: decodeDescriptor)
-        self.selfKeyCache = try Self.zeroedState(
-            "self_key_cache", from: decodeDescriptor)
-        self.selfValueCache = try Self.zeroedState(
-            "self_value_cache", from: decodeDescriptor)
-        self.position = try Self.zeroedState("position", from: decodeDescriptor)
-        self.crossReady = try Self.zeroedState("cross_ready", from: decodeDescriptor)
+        self.resources = try WhisperCoreAISessionResources(
+            crossKeyCache: Self.zeroedState("cross_key_cache", from: decodeDescriptor),
+            crossValueCache: Self.zeroedState("cross_value_cache", from: decodeDescriptor),
+            selfKeyCache: Self.zeroedState("self_key_cache", from: decodeDescriptor),
+            selfValueCache: Self.zeroedState("self_value_cache", from: decodeDescriptor),
+            position: Self.zeroedState("position", from: decodeDescriptor),
+            crossReady: Self.zeroedState("cross_ready", from: decodeDescriptor))
     }
 
     func encode(inputFeatures: [Float16]) async throws {
@@ -221,24 +325,23 @@ private final class WhisperCoreAISession: @unchecked Sendable, WhisperNativeSess
             inputs: ["input_features": features],
             states: consume noStates,
             outputViews: consume outputs)
-        crossKeyPayload = keyPayload
-        crossValuePayload = valuePayload
+        resources.installEncoderPayloads(key: keyPayload, value: valuePayload)
         lifecycle = .encoded
     }
 
     func loadCrossKV() async throws -> Int32 {
         guard lifecycle == .encoded,
-            let crossKeyPayload,
-            let crossValuePayload
+            let crossKeyPayload = resources.crossKeyPayload,
+            let crossValuePayload = resources.crossValuePayload,
+            var crossKeyState = resources.crossKeyCache,
+            var crossValueState = resources.crossValueCache,
+            var readyState = resources.crossReady
         else {
             throw Self.lifecycleError("load_cross_kv requires exactly one completed encode")
         }
         var status = NDArray(descriptor: loadStatusDescriptor)
         var outputs = InferenceFunction.MutableViews()
         outputs.insert(&status, for: "load_status")
-        var crossKeyState = crossKeyCache
-        var crossValueState = crossValueCache
-        var readyState = crossReady
         var states = InferenceFunction.MutableViews()
         states.insert(&crossKeyState, for: "cross_key_cache")
         states.insert(&crossValueState, for: "cross_value_cache")
@@ -250,16 +353,26 @@ private final class WhisperCoreAISession: @unchecked Sendable, WhisperNativeSess
             ],
             states: consume states,
             outputViews: consume outputs)
-        crossKeyCache = crossKeyState
-        crossValueCache = crossValueState
-        crossReady = readyState
+        resources.crossKeyCache = crossKeyState
+        resources.crossValueCache = crossValueState
+        resources.crossReady = readyState
         let statusValue = Self.int32Scalar(status)
-        if statusValue == 1 { lifecycle = .loaded }
+        if statusValue == 1 {
+            resources.releaseEncoderPayloads()
+            lifecycle = .loaded
+        }
         return statusValue
     }
 
     func step(tokenID: Int32) async throws -> WhisperNativeStepOutput {
-        guard lifecycle == .loaded else {
+        guard lifecycle == .loaded,
+            var crossKeyState = resources.crossKeyCache,
+            var crossValueState = resources.crossValueCache,
+            var selfKeyState = resources.selfKeyCache,
+            var selfValueState = resources.selfValueCache,
+            var positionState = resources.position,
+            var readyState = resources.crossReady
+        else {
             throw Self.lifecycleError("decode_step requires loaded cross-KV state")
         }
         var token = NDArray(descriptor: tokenDescriptor)
@@ -271,12 +384,6 @@ private final class WhisperCoreAISession: @unchecked Sendable, WhisperNativeSess
         var outputs = InferenceFunction.MutableViews()
         outputs.insert(&logits, for: "logits")
         outputs.insert(&status, for: "decode_status")
-        var crossKeyState = crossKeyCache
-        var crossValueState = crossValueCache
-        var selfKeyState = selfKeyCache
-        var selfValueState = selfValueCache
-        var positionState = position
-        var readyState = crossReady
         var states = InferenceFunction.MutableViews()
         states.insert(&crossKeyState, for: "cross_key_cache")
         states.insert(&crossValueState, for: "cross_value_cache")
@@ -288,12 +395,12 @@ private final class WhisperCoreAISession: @unchecked Sendable, WhisperNativeSess
             inputs: ["token_id": token],
             states: consume states,
             outputViews: consume outputs)
-        crossKeyCache = crossKeyState
-        crossValueCache = crossValueState
-        selfKeyCache = selfKeyState
-        selfValueCache = selfValueState
-        position = positionState
-        crossReady = readyState
+        resources.crossKeyCache = crossKeyState
+        resources.crossValueCache = crossValueState
+        resources.selfKeyCache = selfKeyState
+        resources.selfValueCache = selfValueState
+        resources.position = positionState
+        resources.crossReady = readyState
         let values = logits.view(as: Float16.self).withUnsafePointer { pointer, shape, strides in
             let vocabulary = shape[shape.count - 1]
             let stride = strides[strides.count - 1]
@@ -305,8 +412,7 @@ private final class WhisperCoreAISession: @unchecked Sendable, WhisperNativeSess
     }
 
     func finish() async {
-        crossKeyPayload = nil
-        crossValuePayload = nil
+        resources.dispose()
         lifecycle = .finished
     }
 
@@ -342,11 +448,17 @@ private final class WhisperCoreAISession: @unchecked Sendable, WhisperNativeSess
         switch value.scalarType {
         case .float16:
             var view = array.mutableView(as: Float16.self)
+            try WhisperNativeContract.requirePackedStateStorage(
+                isContiguous: view.isContiguous,
+                stateName: name)
             view.withUnsafeMutablePointer { pointer, _, _ in
                 for index in 0..<count { pointer[index] = 0 }
             }
         case .int32:
             var view = array.mutableView(as: Int32.self)
+            try WhisperNativeContract.requirePackedStateStorage(
+                isContiguous: view.isContiguous,
+                stateName: name)
             view.withUnsafeMutablePointer { pointer, _, _ in
                 for index in 0..<count { pointer[index] = 0 }
             }

@@ -3,6 +3,11 @@ import XCTest
 @testable import PipelineRuntime
 
 final class WhisperNativeContractTests: XCTestCase {
+    private struct LayoutProbe: Equatable {
+        var preferredStrides: [Int]
+        var isInterleaved: Bool
+    }
+
     func testAcceptsExactV2ThreeEntrypointContract() throws {
         XCTAssertNoThrow(try WhisperNativeContract.validate(Self.validFunctions))
     }
@@ -43,6 +48,43 @@ final class WhisperNativeContractTests: XCTestCase {
         functions = Self.validFunctions
         functions["decode_step"]!.outputs.removeValue(forKey: "decode_status")
         assertRejected(functions, contains: "decode_step outputs")
+    }
+
+    func testRejectsMismatchedBridgeDescriptorLayouts() {
+        let packed = LayoutProbe(
+            preferredStrides: [96_000_000, 96_000_000, 4_800_000, 3_200, 1],
+            isInterleaved: false)
+        let padded = LayoutProbe(
+            preferredStrides: [96_001_024, 96_001_024, 4_800_000, 3_200, 1],
+            isInterleaved: false)
+
+        XCTAssertNoThrow(
+            try WhisperNativeContract.validateExactRelationship(
+                packed,
+                matches: packed,
+                relationship: "encode cross_key_payload -> load_cross_kv input"))
+        XCTAssertThrowsError(
+            try WhisperNativeContract.validateExactRelationship(
+                packed,
+                matches: padded,
+                relationship: "encode cross_key_payload -> load_cross_kv input")
+        ) { error in
+            XCTAssertTrue(String(describing: error).contains("descriptor relationship"))
+        }
+    }
+
+    func testRejectsNoncontiguousStateStorageBeforeZeroing() {
+        XCTAssertNoThrow(
+            try WhisperNativeContract.requirePackedStateStorage(
+                isContiguous: true,
+                stateName: "self_key_cache"))
+        XCTAssertThrowsError(
+            try WhisperNativeContract.requirePackedStateStorage(
+                isContiguous: false,
+                stateName: "self_key_cache")
+        ) { error in
+            XCTAssertTrue(String(describing: error).contains("self_key_cache"))
+        }
     }
 
     private func assertRejected(

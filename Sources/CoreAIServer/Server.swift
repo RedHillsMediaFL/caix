@@ -28,7 +28,8 @@ public enum CoreAIServer {
         eagleConfig: EagleConfig? = nil,
         statsFile: String? = nil,
         prewarm: String = "smallest",
-        conversionGuardEnabled: Bool = true
+        conversionGuardEnabled: Bool = true,
+        whisperTranscriber: (any WhisperTranscribing)? = nil
     ) async throws {
         // Persist usage stats (totals + per-model) across restarts, ollama/omlx-style.
         let statsPath = statsFile ?? (NSHomeDirectory() + "/.caix/usage.json")
@@ -44,7 +45,10 @@ public enum CoreAIServer {
             caixVersion: caixVersion,
             verbose: verbose,
             eagleConfig: eagleConfig,
-            conversionGuardEnabled: conversionGuardEnabled)
+            conversionGuardEnabled: conversionGuardEnabled,
+            audioTranscriptionService: whisperTranscriber.map {
+                OpenAIAudioTranscriptionService(transcriber: $0)
+            })
 
         _ = await runtime.memorySupervisor.refresh()
         await runtime.prewarm(selection: prewarm)
@@ -70,6 +74,7 @@ public enum CoreAIServer {
                   dashboard   http://\(host):\(port)/
                   shell       http://\(host):\(port)/shell
                   openai      POST /v1/chat/completions   GET /v1/models
+                              POST /v1/audio/transcriptions
                   anthropic   POST /v1/messages
                   dashboard   GET /api/stats  GET /api/models  GET /api/jobs
                               POST /api/convert  POST /api/load  POST /api/offload
@@ -109,12 +114,14 @@ final class ServerRuntime: Sendable {
     let verbose: Bool
     let conversionGuard: ConversionGuard
     let memorySupervisor: ResidentMemorySupervisor
+    let audioTranscriptionService: OpenAIAudioTranscriptionService?
     var userAgent: String { "caix/\(caixVersion)" }
 
     init(
         host: String, port: Int, exportsDir: URL, registryPath: URL, webDir: URL, convertScript: String,
         pythonExecutable: String, caixVersion: String, verbose: Bool, eagleConfig: EagleConfig? = nil,
-        conversionGuardEnabled: Bool = true
+        conversionGuardEnabled: Bool = true,
+        audioTranscriptionService: OpenAIAudioTranscriptionService? = nil
     ) {
         self.host = host
         self.port = port
@@ -134,6 +141,7 @@ final class ServerRuntime: Sendable {
             enabled: conversionGuardEnabled,
             lockPaths: ConversionGuard.defaultLockPaths(exportsDir: exportsDir))
         self.memorySupervisor = ResidentMemorySupervisor()
+        self.audioTranscriptionService = audioTranscriptionService
         let indexURL = webDir.appendingPathComponent("index.html")
         self.indexHTML =
             (try? String(contentsOf: indexURL, encoding: .utf8))
@@ -273,6 +281,9 @@ final class ServerRuntime: Sendable {
         // OpenAI-compatible
         router.get("/v1/models") { _, _ in await self.openAIModelsHandler() }
         router.post("/v1/chat/completions") { req, ctx in try await self.openAIChatHandler(req, ctx) }
+        router.post("/v1/audio/transcriptions") { req, ctx in
+            try await self.openAIAudioTranscriptionHandler(req, ctx)
+        }
 
         // Anthropic-compatible
         router.post("/v1/messages") { req, ctx in try await self.anthropicMessagesHandler(req, ctx) }
@@ -1177,9 +1188,148 @@ final class ServerRuntime: Sendable {
     private func openAIModelsHandler() async -> Response {
         let created = Int(Date().timeIntervalSince1970)
         let models = await manager.servedModelsPreferredForChat()
+        var data = models.map { OpenAIModelList.Model(id: $0.name, created: created) }
+        if audioTranscriptionService != nil,
+           !data.contains(where: { $0.id == OpenAIAudioAPI.modelID })
+        {
+            data.append(OpenAIModelList.Model(id: OpenAIAudioAPI.modelID, created: created))
+        }
         let list = OpenAIModelList(
-            data: models.map { .init(id: $0.name, created: created) })
+            data: data)
         return JSONResponder.encode(list)
+    }
+
+    private func openAIAudioTranscriptionHandler(
+        _ originalRequest: Request,
+        _ context: BasicRequestContext
+    ) async throws -> Response {
+        let started = Date()
+        let path = "/v1/audio/transcriptions"
+        if let response = await residentMemoryGuardResponse(
+            method: "POST", path: path, startedAt: started)
+        {
+            return response
+        }
+        if let response = await conversionGuardResponse(
+            method: "POST", path: path, startedAt: started)
+        {
+            return response
+        }
+        guard let audioTranscriptionService else {
+            await activity.record(
+                method: "POST", path: path, status: 503, startedAt: started,
+                model: OpenAIAudioAPI.modelID,
+                summary: "native Whisper service unavailable")
+            return JSONResponder.error(
+                "native Whisper service is unavailable; start caix with an authenticated Whisper asset",
+                status: .serviceUnavailable)
+        }
+
+        var request = originalRequest
+        let contentType = request.headers[.contentType] ?? ""
+        let body: Data
+        do {
+            let buffer = try await request.collectBody(upTo: OpenAIAudioAPI.maximumRequestBytes)
+            body = Data(buffer.readableBytesView)
+        } catch {
+            await activity.record(
+                method: "POST", path: path, status: 413, startedAt: started,
+                model: OpenAIAudioAPI.modelID,
+                summary: "audio request body exceeded bounded upload limit")
+            return JSONResponder.error(
+                "multipart request exceeds the 26 MiB request limit",
+                status: .contentTooLarge)
+        }
+
+        let transcriptionRequest: OpenAIAudioTranscriptionRequest
+        do {
+            let form = try MultipartFormData.parse(body, contentType: contentType)
+            transcriptionRequest = try OpenAIAudioTranscriptionRequest(form: form)
+        } catch {
+            await activity.record(
+                method: "POST", path: path, status: 400, startedAt: started,
+                model: OpenAIAudioAPI.modelID,
+                summary: "invalid OpenAI audio request: \(error)")
+            return JSONResponder.error(
+                "invalid OpenAI audio transcription request: \(error)",
+                status: .badRequest)
+        }
+
+        guard !transcriptionRequest.stream else {
+            await activity.record(
+                method: "POST", path: path, status: 400, startedAt: started,
+                model: OpenAIAudioAPI.modelID,
+                summary: "streaming requested before stable-delta transport is enabled")
+            return JSONResponder.error(
+                "stream=true requires the realtime transcription transport, which is not enabled in this build",
+                status: .badRequest)
+        }
+
+        do {
+            let output = try await audioTranscriptionService.transcribe(transcriptionRequest)
+            await activity.record(
+                method: "POST", path: path, status: 200, startedAt: started,
+                model: OpenAIAudioAPI.modelID,
+                summary: "transcribed \(String(format: "%.3f", output.durationSeconds)) seconds",
+                firstTokenSeconds: output.native.timings.queueSeconds
+                    + output.native.timings.encodeSeconds
+                    + output.native.timings.crossKVLoadSeconds,
+                prefillSeconds: output.native.timings.encodeSeconds
+                    + output.native.timings.crossKVLoadSeconds,
+                decodeSeconds: output.native.timings.decodeSeconds)
+            switch transcriptionRequest.responseFormat {
+            case .json:
+                return JSONResponder.encode(
+                    OpenAIAudioTranscriptionJSONResponse(text: output.text))
+            case .verboseJSON:
+                return JSONResponder.encode(
+                    OpenAIAudioVerboseTranscriptionResponse(
+                        language: output.language,
+                        duration: output.durationSeconds,
+                        text: output.text))
+            case .text:
+                var headers = HTTPFields()
+                headers[.contentType] = "text/plain; charset=utf-8"
+                return Response(
+                    status: .ok,
+                    headers: headers,
+                    body: ResponseBody(byteBuffer: ByteBuffer(string: output.text)))
+            case .srt, .vtt:
+                preconditionFailure("unsupported aligned format passed service validation")
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as OpenAIAudioTranscriptionService.ServiceError {
+            await activity.record(
+                method: "POST", path: path, status: 400, startedAt: started,
+                model: OpenAIAudioAPI.modelID, summary: "audio semantics rejected: \(error)")
+            return JSONResponder.error(error.description, status: .badRequest)
+        } catch let error as InMemoryAudioDecoder.DecodingError {
+            await activity.record(
+                method: "POST", path: path, status: 400, startedAt: started,
+                model: OpenAIAudioAPI.modelID, summary: "audio decode rejected: \(error)")
+            return JSONResponder.error(error.description, status: .badRequest)
+        } catch let error as WhisperDecodingPolicy.PolicyError {
+            await activity.record(
+                method: "POST", path: path, status: 400, startedAt: started,
+                model: OpenAIAudioAPI.modelID, summary: "Whisper policy rejected: \(error)")
+            return JSONResponder.error("Whisper request rejected: \(error)", status: .badRequest)
+        } catch let error as WhisperResidentEngine.EngineError {
+            let overloaded: Bool
+            if case .queueFull = error { overloaded = true } else { overloaded = false }
+            let status: HTTPResponse.Status = overloaded ? .tooManyRequests : .internalServerError
+            await activity.record(
+                method: "POST", path: path, status: status.code, startedAt: started,
+                model: OpenAIAudioAPI.modelID, summary: "native Whisper failed: \(error)")
+            return JSONResponder.error(error.description, status: status)
+        } catch {
+            await activity.record(
+                method: "POST", path: path, status: 500, startedAt: started,
+                model: OpenAIAudioAPI.modelID, summary: "transcription failed: \(error)")
+            return JSONResponder.error(
+                "native Whisper transcription failed: \(error)",
+                status: .internalServerError)
+        }
     }
 
     private func openAIChatHandler(_ request: Request, _ context: BasicRequestContext) async throws -> Response {

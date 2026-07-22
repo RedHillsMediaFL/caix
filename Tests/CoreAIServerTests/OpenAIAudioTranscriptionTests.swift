@@ -1,9 +1,79 @@
 import XCTest
+import HTTPTypes
+import Hummingbird
+import HummingbirdTesting
 import PipelineRuntime
 
 @testable import CoreAIServer
 
 final class OpenAIAudioTranscriptionTests: XCTestCase {
+    func testHTTPRouteReturnsOpenAIJSONWithoutWritingUploadToDisk() async throws {
+        let transcriber = RecordingWhisperTranscriber()
+        let service = OpenAIAudioTranscriptionService(
+            transcriber: transcriber,
+            decodeAudio: { bytes in
+                XCTAssertEqual(bytes, Data([1, 2, 3]))
+                return WhisperPCM(
+                    samples: [0.25, -0.5, 1], sampleRate: 16_000, wasTruncated: false)
+            },
+            extractFeatures: { _ in [0.5, -1.25] })
+        let runtime = makeServerRuntime(audioService: service)
+        let router = Router()
+        runtime.register(on: router)
+        let app = Application(responder: router.buildResponder())
+        let boundary = "caix-http-test"
+        let body = multipartBody(
+            boundary: boundary,
+            parts: [
+                ("model", nil, nil, Data(OpenAIAudioAPI.modelID.utf8)),
+                ("file", "call.wav", "audio/wav", Data([1, 2, 3])),
+            ])
+        let headers: HTTPFields = {
+            var value = HTTPFields()
+            value[.contentType] = "multipart/form-data; boundary=\(boundary)"
+            return value
+        }()
+
+        try await app.test(.router) { client in
+            try await client.execute(
+                uri: "/v1/audio/transcriptions",
+                method: .post,
+                headers: headers,
+                body: ByteBuffer(bytes: body)
+            ) { response in
+                XCTAssertEqual(response.status, .ok)
+                XCTAssertEqual(response.headers[.contentType], "application/json")
+                let object = try JSONSerialization.jsonObject(
+                    with: Data(response.body.readableBytesView)) as? [String: String]
+                XCTAssertEqual(object, ["text": "native transcript"])
+            }
+        }
+    }
+
+    func testHTTPRouteFailsClosedBeforeReadingAudioWhenWhisperIsUnavailable() async throws {
+        let runtime = makeServerRuntime(audioService: nil)
+        let router = Router()
+        runtime.register(on: router)
+        let app = Application(responder: router.buildResponder())
+        let headers: HTTPFields = {
+            var value = HTTPFields()
+            value[.contentType] = "multipart/form-data; boundary=unused"
+            return value
+        }()
+
+        try await app.test(.router) { client in
+            try await client.execute(
+                uri: "/v1/audio/transcriptions",
+                method: .post,
+                headers: headers,
+                body: ByteBuffer(string: "this body must not be parsed")
+            ) { response in
+                XCTAssertEqual(response.status, .serviceUnavailable)
+                XCTAssertTrue(String(buffer: response.body).contains("Whisper"))
+            }
+        }
+    }
+
     func testServiceConvertsAudioOnceAndForwardsNativeInputs() async throws {
         let recorder = AudioPipelineRecorder()
         let transcriber = RecordingWhisperTranscriber()
@@ -251,6 +321,25 @@ final class OpenAIAudioTranscriptionTests: XCTestCase {
                 body: Data([1, 2, 3])),
         ] + fields.map { MultipartFormData.Part(name: $0.0, body: Data($0.1.utf8)) }
         return try OpenAIAudioTranscriptionRequest(form: MultipartFormData(parts: parts))
+    }
+
+    private func makeServerRuntime(
+        audioService: OpenAIAudioTranscriptionService?
+    ) -> ServerRuntime {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("caix-audio-route-\(UUID().uuidString)", isDirectory: true)
+        return ServerRuntime(
+            host: "127.0.0.1",
+            port: 1237,
+            exportsDir: root.appendingPathComponent("exports", isDirectory: true),
+            registryPath: root.appendingPathComponent("registry.json"),
+            webDir: root.appendingPathComponent("web", isDirectory: true),
+            convertScript: root.appendingPathComponent("convert.py").path,
+            pythonExecutable: "python3",
+            caixVersion: "test",
+            verbose: false,
+            conversionGuardEnabled: false,
+            audioTranscriptionService: audioService)
     }
 }
 

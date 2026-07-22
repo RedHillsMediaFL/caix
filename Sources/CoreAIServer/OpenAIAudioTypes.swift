@@ -4,6 +4,8 @@ enum OpenAIAudioAPI {
     static let modelID = "openai/whisper-large-v2"
     static let acceptedModelIDs = Set([modelID, "whisper-large-v2"])
     static let maximumUploadBytes = 25 * 1024 * 1024
+    /// Leaves one bounded MiB for multipart framing and small text fields around a 25 MiB file.
+    static let maximumRequestBytes = maximumUploadBytes + 1024 * 1024
 }
 
 enum OpenAIAudioResponseFormat: String, Sendable, CaseIterable {
@@ -138,3 +140,13 @@ struct OpenAIAudioTranscriptionRequest: Sendable, Equatable {
     }
 }
 
+struct OpenAIAudioTranscriptionJSONResponse: Encodable, Sendable, Equatable {
+    var text: String
+}
+
+struct OpenAIAudioVerboseTranscriptionResponse: Encodable, Sendable, Equatable {
+    var task = "transcribe"
+    var language: String
+    var duration: Double
+    var text: String
+}

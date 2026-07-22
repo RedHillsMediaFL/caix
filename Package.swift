@@ -103,7 +103,10 @@ let package = Package(
         ),
         .testTarget(
             name: "CoreAIServerTests",
-            dependencies: ["CoreAIServer"],
+            dependencies: [
+                "CoreAIServer",
+                .product(name: "HummingbirdTesting", package: "hummingbird"),
+            ],
             swiftSettings: runtimeSwiftSettings
         ),
     ]
