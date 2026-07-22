@@ -185,6 +185,31 @@ final class Gemma4SequentialMTPDecoderTests: XCTestCase {
             }))
     }
 
+    func testRejectsTargetSnapshotWithWrongSlidingWindowCoverageBeforeInference() async throws {
+        let malformed = try Self.artifacts(length: 4, slidingLength: 3)
+        let decoder = try Gemma4SequentialMTPDecoder(
+            draftTokens: 1,
+            propose: { _ in
+                XCTFail("proposal inference must not execute")
+                throw TestError.unexpectedExecution
+            },
+            targetDecode: { _, _ in
+                XCTFail("target inference must not execute")
+                throw TestError.unexpectedExecution
+            })
+
+        do {
+            _ = try await decoder.run(
+                anchorToken: 7,
+                targetArtifacts: malformed,
+                maximumAdditionalTokens: 1,
+                commit: { _ in true })
+            XCTFail("malformed sliding target snapshot unexpectedly decoded")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("sliding"))
+        }
+    }
+
     private enum TestError: Error {
         case unexpectedExecution
     }
@@ -199,12 +224,14 @@ final class Gemma4SequentialMTPDecoderTests: XCTestCase {
 
     private static func artifacts(
         length: Int,
+        slidingLength: Int? = nil,
         hiddenBits: [UInt16] = [0],
         fullBits: [UInt16]? = nil,
         slidingBits: [UInt16]? = nil
     ) throws -> DistributedEagleTargetArtifacts {
+        let resolvedSlidingLength = slidingLength ?? length
         let full = fullBits ?? [UInt16](repeating: 0, count: length)
-        let sliding = slidingBits ?? [UInt16](repeating: 0, count: length)
+        let sliding = slidingBits ?? [UInt16](repeating: 0, count: resolvedSlidingLength)
         return try DistributedEagleTargetArtifacts(
             finalHidden: DistributedEagleTargetTensor(
                 shape: [1, 1, 1],
@@ -219,14 +246,16 @@ final class Gemma4SequentialMTPDecoderTests: XCTestCase {
                 scalarType: .float16,
                 float16BitPatterns: full),
             slidingKey: DistributedEagleTargetTensor(
-                shape: [1, 1, length, 1],
+                shape: [1, 1, resolvedSlidingLength, 1],
                 scalarType: .float16,
                 float16BitPatterns: sliding),
             slidingValue: DistributedEagleTargetTensor(
-                shape: [1, 1, length, 1],
+                shape: [1, 1, resolvedSlidingLength, 1],
                 scalarType: .float16,
                 float16BitPatterns: sliding),
             fullPositionRange: DistributedSequenceRange(lowerBound: 0, upperBound: length),
-            slidingPositionRange: DistributedSequenceRange(lowerBound: 0, upperBound: length))
+            slidingPositionRange: DistributedSequenceRange(
+                lowerBound: length - resolvedSlidingLength,
+                upperBound: length))
     }
 }

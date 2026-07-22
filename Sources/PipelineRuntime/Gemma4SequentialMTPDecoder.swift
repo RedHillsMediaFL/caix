@@ -183,6 +183,16 @@ struct Gemma4SequentialMTPDecoder {
             throw DistributedStageExecutionError.invalidStageOutput(
                 "Gemma 4 MTP full target KV must begin at position 0")
         }
+        let fullEnd = artifacts.fullPositionRange.upperBound
+        let expectedSlidingCount = min(
+            fullEnd,
+            Gemma4MTPNativeContract.slidingWindow)
+        guard artifacts.slidingPositionRange.upperBound == fullEnd,
+            artifacts.slidingPositionRange.count == expectedSlidingCount
+        else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "Gemma 4 MTP sliding target KV must end at \(fullEnd) and cover \(expectedSlidingCount) positions")
+        }
     }
 
     private static func validateAdvancedArtifacts(
@@ -190,6 +200,7 @@ struct Gemma4SequentialMTPDecoder {
         previous: DistributedEagleTargetArtifacts
     ) throws {
         let expectedEnd = previous.fullPositionRange.upperBound + 1
+        try validateSeedArtifacts(artifacts)
         guard artifacts.fullPositionRange
             == DistributedSequenceRange(lowerBound: 0, upperBound: expectedEnd)
         else {
