@@ -95,6 +95,26 @@ final class Gemma4StagedResidencyTests: XCTestCase {
         XCTAssertEqual(try admission.selectContext().contextTokens, 32_768)
     }
 
+    func testMemoryAdmissionReservesPendingAssistantBeforeItBecomesResident() throws {
+        let contract = try XCTUnwrap(
+            decodeManifest(runtimeMemory: validRuntimeMemory).runtimeMemory)
+        let available = 17 * gib
+        let withoutAssistant = DistributedStagedMemoryAdmission(
+            contract: contract,
+            snapshotProvider: {
+                self.safeSnapshot(total: 64 * self.gib, available: available)
+            })
+        let withAssistant = DistributedStagedMemoryAdmission(
+            contract: contract,
+            pendingResidentBytes: 3_757_662_899,
+            snapshotProvider: {
+                self.safeSnapshot(total: 64 * self.gib, available: available)
+            })
+
+        XCTAssertEqual(try withoutAssistant.selectContext().tier, .initial)
+        XCTAssertEqual(try withAssistant.selectContext().tier, .fallback)
+    }
+
     func testMemoryAdmissionRejectsBothTiersWhenCurrentAvailabilityIsUnsafe() throws {
         let contract = try XCTUnwrap(
             decodeManifest(runtimeMemory: validRuntimeMemory).runtimeMemory)
@@ -151,6 +171,46 @@ final class Gemma4StagedResidencyTests: XCTestCase {
             else { return XCTFail("expected insufficientAvailableMemory, got \(error)") }
             XCTAssertEqual(required, fallbackIncrement)
             XCTAssertEqual(actual, fallbackIncrement - 1)
+        }
+    }
+
+    func testProductionScaleAdmissionIncludesPendingAssistantAtExactBoundary() throws {
+        let contract = try XCTUnwrap(
+            decodeManifest(runtimeMemory: productionRuntimeMemory).runtimeMemory)
+        let fallbackIncrement = UInt64(39_551_696_176)
+        let assistantBytes = UInt64(3_757_662_899)
+        let exactRequirement = fallbackIncrement + assistantBytes
+
+        let admitted = DistributedStagedMemoryAdmission(
+            contract: contract,
+            pendingResidentBytes: assistantBytes,
+            snapshotProvider: {
+                DistributedStagedMemorySnapshot(
+                    totalPhysicalMemoryBytes: 64 * self.gib,
+                    workerResidentBytes: 8_979_152,
+                    availableBytes: exactRequirement,
+                    pressure: .green,
+                    swapGrowthBytes: 0)
+            })
+        XCTAssertEqual(try admitted.selectContext().tier, .fallback)
+
+        let rejected = DistributedStagedMemoryAdmission(
+            contract: contract,
+            pendingResidentBytes: assistantBytes,
+            snapshotProvider: {
+                DistributedStagedMemorySnapshot(
+                    totalPhysicalMemoryBytes: 64 * self.gib,
+                    workerResidentBytes: 8_979_152,
+                    availableBytes: exactRequirement - 1,
+                    pressure: .green,
+                    swapGrowthBytes: 0)
+            })
+        XCTAssertThrowsError(try rejected.selectContext()) { error in
+            guard case .insufficientAvailableMemory(let required, let actual) =
+                error as? DistributedStagedMemoryAdmissionError
+            else { return XCTFail("expected insufficientAvailableMemory, got \(error)") }
+            XCTAssertEqual(required, exactRequirement)
+            XCTAssertEqual(actual, exactRequirement - 1)
         }
     }
 
@@ -317,6 +377,23 @@ final class Gemma4StagedResidencyTests: XCTestCase {
         XCTAssertEqual(configuration.maxContextLength, 32_768)
         XCTAssertTrue(configuration.requiresDecodeResidentFactory)
         XCTAssertNotNil(configuration.streamedPrefillAdmission)
+    }
+
+    func testTextStagedResidentLoadConfigurationReservesPendingAssistantBytes() throws {
+        let manifest = try decodeManifest(runtimeMemory: validRuntimeMemory)
+
+        let configuration = try TextStagedModel.residentLoadConfiguration(
+            manifest: manifest,
+            metadataMaxContextLength: 262_144,
+            snapshotProvider: {
+                self.safeSnapshot(
+                    total: 64 * self.gib,
+                    available: 17 * self.gib)
+            },
+            pendingResidentBytes: 3_757_662_899)
+
+        XCTAssertEqual(configuration.contextSelection?.tier, .fallback)
+        XCTAssertEqual(configuration.maxContextLength, 32_768)
     }
 
     func testTextStagedGenerationValidationRejectsExplicitSampling() {

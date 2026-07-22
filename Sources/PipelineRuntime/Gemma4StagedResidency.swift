@@ -144,15 +144,18 @@ public enum DistributedStagedMemoryAdmissionError: Error, Sendable, Equatable {
 public struct DistributedStagedMemoryAdmission {
     private let contract: DistributedRuntimeMemoryContract
     private let gate: ResidentServiceHealthGate
+    private let pendingResidentBytes: UInt64
     private let snapshotProvider: () throws -> DistributedStagedMemorySnapshot
 
     public init(
         contract: DistributedRuntimeMemoryContract,
         limits: ResidentServiceHealthGate.Limits = .studio64GiB,
+        pendingResidentBytes: UInt64 = 0,
         snapshotProvider: @escaping () throws -> DistributedStagedMemorySnapshot
     ) {
         self.contract = contract
         self.gate = ResidentServiceHealthGate(limits: limits)
+        self.pendingResidentBytes = pendingResidentBytes
         self.snapshotProvider = snapshotProvider
     }
 
@@ -213,7 +216,8 @@ public struct DistributedStagedMemoryAdmission {
         }
     }
 
-    /// Projects only the additional worker footprint not already present in the live RSS.
+    /// Projects only the additional target footprint not already present in the live RSS, plus
+    /// explicitly pending assets (such as an MTP assistant) that are not resident at snapshot time.
     /// `availableBytes` already excludes the live OS and co-resident services; adding their
     /// reserves again would double-count them. The tier's minimum physical-memory floor retains
     /// the whole-machine reserve contract, while `checkBeforeAssetLoad()` preserves the live
@@ -230,7 +234,7 @@ public struct DistributedStagedMemoryAdmission {
         let incrementalWorkerBytes = projectedWorkerBytes > snapshot.workerResidentBytes
             ? projectedWorkerBytes - snapshot.workerResidentBytes
             : 0
-        return incrementalWorkerBytes
+        return Self.saturatedSum([incrementalWorkerBytes, pendingResidentBytes])
     }
 
     private static func saturatedSum(_ values: [UInt64]) -> UInt64 {

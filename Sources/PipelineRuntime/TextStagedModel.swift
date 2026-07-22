@@ -70,10 +70,14 @@ public final class TextStagedModel {
         let root = resolvedManifestURL.deletingLastPathComponent()
         let tokenizerDir = root.appendingPathComponent("tokenizer", isDirectory: true)
         let metadataMaxContextLength = try readMaxContextLength(bundleRoot: root)
+        let pendingMTPAssistantBytes = mtpAssistantURL.map {
+            directorySize($0.standardizedFileURL)
+        } ?? 0
         let configuration = try residentLoadConfiguration(
             manifest: manifest,
             metadataMaxContextLength: metadataMaxContextLength,
-            snapshotProvider: stagedMemorySnapshotProvider)
+            snapshotProvider: stagedMemorySnapshotProvider,
+            pendingResidentBytes: pendingMTPAssistantBytes)
         let mtpAssistant: Gemma4MTPNativeRunner?
         if let mtpAssistantURL {
             guard manifest.eagleTarget != nil else {
@@ -125,7 +129,8 @@ public final class TextStagedModel {
     static func residentLoadConfiguration(
         manifest: DistributedStageManifest,
         metadataMaxContextLength: Int,
-        snapshotProvider: (() throws -> DistributedStagedMemorySnapshot)?
+        snapshotProvider: (() throws -> DistributedStagedMemorySnapshot)?,
+        pendingResidentBytes: UInt64 = 0
     ) throws -> ResidentLoadConfiguration {
         guard metadataMaxContextLength > 0 else {
             throw CoreAIPipeline.RuntimeError.invalidBundle(
@@ -143,6 +148,7 @@ public final class TextStagedModel {
         }
         let admission = DistributedStagedMemoryAdmission(
             contract: contract,
+            pendingResidentBytes: pendingResidentBytes,
             snapshotProvider: snapshotProvider)
         let selection = try admission.selectContext()
         guard selection.contextTokens <= metadataMaxContextLength else {

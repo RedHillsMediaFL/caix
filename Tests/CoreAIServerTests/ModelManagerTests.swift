@@ -158,6 +158,39 @@ final class ModelManagerTests: XCTestCase {
             primaryStagedBundle: primary))
     }
 
+    func testExplicitPrimaryStagedBundleRejectsLegacyEagleNameCollision() throws {
+        let root = try makeTempDir()
+        let exports = root.appendingPathComponent("exports", isDirectory: true)
+        let registry = root.appendingPathComponent("models/registry.json")
+        try FileManager.default.createDirectory(
+            at: registry.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try #"{"models":{}}"#.write(to: registry, atomically: true, encoding: .utf8)
+
+        let staged = root.appendingPathComponent("staged", isDirectory: true)
+        try writeStagedBundle(at: staged, name: "staged")
+        let primary = try XCTUnwrap(PrimaryStagedBundleConfiguration.resolve(
+            bundlePath: staged.path,
+            modelID: "google/gemma-4-31B-it"))
+        let legacyEagle = EagleConfig(
+            name: "google/gemma-4-31B-it",
+            targetPath: root.appendingPathComponent("legacy-target").path,
+            draftPath: root.appendingPathComponent("legacy-draft").path,
+            unrolledPath: nil,
+            tokenizerDir: root.appendingPathComponent("legacy-tokenizer").path)
+
+        XCTAssertThrowsError(try ModelManager(
+            exportsDir: exports,
+            registryPath: registry,
+            eagleConfig: legacyEagle,
+            primaryStagedBundle: primary)) { error in
+                guard case .aliasCollision(let alias, let conflictingModel) =
+                    error as? PrimaryStagedBundleConfiguration.ConfigurationError
+                else { return XCTFail("expected aliasCollision, got \(error)") }
+                XCTAssertEqual(alias, "google/gemma-4-31B-it")
+                XCTAssertEqual(conflictingModel, legacyEagle.name)
+            }
+    }
+
     func testLargeGemmaPrewarmIsSkippedButSmallerModelsAreAllowed() {
         let largeGemma = ModelEntry(
             name: "gemma-4-26b-a4b-it-coreai",

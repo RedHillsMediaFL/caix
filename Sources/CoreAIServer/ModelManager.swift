@@ -778,6 +778,16 @@ public actor ModelManager {
         }
         if let primaryStagedBundle {
             try Self.validatePrimaryStagedBundle(primaryStagedBundle, against: exportsDir)
+            if let eagleConfig {
+                let primary = Self.primaryStagedBundleEntry(primaryStagedBundle)
+                if let alias = primary.identifiers.first(where: {
+                    Self.normalize($0) == Self.normalize(eagleConfig.name)
+                }) {
+                    throw PrimaryStagedBundleConfiguration.ConfigurationError.aliasCollision(
+                        alias: alias,
+                        conflictingModel: eagleConfig.name)
+                }
+            }
         }
     }
 

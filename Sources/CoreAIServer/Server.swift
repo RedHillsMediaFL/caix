@@ -55,8 +55,11 @@ public enum CoreAIServer {
             })
 
         _ = await runtime.memorySupervisor.refresh()
-        try await runtime.requireStagedMTPProofIfNeeded()
         await runtime.prewarm(selection: prewarm)
+        // Keep required-MTP proof as the final model-mutating startup phase. Generic prewarm is
+        // allowed to offload a model after a recoverable failure, so proving first could discard
+        // the exact resident handle that was validated before the listener opens.
+        try await runtime.requireStagedMTPProofIfNeeded()
 
         let router = Router()
         router.addMiddleware {
@@ -172,7 +175,7 @@ final class ServerRuntime: Sendable {
         try await stagedMTPConfiguration.requireProof { _ in proof }
         if verbose {
             let message = "[server] staged MTP startup proof: drafted_tokens=\(proof.draftedTokens) "
-                + "execution_mode=\(proof.executionMode.rawValue) fast=false\\n"
+                + "execution_mode=\(proof.executionMode.rawValue) fast=\(proof.fast)\n"
             FileHandle.standardError.write(Data(message.utf8))
         }
     }
