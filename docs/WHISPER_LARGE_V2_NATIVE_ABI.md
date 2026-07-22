@@ -12,10 +12,12 @@ reference, and CoreAI tensor ABI for exactly:
 - source precision: FP32
 - native runtime precision target: FP16
 
-It does not convert the full checkpoint. The real-source test reads the safetensors header
-through `safe_open.get_slice`; it never materializes the 6.17 GB tensor payload. Every tokenizer,
-normalizer, frontend, and generation asset required by the pinned snapshot is independently
-locked in `models/whisper-large-v2-source.json`.
+It does not convert the full checkpoint. The real-source test always streams all 6.17 GB through
+SHA-256 from an `O_NOFOLLOW` regular-file descriptor, then reads safetensors slice metadata from
+that same still-open descriptor; it never materializes tensor payloads. Hugging Face snapshot
+symlinks are supported, but their target filenames are never treated as identity. Every tokenizer,
+normalizer, frontend, and generation asset required by the pinned snapshot is independently locked
+in `models/whisper-large-v2-source.json` through the same descriptor-bound validation path.
 
 ## Weight consumption and split
 
@@ -32,9 +34,12 @@ mis-shaped, or mis-typed entries before conversion.
 duplicating the 51,865 × 1,280 table.
 
 Cross K/V projection is part of the encoder artifact. The tested two-layer PyTorch reference
-precomputes it once, then produces one token at a time while growing self K/V state. Its logits
-match a monolithic causal decoder at every tested position, and instrumentation proves zero
-cross-projection calls inside `decode_step`.
+precomputes it once, explicitly loads it once, then produces one token at a time using indexed
+writes into fixed `[layers, batch, heads, 448, head_dim]` self K/V buffers. `position` and
+`cross_ready` are mutable Int32 tensors, matching the native ABI. Its logits match a monolithic
+causal decoder at every tested position, instrumentation proves zero cross-projection calls inside
+`decode_step`, reset clears every state tensor, slot 447 is writable, and token 449 is rejected
+without mutation.
 
 ## Selected CoreAI ABI
 
@@ -45,10 +50,13 @@ The production contract is `caix.whisper-split.v1` with strategy
 2. `load_cross_kv` exactly once per utterance/window
 3. `decode_step` once per generated token
 
-The encoder emits cross K/V as normal outputs. The host passes those tensors once to the
-decoder's `load_cross_kv` entrypoint. All following token steps read that decoder-owned cross
-state and mutate only self K/V (plus an identity mutation required by `coreai-torch` to classify
-cross K/V as state).
+The encoder emits cross K/V as normal outputs. The host allocates zeroed decoder state and passes
+the payloads once to `load_cross_kv`. The native loader adds each payload into its zeroed cross
+cache and increments `cross_ready` from zero to one. Additive loading is equivalent to copy under
+the enforced reset/load-once contract and avoids a CoreAI b2 runtime-compiler crash on full-state
+`copy_` or full-range slice replacement. All following token steps read decoder-owned cross state,
+perform indexed mutable-slice writes into self K/V, and increment `position`. Identity mutations
+keep read-only cross K/V and `cross_ready` addressable as CoreAI state.
 
 | Tensor | Dtype | Shape | Role |
 | --- | --- | --- | --- |
@@ -67,33 +75,37 @@ The cross caches occupy 234.375 MiB together. The self caches occupy 70 MiB toge
 CAIX must not persist features, audio, partial transcripts, final transcripts, or state tensors,
 and this ABI does not permit temporary audio files.
 
-## CoreAI state-sharing evidence
+## CoreAI three-entrypoint evidence
 
-Installed authoring stack during this proof:
+Successful authoring/runtime stack:
 
-- `coreai-core==1.0.0b1`
-- `coreai-torch==0.4.0`
+- `coreai-core==1.0.0b2`
+- `coreai-torch==0.4.1`
+- `coreai-opt==0.2.0`
 - `torch==2.9.0`
+- `transformers==4.57.6`
 
-`torch.export` plus the CoreAI decomposition pass proves the intended mutation signatures:
+The executable proof converts one AIProgram containing the actual ABI entrypoints:
 
-- `encode`: `cross_state`
-- `decode_step`: `cross_state`, `self_state`
+1. `encode(features) -> cross_key_payload, cross_value_payload`
+2. `load_cross_kv(payloads, state) -> load_marker`
+3. `decode_step(token, state) -> logits`
 
-A cross tensor that is only read cannot be named in `state_names`; `coreai-torch` rejects it with
-`Graph has 1 stateful inputs ... but state_names has 2 entries`. The identity mutation in
-`decode_step` is therefore part of the ABI, not an optimization accident.
+The graph-level mutation signatures are empty for `encode`; cross key, cross value, and
+`cross_ready` for `load_cross_kv`; and cross key, cross value, self key, self value, `position`, and
+`cross_ready` for `decode_step`. The native runtime proof calls the loader exactly once, calls the
+decoder twice, verifies logits `24.5` then `28.5`, verifies cross state remains loaded, verifies
+self K/V slots 0 and 1 contain the expected values while the remaining 446 slots are zero, and
+verifies `position == 2` and `cross_ready == 1`.
 
-Native compilation is blocked by the installed beta compiler. The subprocess-isolated two-
-entrypoint proof reaches CoreAI conversion, then aborts during versioned-IR conversion with
-`expected AICode versioned location` and `Failed to convert to versioned IR`. Apple's own
-single-entrypoint stateful control,
-`TestKVCache::test_coreai` from the installed `coreai-models` checkout, also exits with SIGABRT on
-the same stack. That control rules out CAIX's multi-entrypoint design as the cause.
+The older `coreai-core==1.0.0b1` / `coreai-torch==0.4.0` stack aborts during versioned-IR
+conversion. The gated test xfails only on that exact pair of compiler diagnostics; unrelated
+conversion, compilation, and runtime failures remain failures. On b2/0.4.1, Apple's unchanged
+`TestKVCache::test_coreai` control and CAIX's three-entrypoint proof both pass.
 
-The gated test records this exact blocker as xfail and removes job-scoped `.aimodel` directories
-from the parent process even when the compiler aborts. Once Apple updates the compiler stack, the
-same test becomes a normal runtime assertion automatically; unrelated failures remain failures.
+The test parent creates a unique probe directory and removes it in `finally`, so a compiler signal
+cannot strand `.aimodel` contents. The child also uses a scoped temporary asset during normal
+execution. Request audio, features, transcripts, and decoder state are never written by this ABI.
 
 ## Verification commands
 
@@ -111,7 +123,7 @@ pytest -q "$caix_whisper_root/python/tests/test_whisper_split_reference.py" \
   "$caix_whisper_root/python/tests/test_whisper_native_abi.py"
 
 CAIX_RUN_COREAI_STATE_PROOF=1 CAIX_COREAI_PROBE_TMP_ROOT=/Volumes/SSD/caix/.tmp \
-PYTHONPATH="$caix_whisper_root/python" \
-uv run --directory /Volumes/SSD/ai-dev/coreai-gemma4/vendor/coreai-models/python \
-pytest -q "$caix_whisper_root/python/tests/test_coreai_whisper_state_probe.py"
+PYTHONPATH="$caix_whisper_root/python:/Volumes/SSD/ai-dev/coreai-gemma4/vendor/coreai-models/python/src" \
+/Volumes/SSD/caix/.tmp/coreai-b2-probe-20260722/bin/python -m pytest -q \
+  "$caix_whisper_root/python/tests/test_coreai_whisper_state_probe.py"
 ```
