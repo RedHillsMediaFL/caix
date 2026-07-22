@@ -229,6 +229,33 @@ curl http://localhost:1237/v1/chat/completions -H 'content-type: application/jso
 }'
 ```
 
+### Resident Whisper large-v2
+
+A Core AI runtime-linked build can authenticate and keep one native Whisper large-v2 model loaded
+for the OpenAI-compatible transcription API. All three artifact paths are required; caix does not
+guess model or provenance inputs:
+
+```bash
+COREAI_DIRECT_RUNTIME=1 swift run caix serve \
+  --whisper-asset /path/to/whisper-large-v2-fp16-v2.aimodel \
+  --whisper-tokenizer /path/to/openai-whisper-large-v2-snapshot \
+  --resident-model-lock models/gemma4-whisper-lock.json \
+  --whisper-max-queued 8
+```
+
+Before specialization, caix requires green system memory pressure and at least 16 GiB available
+(the real verifier peaked at 11.73 GiB; the remainder is safety headroom). The asset and all
+tokenizer metadata are then authenticated against their pinned manifests before the server starts
+listening. Omit `--whisper-max-queued` for the default of eight waiting requests; use zero to reject
+immediately when native inference is busy. A standalone build fails at startup if any resident
+Whisper flags are supplied.
+
+```bash
+curl http://127.0.0.1:1237/v1/audio/transcriptions \
+  -F model=openai/whisper-large-v2 \
+  -F file=@sample.wav
+```
+
 ### OpenCode
 
 The repo includes `opencode.json` with a local `caix` OpenAI-compatible provider pointed at

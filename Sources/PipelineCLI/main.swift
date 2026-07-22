@@ -101,6 +101,13 @@ func printUsage() {
                                   Warm model before listening (default: smallest)
           --no-prewarm            Start serving without first-request compile warmup
           --no-conversion-guard   Allow generation while conversion is active
+          --whisper-asset <dir>   Authenticated Whisper large-v2 .aimodel directory
+          --whisper-tokenizer <dir>
+                                  Pinned Whisper tokenizer snapshot directory
+          --resident-model-lock <path>
+                                  Gemma/Whisper source provenance lock JSON
+          --whisper-max-queued <N>
+                                  Requests allowed to wait behind native Whisper (default: 8)
           --cluster <manifest>    Stage manifest for distributed coordinator mode
           --remote-stage <id>     Remote stage id; repeatable (default: all transformer stages)
           --prompt-tokens <list>  Comma-separated token ids for a staged POC request
@@ -712,6 +719,10 @@ func serveCommand(_ argv: [String]) {
     var statsFile: String? = nil   // usage-stats persistence (default ~/.caix/usage.json)
     var prewarm = "smallest"
     var conversionGuardEnabled = true
+    var whisperAsset: String? = nil
+    var whisperTokenizer: String? = nil
+    var residentModelLock: String? = nil
+    var whisperMaximumQueuedRequests: Int? = nil
     var clusterManifest: String? = nil
     var clusterOptions = ClusterRuntimeOptions()
     // EAGLE MTP model. Enabled by default with the known bundle paths; disable with --no-eagle,
@@ -757,6 +768,10 @@ func serveCommand(_ argv: [String]) {
         case "--prewarm": prewarm = value(arg)
         case "--no-prewarm": prewarm = "off"
         case "--no-conversion-guard": conversionGuardEnabled = false
+        case "--whisper-asset": whisperAsset = value(arg)
+        case "--whisper-tokenizer": whisperTokenizer = value(arg)
+        case "--resident-model-lock": residentModelLock = value(arg)
+        case "--whisper-max-queued": whisperMaximumQueuedRequests = intValue(arg)
         case "--cluster": clusterManifest = value(arg)
         case "--remote-stage": clusterOptions.remoteStageIDs.append(value(arg))
         case "--prompt-tokens":
@@ -792,6 +807,25 @@ func serveCommand(_ argv: [String]) {
         default: fail("unknown option: \(arg)")
         }
         i += 1
+    }
+
+    let whisperConfiguration: WhisperStartupConfiguration?
+    do {
+        whisperConfiguration = try WhisperStartupConfiguration.resolve(
+            assetPath: whisperAsset,
+            tokenizerPath: whisperTokenizer,
+            modelLockPath: residentModelLock,
+            maximumQueuedRequests: whisperMaximumQueuedRequests)
+    } catch {
+        fail("\(error)")
+    }
+
+    if clusterManifest != nil, whisperConfiguration != nil {
+        fail("resident Whisper options cannot be combined with --cluster")
+    }
+
+    if whisperConfiguration != nil, !CoreAIPipeline.isLinked {
+        fail("\(WhisperStartupConfiguration.ConfigurationError.runtimeUnavailable)")
     }
 
     if let clusterManifest {
@@ -848,6 +882,17 @@ func serveCommand(_ argv: [String]) {
     Task {
         defer { semaphore.signal() }
         do {
+            let whisperTranscriber: (any WhisperTranscribing)?
+            if let whisperConfiguration {
+                try WhisperStartupMemoryGate.validate(MachineStats.memorySafetySnapshot())
+                FileHandle.standardError.write(
+                    Data("authenticating and loading resident Whisper large-v2...\n".utf8))
+                whisperTranscriber = try await whisperConfiguration.loadResidentEngine()
+                FileHandle.standardError.write(
+                    Data("resident Whisper large-v2 loaded and ready\n".utf8))
+            } else {
+                whisperTranscriber = nil
+            }
             try await CoreAIServer.serve(
                 host: host,
                 port: port,
@@ -861,7 +906,8 @@ func serveCommand(_ argv: [String]) {
                 eagleConfig: eagleConfig,
                 statsFile: statsFile,
                 prewarm: prewarm,
-                conversionGuardEnabled: conversionGuardEnabled)
+                conversionGuardEnabled: conversionGuardEnabled,
+                whisperTranscriber: whisperTranscriber)
         } catch {
             FileHandle.standardError.write(Data("serve error: \(error)\n".utf8))
             exitCode = 1
