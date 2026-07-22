@@ -46,6 +46,7 @@ public enum CoreAIServer {
             eagleConfig: eagleConfig,
             conversionGuardEnabled: conversionGuardEnabled)
 
+        _ = await runtime.memorySupervisor.refresh()
         await runtime.prewarm(selection: prewarm)
 
         let router = Router()
@@ -81,6 +82,9 @@ public enum CoreAIServer {
         bonjour.start()
         defer { bonjour.stop() }
 
+        let memoryMonitor = Task { await runtime.monitorResidentMemory() }
+        defer { memoryMonitor.cancel() }
+
         try await app.runService()
     }
 }
@@ -104,6 +108,7 @@ final class ServerRuntime: Sendable {
     let shellHTML: String
     let verbose: Bool
     let conversionGuard: ConversionGuard
+    let memorySupervisor: ResidentMemorySupervisor
     var userAgent: String { "caix/\(caixVersion)" }
 
     init(
@@ -128,6 +133,7 @@ final class ServerRuntime: Sendable {
         self.conversionGuard = ConversionGuard(
             enabled: conversionGuardEnabled,
             lockPaths: ConversionGuard.defaultLockPaths(exportsDir: exportsDir))
+        self.memorySupervisor = ResidentMemorySupervisor()
         let indexURL = webDir.appendingPathComponent("index.html")
         self.indexHTML =
             (try? String(contentsOf: indexURL, encoding: .utf8))
@@ -146,6 +152,15 @@ final class ServerRuntime: Sendable {
         let selection = rawSelection.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard selection != "off", selection != "none", selection != "false", selection != "no" else {
             FileHandle.standardError.write(Data("[serve] prewarm skipped\n".utf8))
+            return
+        }
+        let memoryStatus = await memorySupervisor.refresh()
+        guard memoryStatus.permitsInference else {
+            FileHandle.standardError.write(
+                Data(
+                    "[serve] prewarm skipped: resident memory gate is \(memoryStatus.disposition.rawValue)"
+                        .appending(memoryStatus.reason.map { " (\($0))" } ?? "")
+                        .appending("\n").utf8))
             return
         }
         if let decision = conversionGuard.decision() {
@@ -225,6 +240,13 @@ final class ServerRuntime: Sendable {
 
         // Dashboard API
         router.get("/api/stats") { _, _ in JSONResponder.encode(MachineStats.snapshot()) }
+        router.get("/healthz") { _, _ in
+            JSONResponder.encode(["status": "ok"])
+        }
+        router.get("/readyz") { _, _ in await self.readinessHandler() }
+        router.get("/api/memory") { _, _ in
+            JSONResponder.encode(await self.memorySupervisor.refresh())
+        }
         router.get("/api/models") { _, _ in JSONResponder.encode(await self.manager.listModels()) }
         router.get("/api/jobs") { _, _ in JSONResponder.encode(await self.jobs.snapshot()) }
         router.get("/api/server") { _, _ in await self.serverInfoHandler() }
@@ -260,6 +282,11 @@ final class ServerRuntime: Sendable {
 
     private func loadHandler(_ request: Request, _ context: BasicRequestContext) async throws -> Response {
         let started = Date()
+        if let response = await residentMemoryGuardResponse(
+            method: "POST", path: "/api/load", startedAt: started)
+        {
+            return response
+        }
         guard let body = try? await Self.decode(ModelActionRequest.self, request) else {
             await activity.record(
                 method: "POST", path: "/api/load", status: 400, startedAt: started,
@@ -1157,6 +1184,11 @@ final class ServerRuntime: Sendable {
 
     private func openAIChatHandler(_ request: Request, _ context: BasicRequestContext) async throws -> Response {
         let started = Date()
+        if let response = await residentMemoryGuardResponse(
+            method: "POST", path: "/v1/chat/completions", startedAt: started)
+        {
+            return response
+        }
         if let response = await conversionGuardResponse(
             method: "POST", path: "/v1/chat/completions", startedAt: started) {
             return response
@@ -1266,6 +1298,11 @@ final class ServerRuntime: Sendable {
 
     private func anthropicMessagesHandler(_ request: Request, _ context: BasicRequestContext) async throws -> Response {
         let started = Date()
+        if let response = await residentMemoryGuardResponse(
+            method: "POST", path: "/v1/messages", startedAt: started)
+        {
+            return response
+        }
         if let response = await conversionGuardResponse(
             method: "POST", path: "/v1/messages", startedAt: started) {
             return response
@@ -1355,6 +1392,67 @@ final class ServerRuntime: Sendable {
             startedAt: startedAt,
             summary: "generation blocked: \(decision.reason)")
         return JSONResponder.conversionActive(decision)
+    }
+
+    private func residentMemoryGuardResponse(
+        method: String,
+        path: String,
+        startedAt: Date
+    ) async -> Response? {
+        let status = await memorySupervisor.refresh()
+        guard !status.permitsInference else { return nil }
+        let reason = status.reason ?? "unspecified"
+        await activity.record(
+            method: method,
+            path: path,
+            status: 503,
+            startedAt: startedAt,
+            summary: "resident memory gate \(status.disposition.rawValue): \(reason)")
+        var headers = HTTPFields()
+        headers[.retryAfter] = status.disposition == .restart ? "30" : "2"
+        return JSONResponder.encode(
+            [
+                "error": [
+                    "message": JSONValue.string(
+                        "resident model service is \(status.disposition.rawValue); retry after memory recovers"),
+                    "type": JSONValue.string("resident_memory_gate"),
+                    "reason": JSONValue.string(reason),
+                ]
+            ] as [String: [String: JSONValue]],
+            status: .serviceUnavailable,
+            headers: headers)
+    }
+
+    private func readinessHandler() async -> Response {
+        let status = await memorySupervisor.refresh()
+        return JSONResponder.encode(
+            status,
+            status: status.permitsInference ? .ok : .serviceUnavailable)
+    }
+
+    func monitorResidentMemory() async {
+        var lastState = ""
+        while !Task.isCancelled {
+            let status = await memorySupervisor.refresh()
+            let state = status.disposition.rawValue + ":" + (status.reason ?? "")
+            if state != lastState {
+                FileHandle.standardError.write(
+                    Data(
+                        "[memory] \(state) resident=\(status.workerResidentBytes) available=\(status.availableBytes) swap_growth=\(status.swapGrowthBytes)\n"
+                            .utf8))
+                lastState = state
+            }
+            if status.disposition == .restart {
+                FileHandle.standardError.write(
+                    Data("[memory] hard resident limit reached; terminating for supervised restart\n".utf8))
+                exit(75)
+            }
+            do {
+                try await Task.sleep(for: .seconds(2))
+            } catch {
+                return
+            }
+        }
     }
 
     private static func nonStreamingFirstTokenSeconds(

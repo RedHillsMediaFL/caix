@@ -38,6 +38,22 @@ public struct MachineMemorySafetySnapshot: Codable, Sendable, Equatable {
     public var processPhysicalFootprintBytes: UInt64
     public var pressure: MachineMemoryPressure
     public var swapUsedBytes: UInt64?
+
+    public init(
+        totalRAMBytes: UInt64,
+        usedRAMBytes: UInt64,
+        availableRAMBytes: UInt64,
+        processPhysicalFootprintBytes: UInt64,
+        pressure: MachineMemoryPressure,
+        swapUsedBytes: UInt64?
+    ) {
+        self.totalRAMBytes = totalRAMBytes
+        self.usedRAMBytes = usedRAMBytes
+        self.availableRAMBytes = availableRAMBytes
+        self.processPhysicalFootprintBytes = processPhysicalFootprintBytes
+        self.pressure = pressure
+        self.swapUsedBytes = swapUsedBytes
+    }
 }
 
 /// Native host telemetry via sysctl / mach host_statistics64 / IOAccelerator.
