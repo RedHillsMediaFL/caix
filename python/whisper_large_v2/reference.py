@@ -285,8 +285,10 @@ class TinyWhisperReference(nn.Module):
         if int(state.cross_ready.item()) != 1:
             raise DecoderStateError("load_cross_kv must run before decode_step")
         position_index = int(state.position.item())
+        if position_index < 0:
+            raise DecoderStateError("decoder position must be nonnegative")
         if position_index >= WHISPER_DECODER_CACHE_CAPACITY:
-            raise DecoderStateError("decoder state exceeds 448-token capacity")
+            raise DecoderStateError("decoder position exceeds 448-token capacity")
 
         position = state.position.to(device=token_id.device, dtype=torch.long)
         hidden = self.token_embedding(token_id) + self.decoder_positions(position).unsqueeze(0)

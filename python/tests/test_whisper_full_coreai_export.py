@@ -44,6 +44,15 @@ def test_minimal_split_whisper_compiles_and_executes_all_three_entrypoints() -> 
     assert result["entrypoints"] == ["decode_step", "encode", "load_cross_kv"]
     assert result["position"] == [2]
     assert result["cross_ready"] == [1]
+    assert result["load_status"] == [1]
+    assert result["decode_statuses"] == [[1], [1]]
+    assert result["invalid_decode_before_load_status"] == [0]
+    assert result["invalid_decode_before_load_zero_logits"] is True
+    assert result["invalid_decode_before_load_state_unchanged"] is True
+    assert result["invalid_second_load_status"] == [0]
+    assert result["invalid_second_load_state_unchanged"] is True
+    assert result["invalid_position_statuses"] == [[0], [0], [0], [0]]
+    assert result["invalid_position_state_unchanged"] == [True, True, True, True]
     assert result["self_key_tail_nonzero"] == 0
     assert result["self_value_tail_nonzero"] == 0
     assert result["max_encode_key_error"] < 1e-4

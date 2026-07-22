@@ -23,6 +23,8 @@ class NativeWhisperABI:
     load_cross_kv_calls_per_utterance: int
     cross_projection_calls_per_utterance: int
     cross_projection_calls_per_decode_step: int
+    success_status: int
+    invalid_state_status: int
     persists_request_content: bool
     allows_temporary_audio_files: bool
 
@@ -30,7 +32,7 @@ class NativeWhisperABI:
     def large_v2(cls) -> NativeWhisperABI:
         """Return the immutable ABI selected from the converter/runtime evidence."""
         return cls(
-            schema="caix.whisper-split.v1",
+            schema="caix.whisper-split.v2",
             strategy="explicit_cross_kv_bridge",
             call_order=("encode", "load_cross_kv", "decode_step*"),
             entrypoints=MappingProxyType(
@@ -50,12 +52,16 @@ class NativeWhisperABI:
                     "token_id": TensorABI("int32", (1, 1)),
                     "position": TensorABI("int32", (1,)),
                     "cross_ready": TensorABI("int32", (1,)),
+                    "load_status": TensorABI("int32", (1,)),
                     "logits": TensorABI("float16", (1, 1, 51_865)),
+                    "decode_status": TensorABI("int32", (1,)),
                 }
             ),
             load_cross_kv_calls_per_utterance=1,
             cross_projection_calls_per_utterance=1,
             cross_projection_calls_per_decode_step=0,
+            success_status=1,
+            invalid_state_status=0,
             persists_request_content=False,
             allows_temporary_audio_files=False,
         )

@@ -11,6 +11,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 from torch import nn
 
@@ -40,13 +41,17 @@ class ExplicitLoadCrossKV(nn.Module):
         cross_value_cache: torch.Tensor,
         cross_ready: torch.Tensor,
     ) -> torch.Tensor:
-        cross_key_cache.add_(cross_key_payload)
-        cross_value_cache.add_(cross_value_payload)
-        cross_ready.add_(1)
-        return (
-            cross_key_payload[..., 0, :].reshape(1, 1)
-            + cross_value_payload[..., 0, :].reshape(1, 1)
+        valid = cross_ready == 0
+        status = valid.to(dtype=torch.int32)
+        mask = valid.reshape((1, 1, 1, 1, 1))
+        cross_key_cache.add_(
+            torch.where(mask, cross_key_payload, torch.zeros_like(cross_key_payload))
         )
+        cross_value_cache.add_(
+            torch.where(mask, cross_value_payload, torch.zeros_like(cross_value_payload))
+        )
+        cross_ready.add_(status)
+        return status.clone()
 
 
 class ExplicitDecodeStep(nn.Module):
@@ -61,38 +66,61 @@ class ExplicitDecodeStep(nn.Module):
         self_value_cache: torch.Tensor,
         position: torch.Tensor,
         cross_ready: torch.Tensor,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        valid = (
+            (cross_ready == 1)
+            & (position >= 0)
+            & (position < WHISPER_DECODER_CACHE_CAPACITY)
+        )
+        status = valid.to(dtype=torch.int32)
+        safe_position = position.clamp(0, WHISPER_DECODER_CACHE_CAPACITY - 1)
         cross_key_cache.add_(0.0)
         cross_value_cache.add_(0.0)
         new_key = (token + 1.0).reshape((1, 1, 1, 1, 1))
         new_value = (token + 2.0).reshape((1, 1, 1, 1, 1))
+        existing_key = torch.index_select(
+            self_key_cache,
+            dim=-2,
+            index=safe_position.to(dtype=torch.int64),
+        )
+        existing_value = torch.index_select(
+            self_value_cache,
+            dim=-2,
+            index=safe_position.to(dtype=torch.int64),
+        )
+        selected_key = torch.where(valid.reshape((1, 1, 1, 1, 1)), new_key, existing_key)
+        selected_value = torch.where(
+            valid.reshape((1, 1, 1, 1, 1)),
+            new_value,
+            existing_value,
+        )
         zero = torch.zeros((1,), dtype=torch.int32, device=token.device)
         one = torch.ones((1,), dtype=torch.int32, device=token.device)
-        begin = torch.cat((zero, zero, zero, position, zero))
-        end = torch.cat((one, one, one, position + one, one))
+        begin = torch.cat((zero, zero, zero, safe_position, zero))
+        end = torch.cat((one, one, one, safe_position + one, one))
         mutable_slice_update(
             x=self_key_cache,
-            update=new_key,
+            update=selected_key,
             begin=begin,
             end=end,
         )
         mutable_slice_update(
             x=self_value_cache,
-            update=new_value,
+            update=selected_value,
             begin=begin,
             end=end,
         )
-        ready = cross_ready.to(dtype=token.dtype).reshape((1, 1))
-        output = ready * (
+        output = (
             token
             + cross_key_cache.sum().reshape((1, 1))
             + cross_value_cache.sum().reshape((1, 1))
             + self_key_cache.sum().reshape((1, 1))
             + self_value_cache.sum().reshape((1, 1))
         )
-        position.add_(1)
+        output = torch.where(valid.reshape((1, 1)), output, torch.zeros_like(output))
+        position.add_(status)
         cross_ready.add_(0)
-        return output
+        return output, status.clone()
 
 
 class StateContractError(RuntimeError):
@@ -160,7 +188,7 @@ class ExplicitFallbackSession:
         self.load_cross_kv_calls += 1
         return marker
 
-    def decode_step(self, token: torch.Tensor) -> torch.Tensor:
+    def decode_step(self, token: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         if self.load_cross_kv_calls != 1 or self.state.cross_ready.tolist() != [1]:
             raise StateContractError("load_cross_kv must run before decode_step")
         if int(self.state.position.item()) >= WHISPER_DECODER_CACHE_CAPACITY:
@@ -199,8 +227,16 @@ class CoreAIStateProbeResult:
     load_cross_kv_calls: int
     encode_cross_keys: list[float]
     encode_cross_values: list[float]
-    load_marker: list[list[float]]
+    load_status: list[int]
     decode_outputs: list[list[list[float]]]
+    decode_statuses: list[list[int]]
+    invalid_decode_before_load_status: list[int]
+    invalid_decode_before_load_zero_logits: bool
+    invalid_decode_before_load_state_unchanged: bool
+    invalid_second_load_status: list[int]
+    invalid_second_load_state_unchanged: bool
+    invalid_position_statuses: list[list[int]]
+    invalid_position_state_unchanged: list[bool]
     cross_key_state: list[float]
     cross_value_state: list[float]
     self_key_prefix: list[float]
@@ -258,7 +294,7 @@ async def _run_coreai_state_probe(temp_root: Path) -> CoreAIStateProbeResult:
             },
         ),
         input_names=("cross_key_payload", "cross_value_payload"),
-        output_names=("load_marker",),
+        output_names=("load_status",),
         state_names=("cross_key_cache", "cross_value_cache", "cross_ready"),
         entrypoint_name="load_cross_kv",
     )
@@ -276,7 +312,7 @@ async def _run_coreai_state_probe(temp_root: Path) -> CoreAIStateProbeResult:
             },
         ),
         input_names=("token",),
-        output_names=("logits",),
+        output_names=("logits", "decode_status"),
         state_names=(
             "cross_key_cache",
             "cross_value_cache",
@@ -301,14 +337,44 @@ async def _run_coreai_state_probe(temp_root: Path) -> CoreAIStateProbeResult:
             encode = executable.load_function("encode")
             load_cross_kv = executable.load_function("load_cross_kv")
             decode_step = executable.load_function("decode_step")
-            runtime_state = {
-                "cross_key_cache": NDArray(data=state.cross_key_cache),
-                "cross_value_cache": NDArray(data=state.cross_value_cache),
-                "self_key_cache": NDArray(data=state.self_key_cache),
-                "self_value_cache": NDArray(data=state.self_value_cache),
-                "position": NDArray(data=state.position),
-                "cross_ready": NDArray(data=state.cross_ready),
-            }
+            def runtime_state_from(source: ProbeDecoderState) -> dict[str, Any]:
+                return {
+                    "cross_key_cache": NDArray(data=source.cross_key_cache),
+                    "cross_value_cache": NDArray(data=source.cross_value_cache),
+                    "self_key_cache": NDArray(data=source.self_key_cache),
+                    "self_value_cache": NDArray(data=source.self_value_cache),
+                    "position": NDArray(data=source.position),
+                    "cross_ready": NDArray(data=source.cross_ready),
+                }
+
+            def snapshot(runtime_state: Mapping[str, Any]) -> dict[str, np.ndarray]:
+                return {
+                    name: np.array(value.numpy(), copy=True)
+                    for name, value in runtime_state.items()
+                }
+
+            def state_matches(
+                runtime_state: Mapping[str, Any],
+                expected: Mapping[str, np.ndarray],
+            ) -> bool:
+                return all(
+                    np.array_equal(runtime_state[name].numpy(), value)
+                    for name, value in expected.items()
+                )
+
+            invalid_before_load_source = ProbeDecoderState.zeros()
+            invalid_before_load_source.cross_key_cache.fill_(1.25)
+            invalid_before_load_source.cross_value_cache.fill_(-2.5)
+            invalid_before_load_source.self_key_cache.fill_(3.75)
+            invalid_before_load_source.self_value_cache.fill_(-4.5)
+            invalid_before_load_state = runtime_state_from(invalid_before_load_source)
+            invalid_before_load_snapshot = snapshot(invalid_before_load_state)
+            invalid_before_load = await decode_step(
+                {"token": NDArray(data=token)},
+                state=invalid_before_load_state,
+            )
+
+            runtime_state = runtime_state_from(state)
             encoded = await encode({"features": NDArray(data=features)})
             loaded = await load_cross_kv(
                 {
@@ -321,6 +387,19 @@ async def _run_coreai_state_probe(temp_root: Path) -> CoreAIStateProbeResult:
                     "cross_ready": runtime_state["cross_ready"],
                 },
             )
+            before_second_load = snapshot(runtime_state)
+            second_load = await load_cross_kv(
+                {
+                    "cross_key_payload": encoded["cross_key_payload"],
+                    "cross_value_payload": encoded["cross_value_payload"],
+                },
+                state={
+                    "cross_key_cache": runtime_state["cross_key_cache"],
+                    "cross_value_cache": runtime_state["cross_value_cache"],
+                    "cross_ready": runtime_state["cross_ready"],
+                },
+            )
+            second_load_unchanged = state_matches(runtime_state, before_second_load)
             first = await decode_step(
                 {"token": NDArray(data=token)},
                 state=runtime_state,
@@ -329,6 +408,30 @@ async def _run_coreai_state_probe(temp_root: Path) -> CoreAIStateProbeResult:
                 {"token": NDArray(data=token)},
                 state=runtime_state,
             )
+
+            invalid_position_statuses: list[list[int]] = []
+            invalid_position_state_unchanged: list[bool] = []
+            for readiness, position in ((-1, 0), (2, 0), (1, -1), (1, 448)):
+                invalid_source = ProbeDecoderState.zeros()
+                invalid_source.cross_key_cache.fill_(1.0)
+                invalid_source.cross_value_cache.fill_(2.0)
+                invalid_source.self_key_cache.fill_(3.0)
+                invalid_source.self_value_cache.fill_(4.0)
+                invalid_source.cross_ready.fill_(readiness)
+                invalid_source.position.fill_(position)
+                invalid_state = runtime_state_from(invalid_source)
+                invalid_snapshot = snapshot(invalid_state)
+                invalid_output = await decode_step(
+                    {"token": NDArray(data=token)},
+                    state=invalid_state,
+                )
+                invalid_position_statuses.append(
+                    invalid_output["decode_status"].numpy().reshape(-1).tolist()
+                )
+                invalid_position_state_unchanged.append(
+                    state_matches(invalid_state, invalid_snapshot)
+                )
+
             self_keys = runtime_state["self_key_cache"].numpy()
             self_values = runtime_state["self_value_cache"].numpy()
             return CoreAIStateProbeResult(
@@ -337,11 +440,35 @@ async def _run_coreai_state_probe(temp_root: Path) -> CoreAIStateProbeResult:
                 load_cross_kv_calls=1,
                 encode_cross_keys=encoded["cross_key_payload"].numpy().reshape(-1).tolist(),
                 encode_cross_values=encoded["cross_value_payload"].numpy().reshape(-1).tolist(),
-                load_marker=loaded["load_marker"].numpy().tolist(),
+                load_status=loaded["load_status"].numpy().reshape(-1).tolist(),
                 decode_outputs=[
                     first["logits"].numpy().tolist(),
                     second["logits"].numpy().tolist(),
                 ],
+                decode_statuses=[
+                    first["decode_status"].numpy().reshape(-1).tolist(),
+                    second["decode_status"].numpy().reshape(-1).tolist(),
+                ],
+                invalid_decode_before_load_status=invalid_before_load[
+                    "decode_status"
+                ]
+                .numpy()
+                .reshape(-1)
+                .tolist(),
+                invalid_decode_before_load_zero_logits=bool(
+                    np.count_nonzero(invalid_before_load["logits"].numpy()) == 0
+                ),
+                invalid_decode_before_load_state_unchanged=state_matches(
+                    invalid_before_load_state,
+                    invalid_before_load_snapshot,
+                ),
+                invalid_second_load_status=second_load["load_status"]
+                .numpy()
+                .reshape(-1)
+                .tolist(),
+                invalid_second_load_state_unchanged=second_load_unchanged,
+                invalid_position_statuses=invalid_position_statuses,
+                invalid_position_state_unchanged=invalid_position_state_unchanged,
                 cross_key_state=runtime_state["cross_key_cache"]
                 .numpy()
                 .reshape(-1)

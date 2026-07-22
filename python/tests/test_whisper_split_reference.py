@@ -136,3 +136,39 @@ def test_last_cache_slot_is_indexed_then_overflow_is_rejected_without_mutation()
     assert state.position.tolist() == [448]
     torch.testing.assert_close(state.self_keys, keys_at_capacity)
     torch.testing.assert_close(state.self_values, values_at_capacity)
+
+
+def test_invalid_readiness_and_position_leave_reference_state_exactly_unchanged() -> None:
+    reference = importlib.import_module("whisper_large_v2.reference")
+    model, features, token_ids = _fixture()
+    payload = model.encode_cross_kv(features)
+
+    for readiness, position, message in (
+        (-1, 0, "load_cross_kv"),
+        (2, 0, "load_cross_kv"),
+        (1, -1, "decoder position"),
+        (1, 448, "decoder position"),
+    ):
+        state = model.new_decoder_state(features)
+        model.load_cross_kv(payload, state)
+        state.self_keys.uniform_(-1, 1)
+        state.self_values.uniform_(-1, 1)
+        state.cross_ready.fill_(readiness)
+        state.position.fill_(position)
+        before = {
+            name: getattr(state, name).clone()
+            for name in (
+                "cross_keys",
+                "cross_values",
+                "self_keys",
+                "self_values",
+                "position",
+                "cross_ready",
+            )
+        }
+
+        with pytest.raises(reference.DecoderStateError, match=message):
+            model.decode_step(token_ids[:, :1], state)
+
+        for name, expected in before.items():
+            assert torch.equal(getattr(state, name), expected), name

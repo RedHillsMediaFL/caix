@@ -322,7 +322,7 @@ def export_pinned_large_v2(
         "entrypoints": ["encode", "load_cross_kv", "decode_step"],
         "output": str(output.resolve()),
         "peak_resident_bytes": _peak_resident_bytes(),
-        "schema": "caix.whisper-split.v1",
+        "schema": "caix.whisper-split.v2",
     }
 
 
@@ -338,7 +338,7 @@ def _dry_run_payload(
         "output": str(output),
         "repository": contract.repository,
         "revision": contract.revision,
-        "schema": "caix.whisper-split.v1",
+        "schema": "caix.whisper-split.v2",
         "tensor_count": plan.tensor_count,
     }
 

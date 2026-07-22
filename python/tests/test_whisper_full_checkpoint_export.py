@@ -85,7 +85,7 @@ def test_pinned_cli_dry_run_reports_identity_and_does_not_create_output(
         "output": str(output),
         "repository": "openai/whisper-large-v2",
         "revision": "ae4642769ce2ad8fc292556ccea8e901f1530655",
-        "schema": "caix.whisper-split.v1",
+        "schema": "caix.whisper-split.v2",
         "tensor_count": 1_259,
     }
     assert not output.exists()

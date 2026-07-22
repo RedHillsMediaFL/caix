@@ -86,12 +86,21 @@ class WhisperLoadCrossKV(nn.Module):
         cross_value_cache: torch.Tensor,
         cross_ready: torch.Tensor,
     ) -> torch.Tensor:
-        # CoreAI b2 reliably lowers additive state initialization. The host
-        # enforces zeroed state and a single load per audio window.
-        cross_key_cache.add_(cross_key_payload)
-        cross_value_cache.add_(cross_value_payload)
-        cross_ready.add_(1)
-        return cross_ready.clone()
+        valid = cross_ready == 0
+        status = valid.to(dtype=torch.int32)
+        cache_mask = valid.reshape((1, 1, 1, 1, 1))
+
+        # CoreAI b2 reliably lowers additive state initialization. Masking the
+        # payload makes a repeated load an exact no-op for ordinary finite
+        # cache values while keeping the state transition inside the graph.
+        cross_key_cache.add_(
+            torch.where(cache_mask, cross_key_payload, torch.zeros_like(cross_key_payload))
+        )
+        cross_value_cache.add_(
+            torch.where(cache_mask, cross_value_payload, torch.zeros_like(cross_value_payload))
+        )
+        cross_ready.add_(status)
+        return status.clone()
 
 
 class _WhisperDecodeLayer(nn.Module):
@@ -163,7 +172,18 @@ class WhisperDecodeStep(nn.Module):
         *,
         layer_index: int,
         position: torch.Tensor,
+        valid: torch.Tensor,
     ) -> None:
+        existing = torch.index_select(
+            cache[layer_index],
+            dim=-2,
+            index=position.to(dtype=torch.int64),
+        )
+        selected_update = torch.where(
+            valid.reshape((1, 1, 1, 1)),
+            update,
+            existing,
+        )
         device = update.device
         begin = torch.cat(
             (
@@ -183,7 +203,7 @@ class WhisperDecodeStep(nn.Module):
         )
         mutable_slice_update(
             x=cache,
-            update=update.unsqueeze(0),
+            update=selected_update.unsqueeze(0),
             begin=begin,
             end=end,
         )
@@ -197,7 +217,15 @@ class WhisperDecodeStep(nn.Module):
         self_value_cache: torch.Tensor,
         position: torch.Tensor,
         cross_ready: torch.Tensor,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        valid = (
+            (cross_ready == 1)
+            & (position >= 0)
+            & (position < WHISPER_DECODER_CACHE_CAPACITY)
+        )
+        status = valid.to(dtype=torch.int32)
+        safe_position = position.clamp(0, WHISPER_DECODER_CACHE_CAPACITY - 1)
+
         # Identity mutations retain read-only decoder session values as CoreAI
         # state alongside the genuinely mutable self cache and position.
         cross_key_cache.add_(0.0)
@@ -205,9 +233,9 @@ class WhisperDecodeStep(nn.Module):
         cross_ready.add_(0)
 
         token_hidden = self.embed_tokens(token_id)
-        position_hidden = F.embedding(position, self.embed_positions.weight).unsqueeze(0)
+        position_hidden = F.embedding(safe_position, self.embed_positions.weight).unsqueeze(0)
         hidden = token_hidden + position_hidden
-        self_mask = (self.cache_positions <= position).reshape(1, 1, 1, -1)
+        self_mask = (self.cache_positions <= safe_position).reshape(1, 1, 1, -1)
 
         for index, layer in enumerate(self.layers):
             residual = hidden
@@ -219,13 +247,15 @@ class WhisperDecodeStep(nn.Module):
                 self_key_cache,
                 new_key,
                 layer_index=index,
-                position=position,
+                position=safe_position,
+                valid=valid,
             )
             self._update_cache(
                 self_value_cache,
                 new_value,
                 layer_index=index,
-                position=position,
+                position=safe_position,
+                valid=valid,
             )
             self_output = self._attend(
                 query,
@@ -244,7 +274,7 @@ class WhisperDecodeStep(nn.Module):
                 cross_key_cache[index],
                 cross_value_cache[index],
                 layer.cross_out_proj,
-                (cross_ready > 0).reshape(1, 1, 1, 1),
+                valid.reshape(1, 1, 1, 1),
             )
             hidden = residual + cross_output
 
@@ -252,9 +282,11 @@ class WhisperDecodeStep(nn.Module):
             hidden = layer.fc2(layer.activation(layer.fc1(layer.final_layer_norm(hidden))))
             hidden = residual + hidden
 
-        position.add_(1)
+        position.add_(status)
         hidden = self.layer_norm(hidden)
-        return F.linear(hidden, self.embed_tokens.weight)
+        logits = F.linear(hidden, self.embed_tokens.weight)
+        logits = torch.where(valid.reshape((1, 1, 1)), logits, torch.zeros_like(logits))
+        return logits, status.clone()
 
 
 @dataclass(frozen=True)
@@ -366,7 +398,7 @@ def create_coreai_program(
             },
         ),
         input_names=("cross_key_payload", "cross_value_payload"),
-        output_names=("load_marker",),
+        output_names=("load_status",),
         state_names=("cross_key_cache", "cross_value_cache", "cross_ready"),
         entrypoint_name="load_cross_kv",
     )
@@ -384,7 +416,7 @@ def create_coreai_program(
             },
         ),
         input_names=("token_id",),
-        output_names=("logits",),
+        output_names=("logits", "decode_status"),
         state_names=(
             "cross_key_cache",
             "cross_value_cache",
@@ -456,7 +488,7 @@ async def _run_minimal_coreai_probe(temp_root: Path) -> dict[str, Any]:
             expected_state.cross_value_cache,
             expected_state.cross_ready,
         )
-        expected_logits = [
+        expected_steps = [
             split.decode_step(
                 token,
                 expected_state.cross_key_cache,
@@ -468,6 +500,7 @@ async def _run_minimal_coreai_probe(temp_root: Path) -> dict[str, Any]:
             )
             for token in tokens
         ]
+        expected_logits = [logits for logits, _ in expected_steps]
 
     program = create_coreai_program(
         split,
@@ -485,16 +518,46 @@ async def _run_minimal_coreai_probe(temp_root: Path) -> dict[str, Any]:
             encode = executable.load_function("encode")
             load_cross_kv = executable.load_function("load_cross_kv")
             decode_step = executable.load_function("decode_step")
-            runtime_state = {
-                "cross_key_cache": NDArray(data=state.cross_key_cache),
-                "cross_value_cache": NDArray(data=state.cross_value_cache),
-                "self_key_cache": NDArray(data=state.self_key_cache),
-                "self_value_cache": NDArray(data=state.self_value_cache),
-                "position": NDArray(data=state.position),
-                "cross_ready": NDArray(data=state.cross_ready),
-            }
+            def runtime_state_from(source: WhisperRuntimeState) -> dict[str, Any]:
+                return {
+                    "cross_key_cache": NDArray(data=source.cross_key_cache),
+                    "cross_value_cache": NDArray(data=source.cross_value_cache),
+                    "self_key_cache": NDArray(data=source.self_key_cache),
+                    "self_value_cache": NDArray(data=source.self_value_cache),
+                    "position": NDArray(data=source.position),
+                    "cross_ready": NDArray(data=source.cross_ready),
+                }
+
+            def snapshot(runtime_state: dict[str, Any]) -> dict[str, np.ndarray]:
+                return {
+                    name: np.array(value.numpy(), copy=True)
+                    for name, value in runtime_state.items()
+                }
+
+            def state_matches(
+                runtime_state: dict[str, Any],
+                expected: dict[str, np.ndarray],
+            ) -> bool:
+                return all(
+                    np.array_equal(runtime_state[name].numpy(), value)
+                    for name, value in expected.items()
+                )
+
+            invalid_before_load_source = split.new_state(dtype=torch.float32)
+            invalid_before_load_source.cross_key_cache.fill_(1.25)
+            invalid_before_load_source.cross_value_cache.fill_(-2.5)
+            invalid_before_load_source.self_key_cache.fill_(3.75)
+            invalid_before_load_source.self_value_cache.fill_(-4.5)
+            invalid_before_load_state = runtime_state_from(invalid_before_load_source)
+            invalid_before_load_snapshot = snapshot(invalid_before_load_state)
+            invalid_before_load = await decode_step(
+                {"token_id": NDArray(data=tokens[0])},
+                state=invalid_before_load_state,
+            )
+
+            runtime_state = runtime_state_from(state)
             encoded = await encode({"input_features": NDArray(data=features)})
-            await load_cross_kv(
+            loaded = await load_cross_kv(
                 {
                     "cross_key_payload": encoded["cross_key_payload"],
                     "cross_value_payload": encoded["cross_value_payload"],
@@ -505,13 +568,53 @@ async def _run_minimal_coreai_probe(temp_root: Path) -> dict[str, Any]:
                     "cross_ready": runtime_state["cross_ready"],
                 },
             )
+            before_second_load = snapshot(runtime_state)
+            second_load = await load_cross_kv(
+                {
+                    "cross_key_payload": encoded["cross_key_payload"],
+                    "cross_value_payload": encoded["cross_value_payload"],
+                },
+                state={
+                    "cross_key_cache": runtime_state["cross_key_cache"],
+                    "cross_value_cache": runtime_state["cross_value_cache"],
+                    "cross_ready": runtime_state["cross_ready"],
+                },
+            )
+            second_load_unchanged = state_matches(runtime_state, before_second_load)
             actual_logits = []
+            decode_statuses = []
             for token in tokens:
                 output = await decode_step(
                     {"token_id": NDArray(data=token)},
                     state=runtime_state,
                 )
                 actual_logits.append(output["logits"].numpy())
+                decode_statuses.append(
+                    output["decode_status"].numpy().reshape(-1).tolist()
+                )
+
+            invalid_position_statuses: list[list[int]] = []
+            invalid_position_state_unchanged: list[bool] = []
+            for readiness, position in ((-1, 0), (2, 0), (1, -1), (1, 448)):
+                invalid_source = split.new_state(dtype=torch.float32)
+                invalid_source.cross_key_cache.fill_(1.0)
+                invalid_source.cross_value_cache.fill_(2.0)
+                invalid_source.self_key_cache.fill_(3.0)
+                invalid_source.self_value_cache.fill_(4.0)
+                invalid_source.cross_ready.fill_(readiness)
+                invalid_source.position.fill_(position)
+                invalid_state = runtime_state_from(invalid_source)
+                invalid_snapshot = snapshot(invalid_state)
+                invalid_output = await decode_step(
+                    {"token_id": NDArray(data=tokens[0])},
+                    state=invalid_state,
+                )
+                invalid_position_statuses.append(
+                    invalid_output["decode_status"].numpy().reshape(-1).tolist()
+                )
+                invalid_position_state_unchanged.append(
+                    state_matches(invalid_state, invalid_snapshot)
+                )
 
             actual_keys = encoded["cross_key_payload"].numpy()
             actual_values = encoded["cross_value_payload"].numpy()
@@ -525,6 +628,28 @@ async def _run_minimal_coreai_probe(temp_root: Path) -> dict[str, Any]:
             return {
                 "call_order": ["encode", "load_cross_kv", "decode_step", "decode_step"],
                 "entrypoints": ["decode_step", "encode", "load_cross_kv"],
+                "load_status": loaded["load_status"].numpy().reshape(-1).tolist(),
+                "decode_statuses": decode_statuses,
+                "invalid_decode_before_load_status": invalid_before_load[
+                    "decode_status"
+                ]
+                .numpy()
+                .reshape(-1)
+                .tolist(),
+                "invalid_decode_before_load_zero_logits": bool(
+                    np.count_nonzero(invalid_before_load["logits"].numpy()) == 0
+                ),
+                "invalid_decode_before_load_state_unchanged": state_matches(
+                    invalid_before_load_state,
+                    invalid_before_load_snapshot,
+                ),
+                "invalid_second_load_status": second_load["load_status"]
+                .numpy()
+                .reshape(-1)
+                .tolist(),
+                "invalid_second_load_state_unchanged": second_load_unchanged,
+                "invalid_position_statuses": invalid_position_statuses,
+                "invalid_position_state_unchanged": invalid_position_state_unchanged,
                 "position": runtime_state["position"].numpy().reshape(-1).tolist(),
                 "cross_ready": runtime_state["cross_ready"].numpy().reshape(-1).tolist(),
                 "self_key_tail_nonzero": int(np.count_nonzero(self_keys[..., 2:, :])),
