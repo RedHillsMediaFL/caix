@@ -49,6 +49,7 @@ class NativeWhisperABI:
                     "self_value_cache": TensorABI("float16", (32, 1, 20, 448, 64)),
                     "token_id": TensorABI("int32", (1, 1)),
                     "position": TensorABI("int32", (1,)),
+                    "cross_ready": TensorABI("int32", (1,)),
                     "logits": TensorABI("float16", (1, 1, 51_865)),
                 }
             ),

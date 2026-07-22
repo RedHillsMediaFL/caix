@@ -24,6 +24,7 @@ def test_large_v2_abi_uses_the_explicit_load_once_cross_kv_bridge() -> None:
         "self_value_cache": abi_module.TensorABI("float16", (32, 1, 20, 448, 64)),
         "token_id": abi_module.TensorABI("int32", (1, 1)),
         "position": abi_module.TensorABI("int32", (1,)),
+        "cross_ready": abi_module.TensorABI("int32", (1,)),
         "logits": abi_module.TensorABI("float16", (1, 1, 51865)),
     }
     assert abi.load_cross_kv_calls_per_utterance == 1
