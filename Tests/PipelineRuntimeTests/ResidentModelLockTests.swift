@@ -50,7 +50,7 @@ final class ResidentModelLockTests: XCTestCase {
             "96d4c8ca3cb38c107a8478587878124895d1e844")
         XCTAssertEqual(lock.llm.assistant.sourcePrecision, "bf16")
         XCTAssertEqual(lock.llm.assistant.qatRecipe, "q4_0")
-        XCTAssertEqual(lock.llm.assistant.runtimePrecision, "q4_0")
+        XCTAssertEqual(lock.llm.assistant.runtimePrecision, "fp16")
         XCTAssertEqual(lock.llm.assistant.weights.single?.path, "model.safetensors")
         XCTAssertEqual(lock.llm.assistant.weights.single?.sizeBytes, 939_042_560)
 

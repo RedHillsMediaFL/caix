@@ -35,7 +35,7 @@
       "revision": "96d4c8ca3cb38c107a8478587878124895d1e844",
       "source_precision": "bf16",
       "qat_recipe": "q4_0",
-      "runtime_precision": "q4_0",
+      "runtime_precision": "fp16",
       "weights": [
         {
           "path": "model.safetensors",

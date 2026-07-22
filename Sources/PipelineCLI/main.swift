@@ -104,6 +104,10 @@ func printUsage() {
           --primary-staged-bundle <dir>
                                   Exact text staged bundle to advertise as the primary model
           --primary-model-id <id> Canonical public model ID for --primary-staged-bundle
+          --staged-mtp-assistant <.aimodel>
+                                  Local FP16 assistant for staged MTP startup validation
+          --mtp-draft-tokens <N>  Staged MTP draft-token bound (1...8; default: 4)
+          --require-mtp           Refuse startup unless staged MTP proves a positive draft
           --whisper-asset <dir>   Authenticated Whisper large-v2 .aimodel directory
           --whisper-tokenizer <dir>
                                   Pinned Whisper tokenizer snapshot directory
@@ -724,6 +728,9 @@ func serveCommand(_ argv: [String]) {
     var conversionGuardEnabled = true
     var primaryStagedBundle: String? = nil
     var primaryModelID: String? = nil
+    var stagedMTPAssistant: String? = nil
+    var mtpDraftTokens: Int? = nil
+    var requireMTP = false
     var whisperAsset: String? = nil
     var whisperTokenizer: String? = nil
     var residentModelLock: String? = nil
@@ -775,6 +782,9 @@ func serveCommand(_ argv: [String]) {
         case "--no-conversion-guard": conversionGuardEnabled = false
         case "--primary-staged-bundle": primaryStagedBundle = value(arg)
         case "--primary-model-id": primaryModelID = value(arg)
+        case "--staged-mtp-assistant": stagedMTPAssistant = value(arg)
+        case "--mtp-draft-tokens": mtpDraftTokens = intValue(arg)
+        case "--require-mtp": requireMTP = true
         case "--whisper-asset": whisperAsset = value(arg)
         case "--whisper-tokenizer": whisperTokenizer = value(arg)
         case "--resident-model-lock": residentModelLock = value(arg)
@@ -832,6 +842,19 @@ func serveCommand(_ argv: [String]) {
         primaryStagedConfiguration = try PrimaryStagedBundleConfiguration.resolve(
             bundlePath: primaryStagedBundle,
             modelID: primaryModelID)
+    } catch {
+        fail("\(error)")
+    }
+
+    let stagedMTPConfiguration: StagedMTPStartupConfiguration?
+    do {
+        stagedMTPConfiguration = try StagedMTPStartupConfiguration.resolve(
+            assistantPath: stagedMTPAssistant,
+            draftTokens: mtpDraftTokens,
+            requireMTP: requireMTP,
+            primaryBundleURL: primaryStagedConfiguration?.bundleURL,
+            clusterMode: clusterManifest != nil,
+            prewarm: prewarm)
     } catch {
         fail("\(error)")
     }
@@ -902,6 +925,10 @@ func serveCommand(_ argv: [String]) {
     Task {
         defer { semaphore.signal() }
         do {
+            if let stagedMTPConfiguration, stagedMTPConfiguration.requireMTP {
+                try await stagedMTPConfiguration.requireProof(
+                    using: StagedMTPStartupConfiguration.nativeProver)
+            }
             let whisperTranscriber: (any WhisperTranscribing)?
             if let whisperConfiguration {
                 try WhisperStartupMemoryGate.validate(MachineStats.memorySafetySnapshot())

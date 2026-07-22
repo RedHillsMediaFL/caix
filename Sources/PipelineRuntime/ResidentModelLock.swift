@@ -3,8 +3,9 @@ import Foundation
 /// Immutable source identities and conversion-critical contracts for the two resident models.
 ///
 /// This lock describes Hugging Face source artifacts, not downloaded or converted output. In
-/// particular, the Gemma QAT checkpoints contain BF16 source weights whose conversion target is
-/// Q4_0; calling the source weights "4-bit" would be incorrect.
+/// particular, the Gemma target QAT checkpoint contains BF16 source weights whose conversion
+/// target is Q4_0, while the resident MTP assistant uses the same BF16 QAT source provenance
+/// and is converted to FP16 at runtime.
 public struct ResidentModelLock: Codable, Sendable, Equatable {
     public struct WeightArtifact: Codable, Sendable, Equatable {
         public let path: String
@@ -277,6 +278,9 @@ public struct ResidentModelLock: Codable, Sendable, Equatable {
             approvedRevision: Approved.targetRevision,
             approvedWeights: Approved.targetWeights,
             approvedMetadata: Approved.targetMetadata,
+            sourcePrecision: "bf16",
+            qatRecipe: "q4_0",
+            runtimePrecision: "q4_0",
             field: "llm.target")
         try Self.validateGemmaSource(
             llm.assistant,
@@ -284,6 +288,9 @@ public struct ResidentModelLock: Codable, Sendable, Equatable {
             approvedRevision: Approved.assistantRevision,
             approvedWeights: Approved.assistantWeights,
             approvedMetadata: Approved.assistantMetadata,
+            sourcePrecision: "bf16",
+            qatRecipe: "q4_0",
+            runtimePrecision: "fp16",
             field: "llm.assistant")
         try Self.require(
             Self.isLowercaseHex(llm.chatTemplateSHA256, count: 64)
@@ -324,15 +331,18 @@ public struct ResidentModelLock: Codable, Sendable, Equatable {
         approvedRevision: String,
         approvedWeights: [WeightArtifact],
         approvedMetadata: GemmaMetadata,
+        sourcePrecision: String,
+        qatRecipe: String,
+        runtimePrecision: String,
         field: String
     ) throws {
         try require(source.repository == approvedRepository, "\(field).repository")
         try require(
             isLowercaseHex(source.revision, count: 40) && source.revision == approvedRevision,
             "\(field).revision")
-        try require(source.sourcePrecision == "bf16", "\(field).source_precision")
-        try require(source.qatRecipe == "q4_0", "\(field).qat_recipe")
-        try require(source.runtimePrecision == "q4_0", "\(field).runtime_precision")
+        try require(source.sourcePrecision == sourcePrecision, "\(field).source_precision")
+        try require(source.qatRecipe == qatRecipe, "\(field).qat_recipe")
+        try require(source.runtimePrecision == runtimePrecision, "\(field).runtime_precision")
         try validateWeights(source.weights, approved: approvedWeights, field: "\(field).weights")
         try validateGemmaMetadata(source.metadata, approved: approvedMetadata, field: field)
     }
