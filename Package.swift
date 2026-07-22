@@ -81,6 +81,7 @@ let package = Package(
             ],
             swiftSettings: runtimeSwiftSettings,
             linkerSettings: [
+                .linkedFramework("Accelerate"),
                 .linkedFramework("AudioToolbox"),
             ]
         ),
