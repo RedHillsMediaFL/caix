@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import os
@@ -184,6 +185,122 @@ def test_expected_inventory_pins_every_large_v2_tensor_shape_and_dtype() -> None
     assert inventory["model.decoder.layers.31.fc1.weight"].shape == (5120, 1280)
     assert inventory["model.decoder.layers.31.encoder_attn.v_proj.bias"].shape == (1280,)
     assert {entry.dtype for entry in inventory.values()} == {"F32"}
+
+
+def test_snapshot_symlink_target_name_never_substitutes_for_weight_hash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint = importlib.import_module("whisper_large_v2.checkpoint")
+    snapshot = tmp_path / "snapshot"
+    blobs = tmp_path / "blobs"
+    snapshot.mkdir()
+    blobs.mkdir()
+    expected_digest = hashlib.sha256(b"approved").hexdigest()
+    malicious_blob = blobs / expected_digest
+    malicious_blob.write_bytes(b"tampered")
+    (snapshot / "model.safetensors").symlink_to(malicious_blob)
+    contract = checkpoint.WhisperSourceContract(
+        repository="test/repository",
+        revision="test-revision",
+        weights=checkpoint.WeightIdentity(
+            path="model.safetensors",
+            size_bytes=len(b"tampered"),
+            sha256=expected_digest,
+        ),
+        tied_embeddings=True,
+        assets={},
+    )
+    monkeypatch.setattr(checkpoint, "expected_large_v2_inventory", lambda: {})
+    monkeypatch.setattr(
+        checkpoint.SafetensorsCheckpointReader,
+        "inventory",
+        lambda _self: {},
+    )
+
+    with pytest.raises(checkpoint.CheckpointContractError, match="weight sha256"):
+        checkpoint.validate_pinned_snapshot(snapshot, contract)
+
+
+def test_snapshot_symlink_support_does_not_require_digest_shaped_target_name(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint = importlib.import_module("whisper_large_v2.checkpoint")
+    snapshot = tmp_path / "snapshot"
+    blobs = tmp_path / "blobs"
+    snapshot.mkdir()
+    blobs.mkdir()
+    contents = b"verified checkpoint bytes"
+    target = blobs / "arbitrary-hugging-face-blob-name"
+    target.write_bytes(contents)
+    (snapshot / "model.safetensors").symlink_to(target)
+    contract = checkpoint.WhisperSourceContract(
+        repository="test/repository",
+        revision="test-revision",
+        weights=checkpoint.WeightIdentity(
+            path="model.safetensors",
+            size_bytes=len(contents),
+            sha256=hashlib.sha256(contents).hexdigest(),
+        ),
+        tied_embeddings=True,
+        assets={},
+    )
+    monkeypatch.setattr(checkpoint, "expected_large_v2_inventory", lambda: {})
+    monkeypatch.setattr(
+        checkpoint.SafetensorsCheckpointReader,
+        "inventory",
+        lambda _self: {},
+    )
+
+    validation = checkpoint.validate_pinned_snapshot(snapshot, contract)
+
+    assert validation.weight_size_bytes == len(contents)
+
+
+def test_inventory_stays_descriptor_bound_and_detects_path_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint = importlib.import_module("whisper_large_v2.checkpoint")
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    original = b"verified checkpoint bytes"
+    replacement = b"tampered checkpoint bytes"
+    assert len(replacement) == len(original)
+    weight_path = snapshot / "model.safetensors"
+    weight_path.write_bytes(original)
+    replacement_path = tmp_path / "replacement.safetensors"
+    replacement_path.write_bytes(replacement)
+    contract = checkpoint.WhisperSourceContract(
+        repository="test/repository",
+        revision="test-revision",
+        weights=checkpoint.WeightIdentity(
+            path="model.safetensors",
+            size_bytes=len(original),
+            sha256=hashlib.sha256(original).hexdigest(),
+        ),
+        tied_embeddings=True,
+        assets={},
+    )
+    monkeypatch.setattr(checkpoint, "expected_large_v2_inventory", lambda: {})
+
+    class DescriptorReader:
+        def __init__(self, path: Path) -> None:
+            self.path = Path(path)
+
+        def inventory(self) -> dict[str, object]:
+            assert self.path.parent == Path("/dev/fd")
+            replacement_path.replace(weight_path)
+            assert self.path.read_bytes() == original
+            return {}
+
+    monkeypatch.setattr(checkpoint, "SafetensorsCheckpointReader", DescriptorReader)
+
+    with pytest.raises(checkpoint.CheckpointContractError, match="changed while validating"):
+        checkpoint.validate_pinned_snapshot(snapshot, contract)
+
+    assert weight_path.read_bytes() == replacement
 
 
 @pytest.mark.skipif(

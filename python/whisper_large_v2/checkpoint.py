@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
-from collections.abc import Callable, Mapping, MutableMapping
+import os
+import stat
+from collections.abc import Callable, Iterator, Mapping, MutableMapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -133,6 +137,12 @@ class SnapshotValidation:
     tensor_count: int
     weight_size_bytes: int
     verified_asset_count: int
+
+
+@dataclass(frozen=True)
+class _VerifiedRegularFile:
+    descriptor_path: Path
+    size_bytes: int
 
 
 class CheckpointContractError(ValueError):
@@ -269,54 +279,117 @@ def validate_pinned_snapshot(
 ) -> SnapshotValidation:
     """Validate source identity and tensor headers with bounded resident memory."""
     weight_path = snapshot / contract.weights.path
-    if not weight_path.exists() or not weight_path.resolve().is_file():
-        raise CheckpointContractError("pinned checkpoint weight file is missing")
-    weight_size = weight_path.stat().st_size
-    if weight_size != contract.weights.size_bytes:
-        raise CheckpointContractError("pinned checkpoint weight size differs")
-
-    if weight_path.is_symlink():
-        if weight_path.resolve().name != contract.weights.sha256:
-            raise CheckpointContractError("pinned checkpoint cache identity differs")
-    elif _sha256(weight_path) != contract.weights.sha256:
-        raise CheckpointContractError("pinned checkpoint weight sha256 differs")
-
     for filename, expected_digest in contract.assets.items():
         asset = snapshot / filename
-        if not asset.exists() or not asset.resolve().is_file():
-            raise CheckpointContractError(f"pinned source asset is missing: {filename}")
-        if _sha256(asset) != expected_digest:
-            raise CheckpointContractError(f"pinned source asset sha256 differs: {filename}")
+        with _verified_regular_file(
+            asset,
+            expected_sha256=expected_digest,
+            expected_size=None,
+            label=f"pinned source asset {filename}",
+        ):
+            pass
 
-    actual_inventory = SafetensorsCheckpointReader(weight_path).inventory()
-    expected_inventory = expected_large_v2_inventory()
-    if actual_inventory != expected_inventory:
-        actual_keys = set(actual_inventory)
-        expected_keys = set(expected_inventory)
-        missing = sorted(expected_keys - actual_keys)
-        unexpected = sorted(actual_keys - expected_keys)
-        mismatched = sorted(
-            key
-            for key in actual_keys & expected_keys
-            if actual_inventory[key] != expected_inventory[key]
-        )
-        raise CheckpointContractError(
-            "pinned checkpoint inventory differs: "
-            f"missing={missing!r}, unexpected={unexpected!r}, mismatched={mismatched!r}"
-        )
+    with _verified_regular_file(
+        weight_path,
+        expected_sha256=contract.weights.sha256,
+        expected_size=contract.weights.size_bytes,
+        label="pinned checkpoint weight",
+    ) as verified_weight:
+        actual_inventory = SafetensorsCheckpointReader(
+            verified_weight.descriptor_path
+        ).inventory()
+        expected_inventory = expected_large_v2_inventory()
+        if actual_inventory != expected_inventory:
+            actual_keys = set(actual_inventory)
+            expected_keys = set(expected_inventory)
+            missing = sorted(expected_keys - actual_keys)
+            unexpected = sorted(actual_keys - expected_keys)
+            mismatched = sorted(
+                key
+                for key in actual_keys & expected_keys
+                if actual_inventory[key] != expected_inventory[key]
+            )
+            raise CheckpointContractError(
+                "pinned checkpoint inventory differs: "
+                f"missing={missing!r}, unexpected={unexpected!r}, mismatched={mismatched!r}"
+            )
     return SnapshotValidation(
         tensor_count=len(actual_inventory),
-        weight_size_bytes=weight_size,
+        weight_size_bytes=verified_weight.size_bytes,
         verified_asset_count=len(contract.assets),
     )
 
 
-def _sha256(path: Path) -> str:
+@contextmanager
+def _verified_regular_file(
+    path: Path,
+    *,
+    expected_sha256: str,
+    expected_size: int | None,
+    label: str,
+) -> Iterator[_VerifiedRegularFile]:
+    """Hash one stable regular-file descriptor and keep it open for its consumer."""
+    descriptor = _open_regular_file_no_follow(path, label=label)
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise CheckpointContractError(f"{label} is not a regular file")
+        if expected_size is not None and before.st_size != expected_size:
+            raise CheckpointContractError(f"{label} size differs")
+        if _sha256_descriptor(descriptor) != expected_sha256:
+            raise CheckpointContractError(f"{label} sha256 differs")
+        _require_unchanged_descriptor(descriptor, before, label=label)
+        yield _VerifiedRegularFile(
+            descriptor_path=Path("/dev/fd") / str(descriptor),
+            size_bytes=before.st_size,
+        )
+        _require_unchanged_descriptor(descriptor, before, label=label)
+    finally:
+        os.close(descriptor)
+
+
+def _open_regular_file_no_follow(path: Path, *, label: str) -> int:
+    flags = os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC | os.O_NOFOLLOW
+    try:
+        return os.open(path, flags)
+    except OSError as error:
+        if error.errno != errno.ELOOP:
+            raise CheckpointContractError(f"{label} is missing or unreadable") from error
+
+    try:
+        target_text = os.readlink(path)
+    except OSError as error:
+        raise CheckpointContractError(f"{label} symlink changed while opening") from error
+    target = Path(target_text)
+    if not target.is_absolute():
+        target = path.parent / target
+    try:
+        return os.open(target, flags)
+    except OSError as error:
+        raise CheckpointContractError(
+            f"{label} symlink target is missing, unreadable, or not a regular file"
+        ) from error
+
+
+def _sha256_descriptor(descriptor: int) -> str:
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
+    offset = 0
+    while chunk := os.pread(descriptor, 1024 * 1024, offset):
+        digest.update(chunk)
+        offset += len(chunk)
     return digest.hexdigest()
+
+
+def _require_unchanged_descriptor(
+    descriptor: int,
+    expected: os.stat_result,
+    *,
+    label: str,
+) -> None:
+    actual = os.fstat(descriptor)
+    fields = ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns", "st_ctime_ns")
+    if any(getattr(actual, field) != getattr(expected, field) for field in fields):
+        raise CheckpointContractError(f"{label} changed while validating")
 
 
 def expected_tensor_keys(*, encoder_layers: int, decoder_layers: int) -> frozenset[str]:
