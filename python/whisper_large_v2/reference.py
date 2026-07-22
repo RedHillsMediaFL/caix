@@ -9,6 +9,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+WHISPER_DECODER_CACHE_CAPACITY = 448
+
 
 @dataclass(frozen=True)
 class TinyWhisperConfig:
@@ -19,20 +21,33 @@ class TinyWhisperConfig:
     feed_forward: int = 32
     vocabulary_size: int = 29
     max_source_positions: int = 6
-    max_decoder_positions: int = 8
+    max_decoder_positions: int = WHISPER_DECODER_CACHE_CAPACITY
 
     def __post_init__(self) -> None:
         if self.d_model % self.heads:
             raise ValueError("d_model must be divisible by heads")
+        if self.max_decoder_positions != WHISPER_DECODER_CACHE_CAPACITY:
+            raise ValueError("native decoder cache capacity must be exactly 448 tokens")
+
+
+@dataclass(frozen=True)
+class TinyCrossKVPayload:
+    keys: torch.Tensor
+    values: torch.Tensor
 
 
 @dataclass
 class TinyDecoderState:
-    cross_keys: tuple[torch.Tensor, ...]
-    cross_values: tuple[torch.Tensor, ...]
-    self_keys: list[torch.Tensor]
-    self_values: list[torch.Tensor]
-    position: int = 0
+    cross_keys: torch.Tensor
+    cross_values: torch.Tensor
+    self_keys: torch.Tensor
+    self_values: torch.Tensor
+    position: torch.Tensor
+    cross_ready: torch.Tensor
+
+
+class DecoderStateError(RuntimeError):
+    """The fixed native decoder state was used out of sequence or overflowed."""
 
 
 class _CountedLinear(nn.Linear):
@@ -191,24 +206,74 @@ class TinyWhisperReference(nn.Module):
         hidden = self.decoder_norm(hidden)
         return F.linear(hidden, self.token_embedding.weight)
 
-    def begin_split(self, features: torch.Tensor) -> TinyDecoderState:
+    def encode_cross_kv(self, features: torch.Tensor) -> TinyCrossKVPayload:
         encoder_hidden = self.encode(features)
-        cross_keys = tuple(
-            layer.cross_attention.key(encoder_hidden) for layer in self.decoder_layers
+        if encoder_hidden.shape[1] != self.config.max_source_positions:
+            raise ValueError("split encoder input must fill max_source_positions")
+        cross_keys = torch.stack(
+            tuple(layer.cross_attention.key(encoder_hidden) for layer in self.decoder_layers)
         )
-        cross_values = tuple(
-            layer.cross_attention.value(encoder_hidden) for layer in self.decoder_layers
+        cross_values = torch.stack(
+            tuple(layer.cross_attention.value(encoder_hidden) for layer in self.decoder_layers)
         )
+        return TinyCrossKVPayload(keys=cross_keys, values=cross_values)
+
+    def new_decoder_state(self, features: torch.Tensor) -> TinyDecoderState:
         batch = features.shape[0]
-        empty_shape = (batch, self.config.heads, 0, self.config.d_model // self.config.heads)
-        self_keys = [features.new_empty(empty_shape) for _ in self.decoder_layers]
-        self_values = [features.new_empty(empty_shape) for _ in self.decoder_layers]
-        return TinyDecoderState(
-            cross_keys=cross_keys,
-            cross_values=cross_values,
-            self_keys=self_keys,
-            self_values=self_values,
+        head_dim = self.config.d_model // self.config.heads
+        cross_shape = (
+            self.config.decoder_layers,
+            batch,
+            self.config.heads,
+            self.config.max_source_positions,
+            head_dim,
         )
+        self_shape = (
+            self.config.decoder_layers,
+            batch,
+            self.config.heads,
+            WHISPER_DECODER_CACHE_CAPACITY,
+            head_dim,
+        )
+        return TinyDecoderState(
+            cross_keys=features.new_zeros(cross_shape),
+            cross_values=features.new_zeros(cross_shape),
+            self_keys=features.new_zeros(self_shape),
+            self_values=features.new_zeros(self_shape),
+            position=torch.zeros((1,), dtype=torch.int32, device=features.device),
+            cross_ready=torch.zeros((1,), dtype=torch.int32, device=features.device),
+        )
+
+    def load_cross_kv(
+        self,
+        payload: TinyCrossKVPayload,
+        state: TinyDecoderState,
+    ) -> None:
+        if int(state.cross_ready.item()) != 0:
+            raise DecoderStateError("load_cross_kv must run exactly once per utterance")
+        if int(state.position.item()) != 0:
+            raise DecoderStateError("decoder state must be reset before load_cross_kv")
+        if payload.keys.shape != state.cross_keys.shape:
+            raise DecoderStateError("cross key payload shape differs from decoder state")
+        if payload.values.shape != state.cross_values.shape:
+            raise DecoderStateError("cross value payload shape differs from decoder state")
+        state.cross_keys.copy_(payload.keys)
+        state.cross_values.copy_(payload.values)
+        state.cross_ready.fill_(1)
+
+    def begin_split(self, features: torch.Tensor) -> TinyDecoderState:
+        payload = self.encode_cross_kv(features)
+        state = self.new_decoder_state(features)
+        self.load_cross_kv(payload, state)
+        return state
+
+    def reset_decoder_state(self, state: TinyDecoderState) -> None:
+        state.cross_keys.zero_()
+        state.cross_values.zero_()
+        state.self_keys.zero_()
+        state.self_values.zero_()
+        state.position.zero_()
+        state.cross_ready.zero_()
 
     def decode_step(
         self,
@@ -217,22 +282,29 @@ class TinyWhisperReference(nn.Module):
     ) -> torch.Tensor:
         if token_id.shape[1] != 1:
             raise ValueError("decode_step accepts exactly one token")
-        if state.position >= self.config.max_decoder_positions:
-            raise ValueError("decoder state exceeds max_decoder_positions")
+        if int(state.cross_ready.item()) != 1:
+            raise DecoderStateError("load_cross_kv must run before decode_step")
+        position_index = int(state.position.item())
+        if position_index >= WHISPER_DECODER_CACHE_CAPACITY:
+            raise DecoderStateError("decoder state exceeds 448-token capacity")
 
-        position = torch.tensor([state.position], device=token_id.device)
+        position = state.position.to(device=token_id.device, dtype=torch.long)
         hidden = self.token_embedding(token_id) + self.decoder_positions(position).unsqueeze(0)
         for index, layer in enumerate(self.decoder_layers):
             normalized = layer.self_norm(hidden)
             query = layer.self_attention.query(normalized)
             new_key = layer.self_attention.key(normalized)
             new_value = layer.self_attention.value(normalized)
-            state.self_keys[index] = torch.cat((state.self_keys[index], new_key), dim=2)
-            state.self_values[index] = torch.cat((state.self_values[index], new_value), dim=2)
+            state.self_keys[index, :, :, position_index : position_index + 1, :].copy_(
+                new_key
+            )
+            state.self_values[index, :, :, position_index : position_index + 1, :].copy_(
+                new_value
+            )
             hidden = hidden + layer.self_attention.projected(
                 query,
-                state.self_keys[index],
-                state.self_values[index],
+                state.self_keys[index, :, :, : position_index + 1, :],
+                state.self_values[index, :, :, : position_index + 1, :],
                 causal=False,
             )
             cross_query = layer.cross_attention.query(layer.cross_norm(hidden))
@@ -244,7 +316,7 @@ class TinyWhisperReference(nn.Module):
             )
             hidden = hidden + layer.feed_forward(layer.final_norm(hidden))
 
-        state.position += 1
+        state.position.add_(1)
         hidden = self.decoder_norm(hidden)
         return F.linear(hidden, self.token_embedding.weight)
 
