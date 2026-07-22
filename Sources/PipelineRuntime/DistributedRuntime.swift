@@ -3884,9 +3884,15 @@ public enum DistributedStageExecutionError: Error, Equatable, Sendable, CustomSt
 public final class DistributedSameMachinePipeline {
     public let plan: DistributedStagePlan
     private let stages: [DistributedStageHandle]
+    private let streamedPrefillAdmission: DistributedStagedMemoryAdmission?
+    private var activePrefillStageID: String?
     private var requestTracker = DistributedWorkerRequestTracker()
 
-    public init(plan: DistributedStagePlan, stages: [DistributedStageHandle]) throws {
+    public init(
+        plan: DistributedStagePlan,
+        stages: [DistributedStageHandle],
+        streamedPrefillAdmission: DistributedStagedMemoryAdmission? = nil
+    ) throws {
         try plan.validate()
         guard plan.stages.count == stages.count else {
             throw DistributedStageExecutionError.stageCountMismatch(
@@ -3904,8 +3910,22 @@ public final class DistributedSameMachinePipeline {
             }
         }
 
+        if streamedPrefillAdmission != nil {
+            for stage in stages {
+                guard let resident = stage as? DistributedDecodeResidentStageHandle else {
+                    throw DistributedStageExecutionError.invalidControlFrame(
+                        "streamed prefill requires a decode-resident handle for stage \(stage.descriptor.id)")
+                }
+                guard !resident.isPrefillResident else {
+                    throw DistributedStageExecutionError.invalidControlFrame(
+                        "decode-resident stage \(stage.descriptor.id) loaded prefill before admission")
+                }
+            }
+        }
+
         self.plan = plan
         self.stages = stages
+        self.streamedPrefillAdmission = streamedPrefillAdmission
     }
 
     public convenience init(
@@ -4064,7 +4084,7 @@ public final class DistributedSameMachinePipeline {
                 blockIDsKV: stage.descriptor.role == .transformerLayers ? blockIDsKV : nil,
                 softTokenSplice: stage.descriptor.role == .embeddings ? softTokenSplice : nil,
                 hiddenState: hiddenState)
-            let output = try await stage.forward(input)
+            let output = try await forward(stage: stage, input: input)
             try validate(output: output, from: stage, at: index, stepIndex: stepIndex)
             hiddenState = output.hiddenState
             tokenID = output.tokenID
@@ -4082,6 +4102,45 @@ public final class DistributedSameMachinePipeline {
             hiddenState: hiddenState,
             tokenID: tokenID,
             topLogits: topLogits)
+    }
+
+    private func forward(
+        stage: DistributedStageHandle,
+        input: DistributedStageForwardInput
+    ) async throws -> DistributedStageForwardOutput {
+        guard input.positionRange.count > 1, let streamedPrefillAdmission else {
+            guard activePrefillStageID == nil else {
+                throw DistributedStageExecutionError.invalidControlFrame(
+                    "decode attempted while prefill stage \(activePrefillStageID!) is resident")
+            }
+            return try await stage.forward(input)
+        }
+        guard let resident = stage as? DistributedDecodeResidentStageHandle else {
+            throw DistributedStageExecutionError.invalidControlFrame(
+                "stage \(stage.descriptor.id) does not support streamed prefill")
+        }
+        guard activePrefillStageID == nil else {
+            throw DistributedStageExecutionError.invalidControlFrame(
+                "prefill stage \(activePrefillStageID!) is already resident")
+        }
+
+        activePrefillStageID = stage.descriptor.id
+        do {
+            try streamedPrefillAdmission.checkBeforeAssetLoad()
+            try await resident.loadPrefill()
+            guard resident.isPrefillResident else {
+                throw DistributedStageExecutionError.invalidControlFrame(
+                    "stage \(stage.descriptor.id) did not retain its admitted prefill asset")
+            }
+            let output = try await stage.forward(input)
+            resident.unloadPrefill()
+            activePrefillStageID = nil
+            return output
+        } catch {
+            resident.unloadPrefill()
+            activePrefillStageID = nil
+            throw error
+        }
     }
 
     public func reset(requestID: String) async throws {

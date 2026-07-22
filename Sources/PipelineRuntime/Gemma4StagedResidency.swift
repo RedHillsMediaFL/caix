@@ -92,3 +92,118 @@ public extension DistributedStageManifest {
         runtimeMemory?.assetResidencyPolicy == .decodeSetPlusOneStreamedPrefillStage
     }
 }
+
+/// Allocation-free live inputs used before selecting a context tier or loading an asset.
+public struct DistributedStagedMemorySnapshot: Sendable, Equatable {
+    public let totalPhysicalMemoryBytes: UInt64
+    public let workerResidentBytes: UInt64
+    public let availableBytes: UInt64
+    public let pressure: ResidentMemoryPressure
+    public let swapGrowthBytes: UInt64
+
+    public init(
+        totalPhysicalMemoryBytes: UInt64,
+        workerResidentBytes: UInt64,
+        availableBytes: UInt64,
+        pressure: ResidentMemoryPressure,
+        swapGrowthBytes: UInt64
+    ) {
+        self.totalPhysicalMemoryBytes = totalPhysicalMemoryBytes
+        self.workerResidentBytes = workerResidentBytes
+        self.availableBytes = availableBytes
+        self.pressure = pressure
+        self.swapGrowthBytes = swapGrowthBytes
+    }
+}
+
+public enum DistributedStagedContextTier: String, Sendable, Equatable {
+    case initial
+    case fallback
+}
+
+public struct DistributedStagedContextSelection: Sendable, Equatable {
+    public let tier: DistributedStagedContextTier
+    public let contextTokens: Int
+
+    public init(tier: DistributedStagedContextTier, contextTokens: Int) {
+        self.tier = tier
+        self.contextTokens = contextTokens
+    }
+}
+
+public enum DistributedStagedMemoryAdmissionError: Error, Sendable, Equatable {
+    case telemetryUnavailable
+    case drain(ResidentServiceHealthGate.DrainReason)
+    case restart(ResidentServiceHealthGate.RestartReason)
+    case insufficientPhysicalMemory(requiredBytes: UInt64, actualBytes: UInt64)
+}
+
+/// Live, repeatable admission check for resident decode startup and every transient prefill load.
+/// The provider performs telemetry only; rejected context tiers never allocate CoreAI state.
+public struct DistributedStagedMemoryAdmission {
+    private let contract: DistributedRuntimeMemoryContract
+    private let gate: ResidentServiceHealthGate
+    private let snapshotProvider: () throws -> DistributedStagedMemorySnapshot
+
+    public init(
+        contract: DistributedRuntimeMemoryContract,
+        limits: ResidentServiceHealthGate.Limits = .studio64GiB,
+        snapshotProvider: @escaping () throws -> DistributedStagedMemorySnapshot
+    ) {
+        self.contract = contract
+        self.gate = ResidentServiceHealthGate(limits: limits)
+        self.snapshotProvider = snapshotProvider
+    }
+
+    public func selectContext() throws -> DistributedStagedContextSelection {
+        let snapshot = try checkedSnapshot()
+        if snapshot.totalPhysicalMemoryBytes >= contract.initial.minimumPhysicalMemoryBytes {
+            return DistributedStagedContextSelection(
+                tier: .initial,
+                contextTokens: contract.initial.contextTokens)
+        }
+        if snapshot.totalPhysicalMemoryBytes >= contract.fallback.minimumPhysicalMemoryBytes {
+            return DistributedStagedContextSelection(
+                tier: .fallback,
+                contextTokens: contract.fallback.contextTokens)
+        }
+        throw DistributedStagedMemoryAdmissionError.insufficientPhysicalMemory(
+            requiredBytes: contract.fallback.minimumPhysicalMemoryBytes,
+            actualBytes: snapshot.totalPhysicalMemoryBytes)
+    }
+
+    public func checkBeforeAssetLoad() throws {
+        _ = try checkedSnapshot()
+    }
+
+    private func checkedSnapshot() throws -> DistributedStagedMemorySnapshot {
+        let snapshot = try snapshotProvider()
+        guard snapshot.totalPhysicalMemoryBytes > 0,
+              snapshot.workerResidentBytes > 0,
+              snapshot.availableBytes > 0
+        else {
+            throw DistributedStagedMemoryAdmissionError.telemetryUnavailable
+        }
+        switch gate.action(for: ResidentServiceHealthGate.Snapshot(
+            workerResidentBytes: snapshot.workerResidentBytes,
+            availableBytes: snapshot.availableBytes,
+            pressure: snapshot.pressure,
+            swapGrowthBytes: snapshot.swapGrowthBytes))
+        {
+        case .admit:
+            return snapshot
+        case .drain(let reason):
+            throw DistributedStagedMemoryAdmissionError.drain(reason)
+        case .restart(let reason):
+            throw DistributedStagedMemoryAdmissionError.restart(reason)
+        }
+    }
+}
+
+/// A stage whose one-token decode model and request KV state stay resident while its dynamic
+/// prefill model is held only between `loadPrefill` and `unloadPrefill`.
+public protocol DistributedDecodeResidentStageHandle: DistributedStageHandle {
+    var isPrefillResident: Bool { get }
+    func loadPrefill() async throws
+    func unloadPrefill()
+}
