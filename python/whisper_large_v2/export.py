@@ -7,8 +7,15 @@ single token and updates one slot in the 448-token self-attention cache.
 
 from __future__ import annotations
 
+import argparse
+import asyncio
+import json
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
+import numpy as np
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -237,6 +244,7 @@ class WhisperDecodeStep(nn.Module):
                 cross_key_cache[index],
                 cross_value_cache[index],
                 layer.cross_out_proj,
+                (cross_ready > 0).reshape(1, 1, 1, 1),
             )
             hidden = residual + cross_output
 
@@ -306,3 +314,250 @@ class WhisperSplitModules:
             position=torch.zeros((1,), dtype=torch.int32, device=device),
             cross_ready=torch.zeros((1,), dtype=torch.int32, device=device),
         )
+
+
+def _export_program(
+    module: nn.Module,
+    inputs: dict[str, torch.Tensor],
+) -> Any:
+    import coreai_torch
+
+    from coreai_models.export.mlir_ops import remove_functionalization
+
+    exported = torch.export.export(module.eval(), args=(), kwargs=inputs)
+    exported = exported.run_decompositions(coreai_torch.get_decomp_table())
+    remove_functionalization(exported)
+    return exported
+
+
+def create_coreai_program(
+    split: WhisperSplitModules,
+    *,
+    input_features: torch.Tensor,
+    token_id: torch.Tensor,
+    optimize: bool = True,
+) -> Any:
+    """Create one AIProgram containing the frozen three-entrypoint ABI."""
+    from coreai_torch import TorchConverter
+
+    from coreai_models.export.mlir_ops import register_custom_torch_lowering
+
+    state = split.new_state(dtype=input_features.dtype, device=input_features.device)
+    with torch.no_grad():
+        cross_key_payload, cross_value_payload = split.encode(input_features)
+
+    converter = TorchConverter()
+    converter.add_exported_program(
+        _export_program(split.encode, {"input_features": input_features}),
+        input_names=("input_features",),
+        output_names=("cross_key_payload", "cross_value_payload"),
+        state_names=(),
+        entrypoint_name="encode",
+    )
+    converter.add_exported_program(
+        _export_program(
+            split.load_cross_kv,
+            {
+                "cross_key_payload": cross_key_payload,
+                "cross_value_payload": cross_value_payload,
+                "cross_key_cache": state.cross_key_cache,
+                "cross_value_cache": state.cross_value_cache,
+                "cross_ready": state.cross_ready,
+            },
+        ),
+        input_names=("cross_key_payload", "cross_value_payload"),
+        output_names=("load_marker",),
+        state_names=("cross_key_cache", "cross_value_cache", "cross_ready"),
+        entrypoint_name="load_cross_kv",
+    )
+    converter.add_exported_program(
+        _export_program(
+            split.decode_step,
+            {
+                "token_id": token_id,
+                "cross_key_cache": state.cross_key_cache,
+                "cross_value_cache": state.cross_value_cache,
+                "self_key_cache": state.self_key_cache,
+                "self_value_cache": state.self_value_cache,
+                "position": state.position,
+                "cross_ready": state.cross_ready,
+            },
+        ),
+        input_names=("token_id",),
+        output_names=("logits",),
+        state_names=(
+            "cross_key_cache",
+            "cross_value_cache",
+            "self_key_cache",
+            "self_value_cache",
+            "position",
+            "cross_ready",
+        ),
+        entrypoint_name="decode_step",
+    )
+    register_custom_torch_lowering(converter)
+    program = converter.to_coreai()
+    if optimize:
+        program.optimize()
+    return program
+
+
+def _minimal_model() -> nn.Module:
+    from transformers import WhisperConfig, WhisperForConditionalGeneration
+
+    torch.manual_seed(19)
+    config = WhisperConfig(
+        vocab_size=31,
+        num_mel_bins=4,
+        d_model=16,
+        encoder_layers=1,
+        decoder_layers=1,
+        encoder_attention_heads=4,
+        decoder_attention_heads=4,
+        encoder_ffn_dim=32,
+        decoder_ffn_dim=32,
+        max_source_positions=6,
+        max_target_positions=448,
+        dropout=0.0,
+        attention_dropout=0.0,
+        activation_dropout=0.0,
+        activation_function="gelu",
+        pad_token_id=0,
+        bos_token_id=1,
+        eos_token_id=2,
+        decoder_start_token_id=1,
+        use_cache=False,
+    )
+    return WhisperForConditionalGeneration(config).eval()
+
+
+async def _run_minimal_coreai_probe(temp_root: Path) -> dict[str, Any]:
+    from coreai.runtime import NDArray
+
+    if not temp_root.is_dir():
+        raise WhisperExportError(f"CoreAI probe temp root is not a directory: {temp_root}")
+
+    model = _minimal_model()
+    split = WhisperSplitModules.from_hf(model)
+    torch.manual_seed(23)
+    features = torch.randn((1, 4, 12), dtype=torch.float32)
+    tokens = (
+        torch.tensor([[1]], dtype=torch.int32),
+        torch.tensor([[7]], dtype=torch.int32),
+    )
+
+    with torch.no_grad():
+        expected_keys, expected_values = split.encode(features)
+        expected_state = split.new_state(dtype=torch.float32)
+        split.load_cross_kv(
+            expected_keys,
+            expected_values,
+            expected_state.cross_key_cache,
+            expected_state.cross_value_cache,
+            expected_state.cross_ready,
+        )
+        expected_logits = [
+            split.decode_step(
+                token,
+                expected_state.cross_key_cache,
+                expected_state.cross_value_cache,
+                expected_state.self_key_cache,
+                expected_state.self_value_cache,
+                expected_state.position,
+                expected_state.cross_ready,
+            )
+            for token in tokens
+        ]
+
+    program = create_coreai_program(
+        split,
+        input_features=features,
+        token_id=tokens[0],
+    )
+    state = split.new_state(dtype=torch.float32)
+    with tempfile.TemporaryDirectory(
+        prefix="whisper-full-minimal-",
+        suffix=".aimodel",
+        dir=temp_root,
+    ) as temp_dir:
+        asset = program.save_asset(Path(temp_dir))
+        async with asset.executable() as executable:
+            encode = executable.load_function("encode")
+            load_cross_kv = executable.load_function("load_cross_kv")
+            decode_step = executable.load_function("decode_step")
+            runtime_state = {
+                "cross_key_cache": NDArray(data=state.cross_key_cache),
+                "cross_value_cache": NDArray(data=state.cross_value_cache),
+                "self_key_cache": NDArray(data=state.self_key_cache),
+                "self_value_cache": NDArray(data=state.self_value_cache),
+                "position": NDArray(data=state.position),
+                "cross_ready": NDArray(data=state.cross_ready),
+            }
+            encoded = await encode({"input_features": NDArray(data=features)})
+            await load_cross_kv(
+                {
+                    "cross_key_payload": encoded["cross_key_payload"],
+                    "cross_value_payload": encoded["cross_value_payload"],
+                },
+                state={
+                    "cross_key_cache": runtime_state["cross_key_cache"],
+                    "cross_value_cache": runtime_state["cross_value_cache"],
+                    "cross_ready": runtime_state["cross_ready"],
+                },
+            )
+            actual_logits = []
+            for token in tokens:
+                output = await decode_step(
+                    {"token_id": NDArray(data=token)},
+                    state=runtime_state,
+                )
+                actual_logits.append(output["logits"].numpy())
+
+            actual_keys = encoded["cross_key_payload"].numpy()
+            actual_values = encoded["cross_value_payload"].numpy()
+            expected_logits_array = np.concatenate(
+                [value.detach().numpy() for value in expected_logits],
+                axis=1,
+            )
+            actual_logits_array = np.concatenate(actual_logits, axis=1)
+            self_keys = runtime_state["self_key_cache"].numpy()
+            self_values = runtime_state["self_value_cache"].numpy()
+            return {
+                "call_order": ["encode", "load_cross_kv", "decode_step", "decode_step"],
+                "entrypoints": ["decode_step", "encode", "load_cross_kv"],
+                "position": runtime_state["position"].numpy().reshape(-1).tolist(),
+                "cross_ready": runtime_state["cross_ready"].numpy().reshape(-1).tolist(),
+                "self_key_tail_nonzero": int(np.count_nonzero(self_keys[..., 2:, :])),
+                "self_value_tail_nonzero": int(np.count_nonzero(self_values[..., 2:, :])),
+                "max_encode_key_error": float(
+                    np.max(np.abs(actual_keys - expected_keys.detach().numpy()))
+                ),
+                "max_encode_value_error": float(
+                    np.max(np.abs(actual_values - expected_values.detach().numpy()))
+                ),
+                "max_decode_error": float(
+                    np.max(np.abs(actual_logits_array - expected_logits_array))
+                ),
+            }
+
+
+def run_minimal_coreai_probe(temp_root: Path) -> dict[str, Any]:
+    """Compile and execute the minimal real Whisper split architecture."""
+    return asyncio.run(_run_minimal_coreai_probe(temp_root))
+
+
+def _main() -> None:
+    parser = argparse.ArgumentParser(description="Export native split Whisper large-v2")
+    parser.add_argument("--minimal-coreai-proof", action="store_true")
+    parser.add_argument("--temp-root", type=Path)
+    args = parser.parse_args()
+    if not args.minimal_coreai_proof:
+        parser.error("no export mode selected")
+    if args.temp_root is None:
+        parser.error("--temp-root is required for --minimal-coreai-proof")
+    result = run_minimal_coreai_probe(args.temp_root)
+    print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+
+
+if __name__ == "__main__":
+    _main()
