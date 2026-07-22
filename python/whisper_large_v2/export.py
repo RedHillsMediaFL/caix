@@ -588,6 +588,7 @@ async def _run_minimal_coreai_probe(temp_root: Path) -> dict[str, Any]:
             second_load_unchanged = state_matches(runtime_state, before_second_load)
             actual_logits = []
             decode_statuses = []
+            decode_status_dtypes = []
             for token in tokens:
                 output = await decode_step(
                     {"token_id": NDArray(data=token)},
@@ -597,9 +598,11 @@ async def _run_minimal_coreai_probe(temp_root: Path) -> dict[str, Any]:
                 decode_statuses.append(
                     output["decode_status"].numpy().reshape(-1).tolist()
                 )
+                decode_status_dtypes.append(output["decode_status"].numpy().dtype.name)
 
             invalid_position_statuses: list[list[int]] = []
             invalid_position_state_unchanged: list[bool] = []
+            invalid_position_zero_logits: list[bool] = []
             for readiness, position in ((-1, 0), (2, 0), (1, -1), (1, 448)):
                 invalid_source = split.new_state(dtype=torch.float32)
                 invalid_source.cross_key_cache.fill_(1.0)
@@ -620,9 +623,14 @@ async def _run_minimal_coreai_probe(temp_root: Path) -> dict[str, Any]:
                 invalid_position_state_unchanged.append(
                     state_matches(invalid_state, invalid_snapshot)
                 )
+                invalid_position_zero_logits.append(
+                    bool(np.count_nonzero(invalid_output["logits"].numpy()) == 0)
+                )
 
             actual_keys = encoded["cross_key_payload"].numpy()
             actual_values = encoded["cross_value_payload"].numpy()
+            loaded_keys = runtime_state["cross_key_cache"].numpy()
+            loaded_values = runtime_state["cross_value_cache"].numpy()
             expected_logits_array = np.concatenate(
                 [value.detach().numpy() for value in expected_logits],
                 axis=1,
@@ -630,11 +638,15 @@ async def _run_minimal_coreai_probe(temp_root: Path) -> dict[str, Any]:
             actual_logits_array = np.concatenate(actual_logits, axis=1)
             self_keys = runtime_state["self_key_cache"].numpy()
             self_values = runtime_state["self_value_cache"].numpy()
+            current_slot = int(runtime_state["position"].numpy()[0]) - 1
             return {
                 "call_order": ["encode", "load_cross_kv", "decode_step", "decode_step"],
                 "entrypoints": ["decode_step", "encode", "load_cross_kv"],
                 "load_status": loaded["load_status"].numpy().reshape(-1).tolist(),
+                "load_status_dtype": loaded["load_status"].numpy().dtype.name,
                 "decode_statuses": decode_statuses,
+                "decode_status_dtypes": decode_status_dtypes,
+                "logits_dtypes": [value.dtype.name for value in actual_logits],
                 "invalid_decode_before_load_status": invalid_before_load[
                     "decode_status"
                 ]
@@ -655,8 +667,21 @@ async def _run_minimal_coreai_probe(temp_root: Path) -> dict[str, Any]:
                 "invalid_second_load_state_unchanged": second_load_unchanged,
                 "invalid_position_statuses": invalid_position_statuses,
                 "invalid_position_state_unchanged": invalid_position_state_unchanged,
+                "invalid_position_zero_logits": invalid_position_zero_logits,
                 "position": runtime_state["position"].numpy().reshape(-1).tolist(),
                 "cross_ready": runtime_state["cross_ready"].numpy().reshape(-1).tolist(),
+                "loaded_cross_key_cache_max_error": float(
+                    np.max(np.abs(loaded_keys - actual_keys))
+                ),
+                "loaded_cross_value_cache_max_error": float(
+                    np.max(np.abs(loaded_values - actual_values))
+                ),
+                "self_key_current_slot_nonzero": int(
+                    np.count_nonzero(self_keys[..., current_slot, :])
+                ),
+                "self_value_current_slot_nonzero": int(
+                    np.count_nonzero(self_values[..., current_slot, :])
+                ),
                 "self_key_tail_nonzero": int(np.count_nonzero(self_keys[..., 2:, :])),
                 "self_value_tail_nonzero": int(np.count_nonzero(self_values[..., 2:, :])),
                 "max_encode_key_error": float(

@@ -53,6 +53,14 @@ def test_minimal_split_whisper_compiles_and_executes_all_three_entrypoints() -> 
     assert result["invalid_second_load_state_unchanged"] is True
     assert result["invalid_position_statuses"] == [[0], [0], [0], [0]]
     assert result["invalid_position_state_unchanged"] == [True, True, True, True]
+    assert result["invalid_position_zero_logits"] == [True, True, True, True]
+    assert result["load_status_dtype"] == "int32"
+    assert result["decode_status_dtypes"] == ["int32", "int32"]
+    assert result["logits_dtypes"] == ["float32", "float32"]
+    assert result["loaded_cross_key_cache_max_error"] == 0.0
+    assert result["loaded_cross_value_cache_max_error"] == 0.0
+    assert result["self_key_current_slot_nonzero"] > 0
+    assert result["self_value_current_slot_nonzero"] > 0
     assert result["self_key_tail_nonzero"] == 0
     assert result["self_value_tail_nonzero"] == 0
     assert result["max_encode_key_error"] < 1e-4
