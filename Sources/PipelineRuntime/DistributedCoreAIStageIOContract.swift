@@ -391,6 +391,7 @@ private struct DistributedCoreAIStageExecutionIO {
     let blockIDsQInput: DistributedCoreAIStageNDArrayBinding?
     let blockIDsKVInput: DistributedCoreAIStageNDArrayBinding?
     let eagleTargetOutputs: DistributedCoreAIEagleTargetOutputBindings?
+    let eagleTargetFinalHiddenOutput: DistributedCoreAIStageNDArrayBinding?
 
     static func bound(
         for stage: DistributedStageDescriptor,
@@ -411,7 +412,8 @@ private struct DistributedCoreAIStageExecutionIO {
                 ropeSinInput: nil,
                 blockIDsQInput: nil,
                 blockIDsKVInput: nil,
-                eagleTargetOutputs: nil)
+                eagleTargetOutputs: nil,
+                eagleTargetFinalHiddenOutput: nil)
         case .transformerLayers:
             let eagleOutputs: DistributedCoreAIEagleTargetOutputBindings?
             if eagleTarget?.producesArtifacts(for: stage.id) == true {
@@ -437,7 +439,8 @@ private struct DistributedCoreAIStageExecutionIO {
                 },
                 blockIDsQInput: try optionalInput(.blockIDsQ, descriptor: descriptor),
                 blockIDsKVInput: try optionalInput(.blockIDsKV, descriptor: descriptor),
-                eagleTargetOutputs: eagleOutputs)
+                eagleTargetOutputs: eagleOutputs,
+                eagleTargetFinalHiddenOutput: nil)
         case .finalNormHead:
             guard vocabSize != nil else {
                 throw CoreAIPipeline.RuntimeError.modelContract(
@@ -453,7 +456,10 @@ private struct DistributedCoreAIStageExecutionIO {
                 ropeSinInput: nil,
                 blockIDsQInput: nil,
                 blockIDsKVInput: nil,
-                eagleTargetOutputs: nil)
+                eagleTargetOutputs: nil,
+                eagleTargetFinalHiddenOutput: eagleTarget?.producesFinalHidden(for: stage.id) == true
+                    ? try output(.hidden, descriptor: descriptor)
+                    : nil)
         }
     }
 
@@ -576,6 +582,14 @@ public final class DistributedCoreAIStageHandle:
 
     public var supportsEagleTargetArtifacts: Bool {
         decodeContext.executionIO.eagleTargetOutputs != nil
+    }
+
+    public var supportsEagleTargetKVChunk: Bool {
+        decodeContext.executionIO.eagleTargetOutputs != nil
+    }
+
+    public var supportsEagleTargetFinalHidden: Bool {
+        decodeContext.executionIO.eagleTargetFinalHiddenOutput != nil
     }
 
     public var isPrefillResident: Bool { prefillContext != nil }
@@ -873,7 +887,7 @@ public final class DistributedCoreAIStageHandle:
                     rope: rope,
                     component: .sin)
             }
-            let eagleArtifacts: DistributedEagleTargetArtifacts?
+            let eagleKVChunk: DistributedEagleTargetKVChunk?
             if let eagleOutputs = executionIO.eagleTargetOutputs {
                 var eagleFullKey = try DistributedCoreAIStageNDArrayIO.makeEagleTargetKVOutput(
                     positionCount: positionCount,
@@ -903,8 +917,7 @@ public final class DistributedCoreAIStageHandle:
                     inputs: inputs,
                     outputViews: consume outputViews,
                     requestState: &requestState)
-                eagleArtifacts = try DistributedCoreAIStageNDArrayIO.makeEagleTargetArtifacts(
-                    hiddenOutput: hiddenOutput,
+                eagleKVChunk = try DistributedCoreAIStageNDArrayIO.makeEagleTargetKVChunk(
                     fullKey: eagleFullKey,
                     fullValue: eagleFullValue,
                     slidingKey: eagleSlidingKey,
@@ -919,7 +932,7 @@ public final class DistributedCoreAIStageHandle:
                     inputs: inputs,
                     outputViews: consume outputViews,
                     requestState: &requestState)
-                eagleArtifacts = nil
+                eagleKVChunk = nil
             }
             try traceHiddenArrayIfRequested(
                 hiddenOutput,
@@ -940,7 +953,7 @@ public final class DistributedCoreAIStageHandle:
                 stageID: descriptor.id,
                 stepIndex: input.stepIndex,
                 hiddenState: hiddenPacket,
-                eagleTargetArtifacts: eagleArtifacts)
+                eagleTargetKVChunk: eagleKVChunk)
 
         case .finalNormHead:
             guard let hiddenInputBinding = executionIO.hiddenStatesInput,
@@ -972,8 +985,6 @@ public final class DistributedCoreAIStageHandle:
                 positionCount: positionCount,
                 vocabSize: vocabSize,
                 descriptor: logitsOutputBinding.descriptor)
-            var outputViews = InferenceFunction.MutableViews()
-            outputViews.insert(&logits, for: logitsOutputBinding.name)
             var inputs = [
                 hiddenInputBinding.name: hiddenInput,
                 executionIO.positionIDs.name: positionIDs,
@@ -983,12 +994,36 @@ public final class DistributedCoreAIStageHandle:
                     tokenIDs: input.tokenIDs,
                     descriptor: inputIDsBinding.descriptor)
             }
-            try await run(
-                activeFunction,
-                cacheIO: activeContext.cacheIO,
-                inputs: inputs,
-                outputViews: consume outputViews,
-                requestState: &requestState)
+            let eagleFinalHidden: DistributedEagleTargetTensor?
+            if let finalHiddenBinding = executionIO.eagleTargetFinalHiddenOutput {
+                var finalHiddenOutput = try DistributedCoreAIStageNDArrayIO.makeHiddenStatesOutput(
+                    positionCount: positionCount,
+                    descriptor: finalHiddenBinding.descriptor,
+                    boundaryTensor: boundaryTensor)
+                var outputViews = InferenceFunction.MutableViews()
+                outputViews.insert(&logits, for: logitsOutputBinding.name)
+                outputViews.insert(&finalHiddenOutput, for: finalHiddenBinding.name)
+                try await run(
+                    activeFunction,
+                    cacheIO: activeContext.cacheIO,
+                    inputs: inputs,
+                    outputViews: consume outputViews,
+                    requestState: &requestState)
+                eagleFinalHidden = try DistributedCoreAIStageNDArrayIO.makeEagleTargetFinalHidden(
+                    finalHiddenOutput,
+                    positionRange: input.positionRange,
+                    tensorName: finalHiddenBinding.name)
+            } else {
+                var outputViews = InferenceFunction.MutableViews()
+                outputViews.insert(&logits, for: logitsOutputBinding.name)
+                try await run(
+                    activeFunction,
+                    cacheIO: activeContext.cacheIO,
+                    inputs: inputs,
+                    outputViews: consume outputViews,
+                    requestState: &requestState)
+                eagleFinalHidden = nil
+            }
             let logitsRow = try DistributedCoreAIStageNDArrayIO.readLastLogitsRow(
                 logits,
                 vocabSize: vocabSize)
@@ -1008,7 +1043,8 @@ public final class DistributedCoreAIStageHandle:
                 stageID: descriptor.id,
                 stepIndex: input.stepIndex,
                 tokenID: Int32(tokenID),
-                topLogits: Self.captureTopLogitsIfRequested(logitsRow))
+                topLogits: Self.captureTopLogitsIfRequested(logitsRow),
+                eagleTargetFinalHidden: eagleFinalHidden)
         }
 
         if descriptor.role == .finalNormHead {
@@ -1940,35 +1976,13 @@ enum DistributedCoreAIStageNDArrayIO {
             [1, shape[1], positionCount, shape[3]]))
     }
 
-    static func makeEagleTargetArtifacts(
-        hiddenOutput: NDArray,
+    static func makeEagleTargetKVChunk(
         fullKey: NDArray,
         fullValue: NDArray,
         slidingKey: NDArray,
         slidingValue: NDArray,
         positionRange: DistributedSequenceRange
-    ) throws -> DistributedEagleTargetArtifacts {
-        guard hiddenOutput.scalarType == .float16 else {
-            throw CoreAIPipeline.RuntimeError.modelContract(
-                "EAGLE target hidden output scalar type must be float16")
-        }
-        let hidden = try readRank3(
-            hiddenOutput,
-            as: Float16.self,
-            tensorName: "hidden_states")
-        guard hidden.shape[0] == 1, hidden.shape[1] == positionRange.count else {
-            throw DistributedStageExecutionError.invalidStageOutput(
-                "EAGLE target hidden output sequence does not match position_range")
-        }
-        let hiddenWidth = hidden.shape[2]
-        let hiddenStart = (hidden.shape[1] - 1) * hiddenWidth
-        let finalHidden = try DistributedEagleTargetTensor(
-            shape: [1, 1, hiddenWidth],
-            scalarType: .float16,
-            float16BitPatterns: hidden.values[
-                hiddenStart..<(hiddenStart + hiddenWidth)
-            ].map(\.bitPattern))
-
+    ) throws -> DistributedEagleTargetKVChunk {
         func kvTensor(_ array: NDArray, name: String) throws -> DistributedEagleTargetTensor {
             guard array.scalarType == .float16 else {
                 throw CoreAIPipeline.RuntimeError.modelContract(
@@ -1981,14 +1995,40 @@ enum DistributedCoreAIStageNDArrayIO {
                 float16BitPatterns: readback.values.map(\.bitPattern))
         }
 
-        return try DistributedEagleTargetArtifacts(
-            finalHidden: finalHidden,
+        return try DistributedEagleTargetKVChunk(
             fullKey: kvTensor(fullKey, name: "k_full"),
             fullValue: kvTensor(fullValue, name: "v_full"),
             slidingKey: kvTensor(slidingKey, name: "k_sliding"),
             slidingValue: kvTensor(slidingValue, name: "v_sliding"),
             fullPositionRange: positionRange,
             slidingPositionRange: positionRange)
+    }
+
+    static func makeEagleTargetFinalHidden(
+        _ hiddenOutput: NDArray,
+        positionRange: DistributedSequenceRange,
+        tensorName: String
+    ) throws -> DistributedEagleTargetTensor {
+        guard hiddenOutput.scalarType == .float16 else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "EAGLE target \(tensorName) output scalar type must be float16")
+        }
+        let hidden = try readRank3(
+            hiddenOutput,
+            as: Float16.self,
+            tensorName: tensorName)
+        guard hidden.shape[0] == 1, hidden.shape[1] == positionRange.count else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "EAGLE target \(tensorName) output sequence does not match position_range")
+        }
+        let hiddenWidth = hidden.shape[2]
+        let hiddenStart = (hidden.shape[1] - 1) * hiddenWidth
+        return try DistributedEagleTargetTensor(
+            shape: [1, 1, hiddenWidth],
+            scalarType: .float16,
+            float16BitPatterns: hidden.values[
+                hiddenStart..<(hiddenStart + hiddenWidth)
+            ].map(\.bitPattern))
     }
 
     static func applySoftTokenSpliceIfPresent(

@@ -7,15 +7,37 @@ import Foundation
 public struct DistributedEagleTargetContract: Codable, Hashable, Sendable {
     public let stageID: String
     public let slidingWindow: Int
+    public let finalHiddenStageID: String
+    public let finalHiddenTensorName: String
 
     enum CodingKeys: String, CodingKey {
         case stageID = "stage_id"
         case slidingWindow = "sliding_window"
+        case finalHiddenStageID = "final_hidden_stage_id"
+        case finalHiddenTensorName = "final_hidden_tensor_name"
     }
 
-    public init(stageID: String, slidingWindow: Int) {
+    public init(
+        stageID: String,
+        slidingWindow: Int,
+        finalHiddenStageID: String = "head",
+        finalHiddenTensorName: String = "hidden"
+    ) {
         self.stageID = stageID
         self.slidingWindow = slidingWindow
+        self.finalHiddenStageID = finalHiddenStageID
+        self.finalHiddenTensorName = finalHiddenTensorName
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            stageID: try container.decode(String.self, forKey: .stageID),
+            slidingWindow: try container.decode(Int.self, forKey: .slidingWindow),
+            finalHiddenStageID: try container.decodeIfPresent(
+                String.self, forKey: .finalHiddenStageID) ?? "head",
+            finalHiddenTensorName: try container.decodeIfPresent(
+                String.self, forKey: .finalHiddenTensorName) ?? "hidden")
     }
 
     func validate(stages: [DistributedStageManifestStage]) throws {
@@ -33,10 +55,183 @@ public struct DistributedEagleTargetContract: Codable, Hashable, Sendable {
             throw DistributedStageManifestError.invalidManifest(
                 "eagle_target stage_id must name the final transformer_layers stage")
         }
+        guard let finalHead = stages.last(where: { $0.role == .finalNormHead }),
+            finalHead.id == finalHiddenStageID
+        else {
+            throw DistributedStageManifestError.invalidManifest(
+                "eagle_target final_hidden_stage_id must name the final_norm_head stage")
+        }
+        guard finalHiddenTensorName == DistributedStageIOTensorName.hidden.rawValue else {
+            throw DistributedStageManifestError.invalidManifest(
+                "eagle_target final_hidden_tensor_name must be hidden")
+        }
     }
 
     func producesArtifacts(for stageID: String) -> Bool {
         self.stageID == stageID
+    }
+
+    func producesFinalHidden(for stageID: String) -> Bool {
+        finalHiddenStageID == stageID
+    }
+}
+
+struct RawDistributedEagleTargetContract: Decodable {
+    let stageID: String?
+    let slidingWindow: Int?
+    let finalHiddenStageID: String?
+    let finalHiddenTensorName: String?
+    let outputs: OutputMappings?
+    let representativeKV: RepresentativeKV?
+
+    enum CodingKeys: String, CodingKey {
+        case stageID = "stage_id"
+        case slidingWindow = "sliding_window"
+        case finalHiddenStageID = "final_hidden_stage_id"
+        case finalHiddenTensorName = "final_hidden_tensor_name"
+        case outputs
+        case representativeKV = "representative_kv"
+    }
+
+    struct OutputMappings: Decodable {
+        let backboneHidden: Producer?
+
+        enum CodingKeys: String, CodingKey {
+            case backboneHidden = "backbone_hidden"
+        }
+    }
+
+    struct Producer: Decodable {
+        let stage: String?
+        let tensor: String?
+    }
+
+    struct RepresentativeKV: Decodable {
+        let fullAttention: KVProducer?
+        let slidingAttention: KVProducer?
+
+        enum CodingKeys: String, CodingKey {
+            case fullAttention = "full_attention"
+            case slidingAttention = "sliding_attention"
+        }
+    }
+
+    struct KVProducer: Decodable {
+        let stage: String?
+        let keyOutput: String?
+        let valueOutput: String?
+
+        enum CodingKeys: String, CodingKey {
+            case stage
+            case keyOutput = "key_output"
+            case valueOutput = "value_output"
+        }
+    }
+
+    func normalized(
+        stages: [DistributedStageManifestStage],
+        cacheGroups: DistributedStageCacheGroups?
+    ) throws -> DistributedEagleTargetContract {
+        let fullProducer = representativeKV?.fullAttention
+        let slidingProducer = representativeKV?.slidingAttention
+        if representativeKV != nil {
+            guard let fullProducer, let slidingProducer else {
+                throw DistributedStageManifestError.invalidManifest(
+                    "eagle_target representative_kv must declare full_attention and sliding_attention")
+            }
+            guard Self.firstNonEmpty(fullProducer.stage) != nil,
+                Self.firstNonEmpty(slidingProducer.stage) != nil
+            else {
+                throw DistributedStageManifestError.invalidManifest(
+                    "eagle_target representative_kv producer stages must be non-empty")
+            }
+            guard fullProducer.stage == slidingProducer.stage else {
+                throw DistributedStageManifestError.invalidManifest(
+                    "eagle_target representative_kv producers must name the same stage")
+            }
+            guard fullProducer.keyOutput == DistributedStageIOTensorName.kFull.rawValue,
+                fullProducer.valueOutput == DistributedStageIOTensorName.vFull.rawValue,
+                slidingProducer.keyOutput == DistributedStageIOTensorName.kSliding.rawValue,
+                slidingProducer.valueOutput == DistributedStageIOTensorName.vSliding.rawValue
+            else {
+                throw DistributedStageManifestError.invalidManifest(
+                    "eagle_target representative_kv outputs must be k_full/v_full and k_sliding/v_sliding")
+            }
+        }
+
+        let derivedStageID = fullProducer?.stage
+        if let stageID, let derivedStageID, stageID != derivedStageID {
+            throw DistributedStageManifestError.invalidManifest(
+                "eagle_target stage_id conflicts with representative_kv producer stage")
+        }
+        guard let resolvedStageID = Self.firstNonEmpty(stageID, derivedStageID) else {
+            throw DistributedStageManifestError.invalidManifest(
+                "eagle_target stage_id is missing and representative_kv producer stage is unavailable")
+        }
+
+        let derivedSlidingWindow = cacheGroups?.groups["sliding"]?.slidingWindow
+        if let slidingWindow, let derivedSlidingWindow, slidingWindow != derivedSlidingWindow {
+            throw DistributedStageManifestError.invalidManifest(
+                "eagle_target sliding_window conflicts with cache_groups sliding window")
+        }
+        guard let resolvedSlidingWindow = slidingWindow ?? derivedSlidingWindow else {
+            throw DistributedStageManifestError.invalidManifest(
+                "eagle_target sliding_window is missing and cache_groups sliding window is unavailable")
+        }
+
+        let hiddenProducer = outputs?.backboneHidden
+        if outputs != nil, hiddenProducer == nil {
+            throw DistributedStageManifestError.invalidManifest(
+                "eagle_target outputs must declare backbone_hidden")
+        }
+        if let hiddenProducer {
+            guard Self.firstNonEmpty(hiddenProducer.stage) != nil,
+                Self.firstNonEmpty(hiddenProducer.tensor) != nil
+            else {
+                throw DistributedStageManifestError.invalidManifest(
+                    "eagle_target outputs.backbone_hidden must declare stage and tensor")
+            }
+        }
+        if let finalHiddenStageID, let mappedStage = hiddenProducer?.stage,
+            finalHiddenStageID != mappedStage
+        {
+            throw DistributedStageManifestError.invalidManifest(
+                "eagle_target final_hidden_stage_id conflicts with outputs.backbone_hidden stage")
+        }
+        if let finalHiddenTensorName, let mappedTensor = hiddenProducer?.tensor,
+            finalHiddenTensorName != mappedTensor
+        {
+            throw DistributedStageManifestError.invalidManifest(
+                "eagle_target final_hidden_tensor_name conflicts with outputs.backbone_hidden tensor")
+        }
+        let defaultHeadID = stages.last(where: { $0.role == .finalNormHead })?.id
+        guard let resolvedHiddenStageID = Self.firstNonEmpty(
+            finalHiddenStageID, hiddenProducer?.stage, defaultHeadID)
+        else {
+            throw DistributedStageManifestError.invalidManifest(
+                "eagle_target final hidden producer stage is unavailable")
+        }
+        guard let resolvedHiddenTensorName = Self.firstNonEmpty(
+            finalHiddenTensorName, hiddenProducer?.tensor, DistributedStageIOTensorName.hidden.rawValue)
+        else {
+            throw DistributedStageManifestError.invalidManifest(
+                "eagle_target final hidden tensor is unavailable")
+        }
+
+        return DistributedEagleTargetContract(
+            stageID: resolvedStageID,
+            slidingWindow: resolvedSlidingWindow,
+            finalHiddenStageID: resolvedHiddenStageID,
+            finalHiddenTensorName: resolvedHiddenTensorName)
+    }
+
+    private static func firstNonEmpty(_ values: String?...) -> String? {
+        values.lazy.compactMap { value -> String? in
+            guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+                !trimmed.isEmpty
+            else { return nil }
+            return trimmed
+        }.first
     }
 }
 
@@ -82,12 +277,12 @@ public struct DistributedEagleTargetTensor: Hashable, Sendable {
     }
 }
 
-/// Local target state consumed by the future sequential EAGLE/MTP loop.
+/// New-position representative K/V emitted by the final transformer stage.
 ///
-/// Stage handles emit one chunk whose full/sliding ranges are identical. The host accumulator
-/// returns a snapshot with the complete full-attention prefix and the cropped sliding range.
-public struct DistributedEagleTargetArtifacts: Hashable, Sendable {
-    public let finalHidden: DistributedEagleTargetTensor
+/// The final post-norm hidden is emitted later by the head stage, so it deliberately is not part
+/// of this chunk. The same-machine coordinator combines both producers before exposing an
+/// assistant-ready ``DistributedEagleTargetArtifacts`` snapshot.
+public struct DistributedEagleTargetKVChunk: Hashable, Sendable {
     public let fullKey: DistributedEagleTargetTensor
     public let fullValue: DistributedEagleTargetTensor
     public let slidingKey: DistributedEagleTargetTensor
@@ -96,7 +291,6 @@ public struct DistributedEagleTargetArtifacts: Hashable, Sendable {
     public let slidingPositionRange: DistributedSequenceRange
 
     public init(
-        finalHidden: DistributedEagleTargetTensor,
         fullKey: DistributedEagleTargetTensor,
         fullValue: DistributedEagleTargetTensor,
         slidingKey: DistributedEagleTargetTensor,
@@ -104,13 +298,6 @@ public struct DistributedEagleTargetArtifacts: Hashable, Sendable {
         fullPositionRange: DistributedSequenceRange,
         slidingPositionRange: DistributedSequenceRange
     ) throws {
-        guard finalHidden.shape.count == 3,
-            finalHidden.shape[0] == 1,
-            finalHidden.shape[1] == 1
-        else {
-            throw DistributedStageExecutionError.invalidStageOutput(
-                "EAGLE target final hidden shape \(finalHidden.shape) must match [1, 1, hidden]")
-        }
         try Self.validateKVPair(
             key: fullKey,
             value: fullValue,
@@ -125,7 +312,6 @@ public struct DistributedEagleTargetArtifacts: Hashable, Sendable {
             throw DistributedStageExecutionError.invalidStageOutput(
                 "EAGLE target full and sliding ranges must end at the same position")
         }
-        self.finalHidden = finalHidden
         self.fullKey = fullKey
         self.fullValue = fullValue
         self.slidingKey = slidingKey
@@ -134,7 +320,7 @@ public struct DistributedEagleTargetArtifacts: Hashable, Sendable {
         self.slidingPositionRange = slidingPositionRange
     }
 
-    private static func validateKVPair(
+    fileprivate static func validateKVPair(
         key: DistributedEagleTargetTensor,
         value: DistributedEagleTargetTensor,
         positionRange: DistributedSequenceRange,
@@ -159,11 +345,65 @@ public struct DistributedEagleTargetArtifacts: Hashable, Sendable {
     }
 }
 
+/// Local target state consumed by the future sequential EAGLE/MTP loop.
+///
+/// Stage handles emit one chunk whose full/sliding ranges are identical. The host accumulator
+/// returns a snapshot with the complete full-attention prefix and the cropped sliding range.
+public struct DistributedEagleTargetArtifacts: Hashable, Sendable {
+    public let finalHidden: DistributedEagleTargetTensor
+    public let fullKey: DistributedEagleTargetTensor
+    public let fullValue: DistributedEagleTargetTensor
+    public let slidingKey: DistributedEagleTargetTensor
+    public let slidingValue: DistributedEagleTargetTensor
+    public let fullPositionRange: DistributedSequenceRange
+    public let slidingPositionRange: DistributedSequenceRange
+
+    public init(
+        finalHidden: DistributedEagleTargetTensor,
+        fullKey: DistributedEagleTargetTensor,
+        fullValue: DistributedEagleTargetTensor,
+        slidingKey: DistributedEagleTargetTensor,
+        slidingValue: DistributedEagleTargetTensor,
+        fullPositionRange: DistributedSequenceRange,
+        slidingPositionRange: DistributedSequenceRange
+    ) throws {
+        let kvChunk = try DistributedEagleTargetKVChunk(
+            fullKey: fullKey,
+            fullValue: fullValue,
+            slidingKey: slidingKey,
+            slidingValue: slidingValue,
+            fullPositionRange: fullPositionRange,
+            slidingPositionRange: slidingPositionRange)
+        try self.init(finalHidden: finalHidden, kvChunk: kvChunk)
+    }
+
+    public init(
+        finalHidden: DistributedEagleTargetTensor,
+        kvChunk: DistributedEagleTargetKVChunk
+    ) throws {
+        guard finalHidden.shape.count == 3,
+            finalHidden.shape[0] == 1,
+            finalHidden.shape[1] == 1
+        else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "EAGLE target final hidden shape \(finalHidden.shape) must match [1, 1, hidden]")
+        }
+        self.finalHidden = finalHidden
+        self.fullKey = kvChunk.fullKey
+        self.fullValue = kvChunk.fullValue
+        self.slidingKey = kvChunk.slidingKey
+        self.slidingValue = kvChunk.slidingValue
+        self.fullPositionRange = kvChunk.fullPositionRange
+        self.slidingPositionRange = kvChunk.slidingPositionRange
+    }
+}
+
 /// Per-request, capacity-bounded host accumulation for streamed staged target outputs.
 public struct DistributedEagleTargetKVAccumulator: Sendable {
     public let kvCapacity: Int
     public let slidingWindow: Int
     public private(set) var snapshot: DistributedEagleTargetArtifacts?
+    private var accumulatedKV: DistributedEagleTargetKVChunk?
 
     public init(kvCapacity: Int, slidingWindow: Int) throws {
         guard kvCapacity > 0 else {
@@ -177,10 +417,25 @@ public struct DistributedEagleTargetKVAccumulator: Sendable {
         self.kvCapacity = kvCapacity
         self.slidingWindow = slidingWindow
         self.snapshot = nil
+        self.accumulatedKV = nil
     }
 
     public mutating func append(_ chunk: DistributedEagleTargetArtifacts) throws {
-        let processed = snapshot?.fullPositionRange.upperBound ?? 0
+        let kvChunk = try DistributedEagleTargetKVChunk(
+            fullKey: chunk.fullKey,
+            fullValue: chunk.fullValue,
+            slidingKey: chunk.slidingKey,
+            slidingValue: chunk.slidingValue,
+            fullPositionRange: chunk.fullPositionRange,
+            slidingPositionRange: chunk.slidingPositionRange)
+        try append(kvChunk, finalHidden: chunk.finalHidden)
+    }
+
+    mutating func append(
+        _ chunk: DistributedEagleTargetKVChunk,
+        finalHidden: DistributedEagleTargetTensor?
+    ) throws {
+        let processed = accumulatedKV?.fullPositionRange.upperBound ?? 0
         guard chunk.fullPositionRange == chunk.slidingPositionRange else {
             throw DistributedStageExecutionError.invalidStageOutput(
                 "EAGLE target streamed chunk full and sliding ranges must match")
@@ -195,20 +450,19 @@ public struct DistributedEagleTargetKVAccumulator: Sendable {
                 "EAGLE target accumulated length \(nextProcessed) exceeds kv_capacity \(kvCapacity)")
         }
 
-        let fullKey = try Self.concatenating(snapshot?.fullKey, chunk.fullKey, label: "full key")
-        let fullValue = try Self.concatenating(snapshot?.fullValue, chunk.fullValue, label: "full value")
+        let fullKey = try Self.concatenating(accumulatedKV?.fullKey, chunk.fullKey, label: "full key")
+        let fullValue = try Self.concatenating(accumulatedKV?.fullValue, chunk.fullValue, label: "full value")
         let uncroppedSlidingKey = try Self.concatenating(
-            snapshot?.slidingKey, chunk.slidingKey, label: "sliding key")
+            accumulatedKV?.slidingKey, chunk.slidingKey, label: "sliding key")
         let uncroppedSlidingValue = try Self.concatenating(
-            snapshot?.slidingValue, chunk.slidingValue, label: "sliding value")
+            accumulatedKV?.slidingValue, chunk.slidingValue, label: "sliding value")
         let slidingLength = min(nextProcessed, slidingWindow)
         let slidingKey = try Self.suffix(
             uncroppedSlidingKey, sequenceCount: slidingLength, label: "sliding key")
         let slidingValue = try Self.suffix(
             uncroppedSlidingValue, sequenceCount: slidingLength, label: "sliding value")
 
-        snapshot = try DistributedEagleTargetArtifacts(
-            finalHidden: chunk.finalHidden,
+        let accumulatedKV = try DistributedEagleTargetKVChunk(
             fullKey: fullKey,
             fullValue: fullValue,
             slidingKey: slidingKey,
@@ -219,10 +473,19 @@ public struct DistributedEagleTargetKVAccumulator: Sendable {
             slidingPositionRange: DistributedSequenceRange(
                 lowerBound: nextProcessed - slidingLength,
                 upperBound: nextProcessed))
+        self.accumulatedKV = accumulatedKV
+        if let finalHidden {
+            snapshot = try DistributedEagleTargetArtifacts(
+                finalHidden: finalHidden,
+                kvChunk: accumulatedKV)
+        } else {
+            snapshot = nil
+        }
     }
 
     public mutating func reset() {
         snapshot = nil
+        accumulatedKV = nil
     }
 
     private static func concatenating(

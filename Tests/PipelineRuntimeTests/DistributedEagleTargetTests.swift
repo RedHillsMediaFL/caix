@@ -19,6 +19,25 @@ final class DistributedEagleTargetTests: XCTestCase {
                 slidingWindow: 1_024))
     }
 
+    func testManifestDerivesEagleProducersFromRetainedRichContract() throws {
+        let manifest = try DistributedStageManifest.decode(
+            from: Data(richManifestJSON().utf8))
+
+        let target = try XCTUnwrap(manifest.eagleTarget)
+        XCTAssertEqual(target.stageID, "layers-14-28")
+        XCTAssertEqual(target.slidingWindow, 1_024)
+        XCTAssertEqual(target.finalHiddenStageID, "head")
+        XCTAssertEqual(target.finalHiddenTensorName, "hidden")
+    }
+
+    func testManifestRejectsIncompleteRichHiddenProducerMapping() {
+        let json = richManifestJSON().replacingOccurrences(
+            of: #""backbone_hidden": {"stage": "head", "tensor": "hidden"}"#,
+            with: #""backbone_hidden": {"stage": "head"}"#)
+
+        XCTAssertThrowsError(try DistributedStageManifest.decode(from: Data(json.utf8)))
+    }
+
     func testManifestRejectsEagleTargetBeforeFinalTransformerStage() {
         XCTAssertThrowsError(try DistributedStageManifest.decode(
             from: Data(manifestJSON(
@@ -75,6 +94,43 @@ final class DistributedEagleTargetTests: XCTestCase {
             eagleTarget: target))
     }
 
+    func testStageIOContractRequiresPostNormHiddenOnDeclaredHead() throws {
+        let target = DistributedEagleTargetContract(
+            stageID: "layers-14-28",
+            slidingWindow: 1_024,
+            finalHiddenStageID: "head",
+            finalHiddenTensorName: "hidden")
+        let descriptor = DistributedStageDescriptor(
+            id: "head",
+            role: .finalNormHead,
+            layerRange: nil,
+            assetName: "head.aimodel")
+        let inputs = [
+            DistributedStageIOTensor(.hiddenStates, shape: [1, -1, 1_024], scalarType: .float16),
+            DistributedStageIOTensor(.positionIDs, shape: [1, -1], scalarType: .int32),
+        ]
+        let logits = DistributedStageIOTensor(.logits, shape: [1, -1, 256], scalarType: .float16)
+        let hidden = DistributedStageIOTensor(.hidden, shape: [1, -1, 1_024], scalarType: .float16)
+
+        XCTAssertNoThrow(try DistributedStageIOContract(
+            inputs: inputs,
+            outputs: [logits, hidden]
+        ).validate(
+            for: descriptor,
+            boundaryTensor: boundaryTensor,
+            vocabSize: 256,
+            eagleTarget: target))
+
+        XCTAssertThrowsError(try DistributedStageIOContract(
+            inputs: inputs,
+            outputs: [logits]
+        ).validate(
+            for: descriptor,
+            boundaryTensor: boundaryTensor,
+            vocabSize: 256,
+            eagleTarget: target))
+    }
+
     func testCoreAIRank4ReadbackLayoutPreservesHeadSequenceOrder() throws {
         XCTAssertEqual(
             try DistributedCoreAIStageTensorReadbackLayout.rank4Offsets(
@@ -85,7 +141,7 @@ final class DistributedEagleTargetTests: XCTestCase {
     }
 
     #if COREAI_RUNTIME
-    func testCoreAIReadbackBuildsEagleChunkFromLastHiddenAndNewKVColumns() throws {
+    func testCoreAIReadbackSeparatesHeadHiddenFromTransformerKVColumns() throws {
         let hidden = float16Array(shape: [1, 2, 2], values: [1, 2, 3, 4])
         let fullKey = float16Array(shape: [1, 2, 2, 1], values: [10, 11, 20, 21])
         let fullValue = float16Array(shape: [1, 2, 2, 1], values: [30, 31, 40, 41])
@@ -93,16 +149,19 @@ final class DistributedEagleTargetTests: XCTestCase {
         let slidingValue = float16Array(shape: [1, 2, 2, 1], values: [70, 71, 80, 81])
         let range = DistributedSequenceRange(lowerBound: 4, upperBound: 6)
 
-        let chunk = try DistributedCoreAIStageNDArrayIO.makeEagleTargetArtifacts(
-            hiddenOutput: hidden,
+        let chunk = try DistributedCoreAIStageNDArrayIO.makeEagleTargetKVChunk(
             fullKey: fullKey,
             fullValue: fullValue,
             slidingKey: slidingKey,
             slidingValue: slidingValue,
             positionRange: range)
+        let finalHidden = try DistributedCoreAIStageNDArrayIO.makeEagleTargetFinalHidden(
+            hidden,
+            positionRange: range,
+            tensorName: "hidden")
 
         XCTAssertEqual(
-            chunk.finalHidden.float16BitPatterns,
+            finalHidden.float16BitPatterns,
             [Float16(3).bitPattern, Float16(4).bitPattern])
         XCTAssertEqual(
             chunk.fullKey.float16BitPatterns,
@@ -113,12 +172,10 @@ final class DistributedEagleTargetTests: XCTestCase {
     }
 
     func testCoreAIReadbackRejectsNonFloat16EagleTensor() throws {
-        let hidden = float16Array(shape: [1, 1, 2], values: [1, 2])
         let wrongKey = NDArray(shape: [1, 1, 1, 1], scalarType: .float32)
         let goodKV = float16Array(shape: [1, 1, 1, 1], values: [1])
 
-        XCTAssertThrowsError(try DistributedCoreAIStageNDArrayIO.makeEagleTargetArtifacts(
-            hiddenOutput: hidden,
+        XCTAssertThrowsError(try DistributedCoreAIStageNDArrayIO.makeEagleTargetKVChunk(
             fullKey: wrongKey,
             fullValue: goodKV,
             slidingKey: goodKV,
@@ -223,7 +280,8 @@ final class DistributedEagleTargetTests: XCTestCase {
             requestID: "req-mtp",
             stepIndex: 0,
             positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 2),
-            tokenIDs: [1, 2])
+            tokenIDs: [1, 2],
+            emitToken: false)
         let output = try await pipeline.forward(
             requestID: "req-mtp",
             stepIndex: 1,
@@ -239,7 +297,7 @@ final class DistributedEagleTargetTests: XCTestCase {
             DistributedSequenceRange(lowerBound: 1, upperBound: 3))
         XCTAssertEqual(artifacts.fullKey.float16BitPatterns, [10, 11, 12])
         XCTAssertEqual(artifacts.slidingKey.float16BitPatterns, [111, 112])
-        XCTAssertEqual(artifacts.finalHidden.float16BitPatterns, [2, 3])
+        XCTAssertEqual(artifacts.finalHidden.float16BitPatterns, [902, 903])
 
         try await pipeline.reset(requestID: "req-mtp")
         let resetOutput = try await pipeline.forward(
@@ -428,6 +486,25 @@ final class DistributedEagleTargetTests: XCTestCase {
             slidingPositionRange: sequenceRange)
     }
 
+    private func kvChunk(
+        range: Range<Int>,
+        fullKey: [UInt16],
+        fullValue: [UInt16],
+        slidingKey: [UInt16],
+        slidingValue: [UInt16]
+    ) throws -> DistributedEagleTargetKVChunk {
+        let sequenceRange = DistributedSequenceRange(
+            lowerBound: range.lowerBound,
+            upperBound: range.upperBound)
+        return try DistributedEagleTargetKVChunk(
+            fullKey: tensor(shape: [1, 1, range.count, 1], values: fullKey),
+            fullValue: tensor(shape: [1, 1, range.count, 1], values: fullValue),
+            slidingKey: tensor(shape: [1, 1, range.count, 1], values: slidingKey),
+            slidingValue: tensor(shape: [1, 1, range.count, 1], values: slidingValue),
+            fullPositionRange: sequenceRange,
+            slidingPositionRange: sequenceRange)
+    }
+
     private func makePipelineHandles(
         manifest: DistributedStageManifest,
         emitArtifacts: Bool = true
@@ -438,13 +515,21 @@ final class DistributedEagleTargetTests: XCTestCase {
                 : nil
             return EagleTargetFakeStageHandle(
                 descriptor: descriptor,
-                supportsEagleTargetArtifacts: descriptor.id == manifest.eagleTarget?.stageID
+                supportsEagleTargetKVChunk: descriptor.id == manifest.eagleTarget?.stageID,
+                supportsEagleTargetFinalHidden: descriptor.id
+                    == manifest.eagleTarget?.finalHiddenStageID
             ) { input in
                 if descriptor.role == .finalNormHead {
                     return DistributedStageForwardOutput(
                         stageID: descriptor.id,
                         stepIndex: input.stepIndex,
-                        tokenID: 42)
+                        tokenID: 42,
+                        eagleTargetFinalHidden: try self.tensor(
+                            shape: [1, 1, 2],
+                            values: [
+                                UInt16(900 + input.positionRange.upperBound - 1),
+                                UInt16(900 + input.positionRange.upperBound),
+                            ]))
                 }
                 let width = 2
                 let shape = [1, input.positionRange.count, width]
@@ -461,37 +546,21 @@ final class DistributedEagleTargetTests: XCTestCase {
                     payload: Array(
                         repeating: UInt8(index + 1),
                         count: shape.reduce(DistributedTensorScalarType.float16.byteWidth, *)))
-                var eagleArtifacts: DistributedEagleTargetArtifacts?
+                var eagleKVChunk: DistributedEagleTargetKVChunk?
                 if emitArtifacts && descriptor.id == manifest.eagleTarget?.stageID {
                     let positions = Array(input.positionRange.lowerBound..<input.positionRange.upperBound)
-                    let sequenceRange = input.positionRange
-                    eagleArtifacts = try DistributedEagleTargetArtifacts(
-                        finalHidden: self.tensor(
-                            shape: [1, 1, 2],
-                            values: [
-                                UInt16(sequenceRange.upperBound - 1),
-                                UInt16(sequenceRange.upperBound),
-                            ]),
-                        fullKey: self.tensor(
-                            shape: [1, 1, positions.count, 1],
-                            values: positions.map { UInt16(10 + $0) }),
-                        fullValue: self.tensor(
-                            shape: [1, 1, positions.count, 1],
-                            values: positions.map { UInt16(20 + $0) }),
-                        slidingKey: self.tensor(
-                            shape: [1, 1, positions.count, 1],
-                            values: positions.map { UInt16(110 + $0) }),
-                        slidingValue: self.tensor(
-                            shape: [1, 1, positions.count, 1],
-                            values: positions.map { UInt16(120 + $0) }),
-                        fullPositionRange: sequenceRange,
-                        slidingPositionRange: sequenceRange)
+                    eagleKVChunk = try self.kvChunk(
+                        range: input.positionRange.lowerBound..<input.positionRange.upperBound,
+                        fullKey: positions.map { UInt16(10 + $0) },
+                        fullValue: positions.map { UInt16(20 + $0) },
+                        slidingKey: positions.map { UInt16(110 + $0) },
+                        slidingValue: positions.map { UInt16(120 + $0) })
                 }
                 return DistributedStageForwardOutput(
                     stageID: descriptor.id,
                     stepIndex: input.stepIndex,
                     hiddenState: hidden,
-                    eagleTargetArtifacts: eagleArtifacts)
+                    eagleTargetKVChunk: eagleKVChunk)
             }
         }
     }
@@ -519,22 +588,75 @@ final class DistributedEagleTargetTests: XCTestCase {
         }
         """
     }
+
+    private func richManifestJSON() -> String {
+        """
+        {
+          "schema": "\(DistributedStageManifest.currentSchema)",
+          "model": "gemma-4-staged",
+          "total_layer_count": 28,
+          "cache_groups": {
+            "strategy": "gemma4_split_sliding_global_v0",
+            "groups": {
+              "sliding": {
+                "state_names": ["sliding_keyCache", "sliding_valueCache"],
+                "capacity": 3072,
+                "sliding_window": 1024
+              },
+              "global": {
+                "state_names": ["global_keyCache", "global_valueCache"],
+                "capacity": 131072
+              }
+            }
+          },
+          "eagle_target": {
+            "status": "target_contract_only",
+            "outputs": {
+              "logits": {"stage": "head", "tensor": "logits"},
+              "backbone_hidden": {"stage": "head", "tensor": "hidden"}
+            },
+            "representative_kv": {
+              "full_attention": {
+                "stage": "layers-14-28",
+                "key_output": "k_full",
+                "value_output": "v_full"
+              },
+              "sliding_attention": {
+                "stage": "layers-14-28",
+                "key_output": "k_sliding",
+                "value_output": "v_sliding"
+              }
+            },
+            "kv_output_semantics": "new_positions_only"
+          },
+          "stages": [
+            {"id":"embed","role":"embeddings","layers":"embeddings","bundle":"embed.aimodel","memory_gb":1},
+            {"id":"layers-00-14","role":"transformer_layers","layers":[0,14],"bundle":"layers-a.aimodel","memory_gb":2},
+            {"id":"layers-14-28","role":"transformer_layers","layers":[14,28],"bundle":"layers-b.aimodel","memory_gb":2},
+            {"id":"head","role":"final_norm_head","layers":"norm+lm_head","bundle":"head.aimodel","memory_gb":1}
+          ]
+        }
+        """
+    }
 }
 
 private final class EagleTargetFakeStageHandle: DistributedStageHandle {
     let descriptor: DistributedStageDescriptor
     let acceptsTokenIDs: Bool
-    let supportsEagleTargetArtifacts: Bool
+    let supportsEagleTargetKVChunk: Bool
+    let supportsEagleTargetFinalHidden: Bool
     private let output: (DistributedStageForwardInput) throws -> DistributedStageForwardOutput
 
     init(
         descriptor: DistributedStageDescriptor,
-        supportsEagleTargetArtifacts: Bool,
+        supportsEagleTargetKVChunk: Bool,
+        supportsEagleTargetFinalHidden: Bool,
         output: @escaping (DistributedStageForwardInput) throws -> DistributedStageForwardOutput
     ) {
         self.descriptor = descriptor
         self.acceptsTokenIDs = descriptor.role == .embeddings
-        self.supportsEagleTargetArtifacts = supportsEagleTargetArtifacts
+        self.supportsEagleTargetKVChunk = supportsEagleTargetKVChunk
+        self.supportsEagleTargetFinalHidden = supportsEagleTargetFinalHidden
         self.output = output
     }
 
