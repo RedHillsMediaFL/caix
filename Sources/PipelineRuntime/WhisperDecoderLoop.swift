@@ -19,6 +19,9 @@ public enum WhisperDecoderLoop {
         step: (Int32) async throws -> [Float],
         onTextToken: ((Int32) -> Void)? = nil
     ) async throws -> Result {
+        guard !includeTimestamps else {
+            throw WhisperDecodingPolicy.PolicyError.timestampsUnsupported
+        }
         try Task.checkCancellation()
         let languageLogits = try await step(policy.decoderStartTokenID)
         try Task.checkCancellation()
@@ -53,11 +56,14 @@ public enum WhisperDecoderLoop {
             }
             textTokens.append(token)
             onTextToken?(token)
+            try Task.checkCancellation()
             if position + 1 < limit {
                 logits = try await step(token)
                 try Task.checkCancellation()
             }
         }
+
+        try Task.checkCancellation()
 
         return Result(
             textTokenIDs: textTokens,

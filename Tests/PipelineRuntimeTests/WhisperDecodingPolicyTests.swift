@@ -1,10 +1,11 @@
+import CryptoKit
 import XCTest
 
 @testable import PipelineRuntime
 
 final class WhisperDecodingPolicyTests: XCTestCase {
     func testLoadsPinnedShapeAndBuildsForcedTranscriptionPrefix() throws {
-        let policy = try WhisperDecodingPolicy(data: fixture())
+        let policy = try authenticatedPolicy()
 
         XCTAssertEqual(policy.languageTokenID(for: "en"), 50_259)
         XCTAssertEqual(policy.languageTokenID(for: "<|es|>"), 50_262)
@@ -16,7 +17,7 @@ final class WhisperDecodingPolicyTests: XCTestCase {
     }
 
     func testLanguageDetectionConsidersOnlyLanguageTokens() throws {
-        let policy = try WhisperDecodingPolicy(data: fixture())
+        let policy = try authenticatedPolicy()
         var logits = [Float](repeating: -100, count: 51_865)
         logits[42] = 1_000
         logits[50_259] = 4
@@ -26,7 +27,7 @@ final class WhisperDecodingPolicyTests: XCTestCase {
     }
 
     func testGreedyTextSelectionAppliesPermanentBeginAndTimestampSuppression() throws {
-        let policy = try WhisperDecodingPolicy(data: fixture())
+        let policy = try authenticatedPolicy()
         var logits = [Float](repeating: -100, count: 51_865)
         logits[1] = 50                 // permanent suppression
         logits[220] = 40               // beginning-only suppression
@@ -42,10 +43,13 @@ final class WhisperDecodingPolicyTests: XCTestCase {
             try policy.greedyTextToken(
                 logits: logits, textPosition: 1, includeTimestamps: false),
             220)
-        XCTAssertEqual(
+        XCTAssertThrowsError(
             try policy.greedyTextToken(
-                logits: logits, textPosition: 1, includeTimestamps: true),
-            220)
+                logits: logits, textPosition: 1, includeTimestamps: true)) { error in
+            XCTAssertEqual(
+                error as? WhisperDecodingPolicy.PolicyError,
+                .timestampsUnsupported)
+        }
     }
 
     func testRejectsWrongABIAndInvalidLogits() throws {
@@ -54,15 +58,54 @@ final class WhisperDecodingPolicyTests: XCTestCase {
         object["max_length"] = 449
         XCTAssertThrowsError(
             try WhisperDecodingPolicy(
-                data: JSONSerialization.data(withJSONObject: object)))
+                authenticatedData: JSONSerialization.data(withJSONObject: object),
+                expectedSHA256: digest(
+                    JSONSerialization.data(withJSONObject: object))))
 
-        let policy = try WhisperDecodingPolicy(data: fixture())
+        let policy = try authenticatedPolicy()
         XCTAssertThrowsError(try policy.detectLanguageToken(in: [0]))
         XCTAssertThrowsError(
             try policy.greedyTextToken(
                 logits: [Float](repeating: .nan, count: 51_865),
                 textPosition: 0,
                 includeTimestamps: false))
+    }
+
+    func testRejectsAlteredGenerationRulesBeforeDecodingJSON() throws {
+        let original = fixture()
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: original) as? [String: Any])
+        object["suppress_tokens"] = []
+        let altered = try JSONSerialization.data(withJSONObject: object)
+
+        XCTAssertThrowsError(
+            try WhisperDecodingPolicy(
+                authenticatedData: altered,
+                expectedSHA256: digest(original))) { error in
+            XCTAssertEqual(
+                error as? WhisperDecodingPolicy.PolicyError,
+                .generationConfigurationDigestMismatch)
+        }
+    }
+
+    func testProductionInitializerUsesResidentModelLockDigest() {
+        XCTAssertEqual(
+            WhisperDecodingPolicy.canonicalGenerationConfigSHA256,
+            ResidentModelLock.approvedWhisperGenerationConfigSHA256)
+        XCTAssertEqual(
+            WhisperDecodingPolicy.canonicalGenerationConfigSHA256,
+            "031721643aab5be7250eb668c6b9b5c67d2549420522ac1291bfd346bfff6297")
+    }
+
+    private func authenticatedPolicy() throws -> WhisperDecodingPolicy {
+        let data = fixture()
+        return try WhisperDecodingPolicy(
+            authenticatedData: data,
+            expectedSHA256: digest(data))
+    }
+
+    private func digest(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     private func fixture() -> Data {

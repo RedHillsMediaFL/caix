@@ -79,7 +79,12 @@ let package = Package(
                 "PipelineRuntime",
                 .product(name: "Hummingbird", package: "hummingbird"),
             ],
-            swiftSettings: runtimeSwiftSettings,
+            swiftSettings: runtimeSwiftSettings + [
+                .unsafeFlags([
+                    "-Xcc", "-DACCELERATE_NEW_LAPACK",
+                    "-Xcc", "-DACCELERATE_LAPACK_ILP64",
+                ])
+            ],
             linkerSettings: [
                 .linkedFramework("Accelerate"),
                 .linkedFramework("AudioToolbox"),

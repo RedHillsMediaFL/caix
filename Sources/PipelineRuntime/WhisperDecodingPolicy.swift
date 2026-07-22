@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Authenticated Whisper-large-v2 generation rules projected into a small deterministic decoder.
@@ -8,6 +9,8 @@ public struct WhisperDecodingPolicy: Sendable {
 
     public enum PolicyError: Error, Sendable, Equatable, CustomStringConvertible {
         case invalidConfiguration(String)
+        case generationConfigurationDigestMismatch
+        case timestampsUnsupported
         case unsupportedLanguage(String)
         case invalidLanguageToken(Int32)
         case invalidLogits
@@ -15,6 +18,10 @@ public struct WhisperDecodingPolicy: Sendable {
         public var description: String {
             switch self {
             case .invalidConfiguration(let reason): return "invalid Whisper generation config: \(reason)"
+            case .generationConfigurationDigestMismatch:
+                return "Whisper generation config does not match the resident model lock"
+            case .timestampsUnsupported:
+                return "Whisper timestamp decoding is not supported"
             case .unsupportedLanguage(let language): return "unsupported Whisper language '\(language)'"
             case .invalidLanguageToken(let token): return "invalid Whisper language token \(token)"
             case .invalidLogits: return "Whisper decoder returned invalid logits"
@@ -59,7 +66,28 @@ public struct WhisperDecodingPolicy: Sendable {
     private let suppressed: Set<Int32>
     private let beginSuppressed: Set<Int32>
 
-    public init(data: Data) throws {
+    public static let canonicalGenerationConfigSHA256 =
+        ResidentModelLock.approvedWhisperGenerationConfigSHA256
+
+    public init(authenticatedContentsOf url: URL) throws {
+        let data: Data
+        do {
+            data = try BoundedRegularFileReader.read(
+                url,
+                maximumBytes: 256 * 1024)
+        } catch {
+            throw PolicyError.invalidConfiguration("cannot read a bounded regular file: \(error)")
+        }
+        try self.init(
+            authenticatedData: data,
+            expectedSHA256: Self.canonicalGenerationConfigSHA256)
+    }
+
+    init(authenticatedData data: Data, expectedSHA256: String) throws {
+        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        guard digest == expectedSHA256 else {
+            throw PolicyError.generationConfigurationDigestMismatch
+        }
         let source: Source
         do {
             source = try JSONDecoder().decode(Source.self, from: data)
@@ -117,10 +145,6 @@ public struct WhisperDecodingPolicy: Sendable {
         beginSuppressed = Set(source.beginSuppressTokens.map(Int32.init))
     }
 
-    public init(contentsOf url: URL) throws {
-        try self.init(data: Data(contentsOf: url, options: [.mappedIfSafe]))
-    }
-
     public func languageTokenID(for language: String) -> Int32? {
         let normalized = language.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if normalized.hasPrefix("<|"), normalized.hasSuffix("|>") {
@@ -163,6 +187,7 @@ public struct WhisperDecodingPolicy: Sendable {
         languageTokenID: Int32,
         includeTimestamps: Bool
     ) throws -> [Int32] {
+        guard !includeTimestamps else { throw PolicyError.timestampsUnsupported }
         guard languageIDs.contains(languageTokenID) else {
             throw PolicyError.invalidLanguageToken(languageTokenID)
         }
@@ -183,6 +208,7 @@ public struct WhisperDecodingPolicy: Sendable {
         guard logits.count == Self.vocabularySize, textPosition >= 0 else {
             throw PolicyError.invalidLogits
         }
+        guard !includeTimestamps else { throw PolicyError.timestampsUnsupported }
         var selection: (id: Int32, value: Float)?
         for rawID in 0..<Self.vocabularySize {
             let token = Int32(rawID)

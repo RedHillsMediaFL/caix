@@ -112,12 +112,12 @@ enum WhisperLogMelExtractor {
                 output.withUnsafeMutableBufferPointer { outputBuffer in
                     cblas_sgemm(
                         CblasRowMajor, CblasNoTrans, CblasNoTrans,
-                        Int32(rows), Int32(columns), Int32(inner),
+                        rows, columns, inner,
                         1,
-                        leftBuffer.baseAddress, Int32(inner),
-                        rightBuffer.baseAddress, Int32(columns),
+                        leftBuffer.baseAddress, inner,
+                        rightBuffer.baseAddress, columns,
                         0,
-                        outputBuffer.baseAddress, Int32(columns))
+                        outputBuffer.baseAddress, columns)
                 }
             }
         }

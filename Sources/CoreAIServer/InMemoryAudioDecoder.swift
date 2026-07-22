@@ -52,8 +52,14 @@ enum InMemoryAudioDecoder {
     static func decodeToWhisperPCM(_ data: Data) throws -> WhisperPCM {
         guard !data.isEmpty else { throw DecodingError.emptyInput }
         let source = MemoryAudioSource(data: data)
-        let clientData = Unmanaged.passUnretained(source).toOpaque()
+        return try RetainedAudioCallbackContext.withPointer(to: source) { clientData in
+            try decodeRetainedSource(clientData)
+        }
+    }
 
+    private static func decodeRetainedSource(
+        _ clientData: UnsafeMutableRawPointer
+    ) throws -> WhisperPCM {
         var audioFile: AudioFileID?
         let openStatus = AudioFileOpenWithCallbacks(
             clientData,
@@ -128,6 +134,17 @@ enum InMemoryAudioDecoder {
         guard status == noErr else { throw DecodingError.read(status) }
         if Int(frames) < samples.count { samples.removeLast(samples.count - Int(frames)) }
         return samples
+    }
+}
+
+enum RetainedAudioCallbackContext {
+    static func withPointer<Context: AnyObject, Result>(
+        to context: Context,
+        _ body: (UnsafeMutableRawPointer) throws -> Result
+    ) rethrows -> Result {
+        let retained = Unmanaged.passRetained(context)
+        defer { retained.release() }
+        return try body(retained.toOpaque())
     }
 }
 

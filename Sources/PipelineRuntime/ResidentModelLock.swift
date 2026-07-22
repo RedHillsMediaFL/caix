@@ -228,6 +228,8 @@ public struct ResidentModelLock: Codable, Sendable, Equatable {
 
     public static let filename = "gemma4-whisper-lock.json"
     public static let maximumLockBytes = 256 * 1024
+    public static let approvedWhisperGenerationConfigSHA256 =
+        Approved.whisperMetadata.generationConfigSHA256
 
     /// Reads only a bounded regular file and validates every conversion-critical field against
     /// the approved deployment contract. The descriptor is opened without following symlinks,

@@ -1,10 +1,11 @@
+import CryptoKit
 import XCTest
 
 @testable import PipelineRuntime
 
 final class WhisperDecoderLoopTests: XCTestCase {
     func testAutoLanguageForcedPrefixAndGreedyTextLoop() async throws {
-        let policy = try WhisperDecodingPolicy(data: fixture())
+        let policy = try policy()
         var consumed: [Int32] = []
         var streamed: [Int32] = []
 
@@ -33,28 +34,28 @@ final class WhisperDecoderLoopTests: XCTestCase {
         XCTAssertFalse(result.wasTruncated)
     }
 
-    func testExplicitLanguageOverridesDetectionAndTimestampPrefix() async throws {
-        let policy = try WhisperDecodingPolicy(data: fixture())
+    func testExplicitLanguageOverridesDetectionWithNoTimestampPrefix() async throws {
+        let policy = try policy()
         var consumed: [Int32] = []
         let result = try await WhisperDecoderLoop.run(
             policy: policy,
             requestedLanguage: "es",
-            includeTimestamps: true,
+            includeTimestamps: false,
             step: { token in
                 consumed.append(token)
-                if token == 50_359 { return Self.logits([(100, 10)]) }
+                if token == 50_363 { return Self.logits([(100, 10)]) }
                 if token == 100 { return Self.logits([(50_257, 10)]) }
                 return Self.logits([(50_259, 100)])
             })
 
-        XCTAssertEqual(consumed, [50_258, 50_262, 50_359, 100])
+        XCTAssertEqual(consumed, [50_258, 50_262, 50_359, 50_363, 100])
         XCTAssertEqual(result.language, "es")
         XCTAssertEqual(result.textTokenIDs, [100])
         XCTAssertTrue(result.reachedEndToken)
     }
 
     func testCancellationIsCheckedBetweenDecoderSteps() async throws {
-        let policy = try WhisperDecodingPolicy(data: fixture())
+        let policy = try policy()
         let task = Task.detached { @Sendable [policy] in
             try await WhisperDecoderLoop.run(
                 policy: policy,
@@ -72,6 +73,50 @@ final class WhisperDecoderLoopTests: XCTestCase {
         } catch is CancellationError {
             // expected
         }
+    }
+
+    func testTimestampRequestFailsBeforeAnyDecoderStep() async throws {
+        let policy = try policy()
+        var stepCalls = 0
+
+        do {
+            _ = try await WhisperDecoderLoop.run(
+                policy: policy,
+                requestedLanguage: "en",
+                includeTimestamps: true,
+                step: { _ in
+                    stepCalls += 1
+                    return Self.logits([(100, 1)])
+                })
+            XCTFail("expected timestamp rejection")
+        } catch let error as WhisperDecodingPolicy.PolicyError {
+            XCTAssertEqual(error, .timestampsUnsupported)
+        }
+        XCTAssertEqual(stepCalls, 0)
+    }
+
+    func testCancellationFromFinalStreamingCallbackIsObserved() async throws {
+        let policy = try policy()
+        var streamed: [Int32] = []
+
+        do {
+            _ = try await WhisperDecoderLoop.run(
+                policy: policy,
+                requestedLanguage: "en",
+                includeTimestamps: false,
+                step: { token in
+                    if token == 50_363 { return Self.logits([(100, 9)]) }
+                    return Self.logits([(42, 9)])
+                },
+                onTextToken: { token in
+                    streamed.append(token)
+                    withUnsafeCurrentTask { $0?.cancel() }
+                })
+            XCTFail("expected callback cancellation")
+        } catch is CancellationError {
+            // expected
+        }
+        XCTAssertEqual(streamed, [100])
     }
 
     private static func logits(_ values: [(Int, Float)]) -> [Float] {
@@ -96,5 +141,13 @@ final class WhisperDecoderLoopTests: XCTestCase {
               "task_to_id": {"transcribe": 50359, "translate": 50358}
             }
             """#.utf8)
+    }
+
+    private func policy() throws -> WhisperDecodingPolicy {
+        let data = fixture()
+        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        return try WhisperDecodingPolicy(
+            authenticatedData: data,
+            expectedSHA256: digest)
     }
 }

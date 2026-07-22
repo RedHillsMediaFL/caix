@@ -3,6 +3,35 @@ import XCTest
 @testable import CoreAIServer
 
 final class InMemoryAudioDecoderTests: XCTestCase {
+    private final class LifetimeProbe {
+        let value: Int
+        let onDeinit: () -> Void
+
+        init(value: Int, onDeinit: @escaping () -> Void) {
+            self.value = value
+            self.onDeinit = onDeinit
+        }
+
+        deinit { onDeinit() }
+    }
+
+    func testRetainedCallbackContextOutlivesExternalReferenceAndReleasesAfterScope() throws {
+        var deinitCount = 0
+        var probe: LifetimeProbe? = LifetimeProbe(value: 17) { deinitCount += 1 }
+        weak let weakProbe = probe
+
+        let value = RetainedAudioCallbackContext.withPointer(to: probe!) { pointer in
+            probe = nil
+            XCTAssertNotNil(weakProbe)
+            XCTAssertEqual(deinitCount, 0)
+            return Unmanaged<LifetimeProbe>.fromOpaque(pointer).takeUnretainedValue().value
+        }
+
+        XCTAssertEqual(value, 17)
+        XCTAssertNil(weakProbe)
+        XCTAssertEqual(deinitCount, 1)
+    }
+
     func testDecodesAndResamplesPCM16WAVFromMemory() throws {
         let sourceRate = 8_000
         let frames = sourceRate
