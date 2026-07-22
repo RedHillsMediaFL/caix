@@ -1,6 +1,12 @@
 import Foundation
 import XCTest
 
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
+
 @testable import PipelineRuntime
 
 final class ResidentModelLockTests: XCTestCase {
@@ -65,6 +71,18 @@ final class ResidentModelLockTests: XCTestCase {
         XCTAssertEqual(lock.speech.sourcePrecision, "fp32")
         XCTAssertEqual(lock.speech.runtimePrecision, "fp16")
         XCTAssertEqual(lock.speech.weights.single?.sizeBytes, 6_173_370_152)
+        XCTAssertEqual(
+            lock.speech.metadata.addedTokensSHA256,
+            "9715fd2243b6f06a5858b5e32950d2853f73dd5bc201aafcf76f5082a2d8acd1")
+        XCTAssertEqual(
+            lock.speech.metadata.mergesSHA256,
+            "2df2990a395e35e8dfbc7511e08c12d56018d8d04691e0133e5d63b21e154dc6")
+        XCTAssertEqual(
+            lock.speech.metadata.vocabularySHA256,
+            "8f680bba319e01a653d2e8a5dbc17a9157179e0576e6ce74ce0c06356c6e24f9")
+        XCTAssertEqual(
+            lock.speech.metadata.normalizerSHA256,
+            "bf1c507dc8724ca9cf9903640dacfb69dae2f00edee4f21ceba106a7392f26dd")
         XCTAssertEqual(lock.speech.geometry.sampleRateHz, 16_000)
         XCTAssertEqual(lock.speech.geometry.melBins, 80)
         XCTAssertEqual(lock.speech.geometry.windowSamples, 480_000)
@@ -134,6 +152,32 @@ final class ResidentModelLockTests: XCTestCase {
         }
     }
 
+    func testValidationPinsEveryWhisperTokenizerAndNormalizationAsset() throws {
+        let cases = [
+            (
+                "9715fd2243b6f06a5858b5e32950d2853f73dd5bc201aafcf76f5082a2d8acd1",
+                "speech.metadata.added_tokens_sha256"),
+            (
+                "2df2990a395e35e8dfbc7511e08c12d56018d8d04691e0133e5d63b21e154dc6",
+                "speech.metadata.merges_sha256"),
+            (
+                "8f680bba319e01a653d2e8a5dbc17a9157179e0576e6ce74ce0c06356c6e24f9",
+                "speech.metadata.vocab_sha256"),
+            (
+                "bf1c507dc8724ca9cf9903640dacfb69dae2f00edee4f21ceba106a7392f26dd",
+                "speech.metadata.normalizer_sha256"),
+        ]
+
+        for (digest, field) in cases {
+            let url = try mutatedLock(
+                replacing: digest,
+                with: String(repeating: "0", count: 64))
+            assertContractViolation(field) {
+                _ = try ResidentModelLock.load(from: url)
+            }
+        }
+    }
+
     func testLoaderRejectsUnsupportedSchema() throws {
         let url = try mutatedLock(
             replacing: "caix.resident-model-lock.v1",
@@ -166,6 +210,42 @@ final class ResidentModelLockTests: XCTestCase {
         XCTAssertThrowsError(try ResidentModelLock.load(from: url)) { error in
             XCTAssertEqual(error as? ResidentModelLockError, .fileTooLarge)
         }
+    }
+
+    func testDescriptorFirstReaderAcceptsRegularFileAndRejectsSymlinkAndFIFO() throws {
+        let parent = temporaryDirectory()
+        let regular = parent.appendingPathComponent("regular.json")
+        let symlink = parent.appendingPathComponent("regular-link.json")
+        let fifo = parent.appendingPathComponent("lock.fifo")
+        let expected = Data(#"{"ready":true}"#.utf8)
+        try expected.write(to: regular)
+        try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: regular)
+
+        XCTAssertEqual(
+            try BoundedRegularFileReader.read(regular, maximumBytes: expected.count),
+            expected)
+        XCTAssertThrowsError(
+            try BoundedRegularFileReader.read(symlink, maximumBytes: expected.count))
+
+        #if canImport(Darwin)
+        XCTAssertEqual(Darwin.mkfifo(fifo.path, mode_t(0o600)), 0)
+        let keeper = Darwin.open(fifo.path, O_RDWR | O_NONBLOCK | O_CLOEXEC)
+        #elseif canImport(Glibc)
+        XCTAssertEqual(Glibc.mkfifo(fifo.path, mode_t(0o600)), 0)
+        let keeper = Glibc.open(fifo.path, O_RDWR | O_NONBLOCK | O_CLOEXEC)
+        #else
+        throw XCTSkip("POSIX FIFO behavior is unavailable on this platform")
+        #endif
+        XCTAssertGreaterThanOrEqual(keeper, 0)
+        defer {
+            #if canImport(Darwin)
+            Darwin.close(keeper)
+            #elseif canImport(Glibc)
+            Glibc.close(keeper)
+            #endif
+        }
+        XCTAssertThrowsError(
+            try BoundedRegularFileReader.read(fifo, maximumBytes: expected.count))
     }
 
     private func assertContractViolation(

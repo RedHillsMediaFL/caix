@@ -151,6 +151,10 @@ public struct ResidentModelLock: Codable, Sendable, Equatable {
         public let preprocessorConfigSHA256: String
         public let tokenizerJSONSHA256: String
         public let tokenizerConfigSHA256: String
+        public let addedTokensSHA256: String
+        public let mergesSHA256: String
+        public let vocabularySHA256: String
+        public let normalizerSHA256: String
 
         enum CodingKeys: String, CodingKey {
             case configSHA256 = "config_sha256"
@@ -158,6 +162,10 @@ public struct ResidentModelLock: Codable, Sendable, Equatable {
             case preprocessorConfigSHA256 = "preprocessor_config_sha256"
             case tokenizerJSONSHA256 = "tokenizer_json_sha256"
             case tokenizerConfigSHA256 = "tokenizer_config_sha256"
+            case addedTokensSHA256 = "added_tokens_sha256"
+            case mergesSHA256 = "merges_sha256"
+            case vocabularySHA256 = "vocab_sha256"
+            case normalizerSHA256 = "normalizer_sha256"
         }
     }
 
@@ -222,35 +230,23 @@ public struct ResidentModelLock: Codable, Sendable, Equatable {
     public static let maximumLockBytes = 256 * 1024
 
     /// Reads only a bounded regular file and validates every conversion-critical field against
-    /// the approved deployment contract. Symlinks and directories are rejected before decoding.
+    /// the approved deployment contract. The descriptor is opened without following symlinks,
+    /// then its type and size are validated before any content is allocated or decoded.
     public static func load(from url: URL) throws -> ResidentModelLock {
-        let values: URLResourceValues
-        do {
-            values = try url.resourceValues(forKeys: [
-                .isRegularFileKey,
-                .isSymbolicLinkKey,
-                .fileSizeKey,
-            ])
-        } catch {
-            throw ResidentModelLockError.notRegularFile
-        }
-        guard values.isRegularFile == true, values.isSymbolicLink != true else {
-            throw ResidentModelLockError.notRegularFile
-        }
-        if let fileSize = values.fileSize, fileSize > maximumLockBytes {
-            throw ResidentModelLockError.fileTooLarge
-        }
-
         let data: Data
         do {
-            let handle = try FileHandle(forReadingFrom: url)
-            defer { try? handle.close() }
-            data = try handle.read(upToCount: maximumLockBytes + 1) ?? Data()
-        } catch {
-            throw ResidentModelLockError.unreadable
-        }
-        guard data.count <= maximumLockBytes else {
-            throw ResidentModelLockError.fileTooLarge
+            data = try BoundedRegularFileReader.read(url, maximumBytes: maximumLockBytes)
+        } catch let error as BoundedRegularFileReaderError {
+            switch error {
+            case .notRegularFile:
+                throw ResidentModelLockError.notRegularFile
+            case .tooLarge:
+                throw ResidentModelLockError.fileTooLarge
+            case .emptyFile:
+                throw ResidentModelLockError.malformedJSON
+            default:
+                throw ResidentModelLockError.unreadable
+            }
         }
 
         let lock: ResidentModelLock
@@ -397,6 +393,18 @@ public struct ResidentModelLock: Codable, Sendable, Equatable {
         try requireDigest(
             metadata.tokenizerConfigSHA256, approved.tokenizerConfigSHA256,
             "speech.metadata.tokenizer_config_sha256")
+        try requireDigest(
+            metadata.addedTokensSHA256, approved.addedTokensSHA256,
+            "speech.metadata.added_tokens_sha256")
+        try requireDigest(
+            metadata.mergesSHA256, approved.mergesSHA256,
+            "speech.metadata.merges_sha256")
+        try requireDigest(
+            metadata.vocabularySHA256, approved.vocabularySHA256,
+            "speech.metadata.vocab_sha256")
+        try requireDigest(
+            metadata.normalizerSHA256, approved.normalizerSHA256,
+            "speech.metadata.normalizer_sha256")
     }
 
     private static func requireDigest(
@@ -552,7 +560,15 @@ private extension ResidentModelLock {
             tokenizerJSONSHA256:
                 "27fc476bfe7f17299480be2273fc0608e4d5a99aba2ab5dec5374b4482d1a566",
             tokenizerConfigSHA256:
-                "2a4c4281cf9f51ac6ccc406fdc711a087afe6530f671fa7b80953edc498275ce")
+                "2a4c4281cf9f51ac6ccc406fdc711a087afe6530f671fa7b80953edc498275ce",
+            addedTokensSHA256:
+                "9715fd2243b6f06a5858b5e32950d2853f73dd5bc201aafcf76f5082a2d8acd1",
+            mergesSHA256:
+                "2df2990a395e35e8dfbc7511e08c12d56018d8d04691e0133e5d63b21e154dc6",
+            vocabularySHA256:
+                "8f680bba319e01a653d2e8a5dbc17a9157179e0576e6ce74ce0c06356c6e24f9",
+            normalizerSHA256:
+                "bf1c507dc8724ca9cf9903640dacfb69dae2f00edee4f21ceba106a7392f26dd")
         static let whisperGeometry = WhisperGeometry(
             sampleRateHz: 16_000,
             melBins: 80,
