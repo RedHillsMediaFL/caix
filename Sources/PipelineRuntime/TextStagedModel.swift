@@ -281,7 +281,7 @@ public final class TextStagedModel {
                 return generated.count < options.maxTokens
             }
 
-            if let mtpAssistant {
+            if mtpAssistant != nil {
                 let artifacts = try Self.requirePrefillMTPArtifacts(
                     prefill.eagleTargetArtifacts,
                     promptTokenCount: promptTokenIDs.count)
