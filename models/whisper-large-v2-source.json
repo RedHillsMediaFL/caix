@@ -1,0 +1,23 @@
+{
+  "schema": "caix.whisper-source.v1",
+  "repository": "openai/whisper-large-v2",
+  "revision": "ae4642769ce2ad8fc292556ccea8e901f1530655",
+  "weights": {
+    "path": "model.safetensors",
+    "size_bytes": 6173370152,
+    "sha256": "57a1ba2a82c093cabff2541409ae778c97145378b9ddfa722763cb1cb8f9020b"
+  },
+  "tied_embeddings": true,
+  "assets": {
+    "added_tokens.json": "9715fd2243b6f06a5858b5e32950d2853f73dd5bc201aafcf76f5082a2d8acd1",
+    "config.json": "5f1573015838f8d679678b09354b537061561c55fd22eecd129ef4cf8588a470",
+    "generation_config.json": "031721643aab5be7250eb668c6b9b5c67d2549420522ac1291bfd346bfff6297",
+    "merges.txt": "2df2990a395e35e8dfbc7511e08c12d56018d8d04691e0133e5d63b21e154dc6",
+    "normalizer.json": "bf1c507dc8724ca9cf9903640dacfb69dae2f00edee4f21ceba106a7392f26dd",
+    "preprocessor_config.json": "9b5cd03a36fbb8a627c64d98a5b5b126ead95a77720723944487311f0110b666",
+    "special_tokens_map.json": "e67ae3a0aaa99abcd9f187138e12db1f65c16a14761c50ef10eef2c174a7a691",
+    "tokenizer.json": "27fc476bfe7f17299480be2273fc0608e4d5a99aba2ab5dec5374b4482d1a566",
+    "tokenizer_config.json": "2a4c4281cf9f51ac6ccc406fdc711a087afe6530f671fa7b80953edc498275ce",
+    "vocab.json": "8f680bba319e01a653d2e8a5dbc17a9157179e0576e6ce74ce0c06356c6e24f9"
+  }
+}
