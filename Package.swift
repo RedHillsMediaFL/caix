@@ -79,7 +79,10 @@ let package = Package(
                 "PipelineRuntime",
                 .product(name: "Hummingbird", package: "hummingbird"),
             ],
-            swiftSettings: runtimeSwiftSettings
+            swiftSettings: runtimeSwiftSettings,
+            linkerSettings: [
+                .linkedFramework("AudioToolbox"),
+            ]
         ),
         .executableTarget(
             name: "PipelineCLI",
