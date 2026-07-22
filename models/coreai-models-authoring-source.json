@@ -1,0 +1,8 @@
+{
+  "schema": "caix.coreai-models-authoring-source.v1",
+  "repository": "https://github.com/kylejfrost/coreai-models.git",
+  "revision": "e666cdc9848fd17f41e43504bc574c8964812c9e",
+  "python_root": "python/src",
+  "package_subtree": "python/src/coreai_models",
+  "package_tree": "b2803957eee13084d06924cfc567a770379234ae"
+}

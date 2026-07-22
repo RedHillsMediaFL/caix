@@ -303,6 +303,52 @@ def test_inventory_stays_descriptor_bound_and_detects_path_replacement(
     assert weight_path.read_bytes() == replacement
 
 
+def test_verified_json_asset_reauthenticates_after_snapshot_path_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint = importlib.import_module("whisper_large_v2.checkpoint")
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    config_path = snapshot / "config.json"
+    approved = b'{"model_type":"whisper","d_model":1280}'
+    replacement = b'{"model_type":"whisper","d_model":1}'
+    config_path.write_bytes(approved)
+    weight_bytes = b"test checkpoint"
+    (snapshot / "model.safetensors").write_bytes(weight_bytes)
+    contract = checkpoint.WhisperSourceContract(
+        repository="test/repository",
+        revision="test-revision",
+        weights=checkpoint.WeightIdentity(
+            path="model.safetensors",
+            size_bytes=len(weight_bytes),
+            sha256=hashlib.sha256(weight_bytes).hexdigest(),
+        ),
+        tied_embeddings=True,
+        assets={"config.json": hashlib.sha256(approved).hexdigest()},
+    )
+    monkeypatch.setattr(checkpoint, "expected_large_v2_inventory", lambda: {})
+    monkeypatch.setattr(
+        checkpoint.SafetensorsCheckpointReader,
+        "inventory",
+        lambda _self: {},
+    )
+
+    checkpoint.validate_pinned_snapshot(snapshot, contract)
+    assert checkpoint.load_verified_json_asset(
+        snapshot,
+        contract,
+        "config.json",
+    ) == {"model_type": "whisper", "d_model": 1280}
+
+    replacement_path = tmp_path / "replacement-config.json"
+    replacement_path.write_bytes(replacement)
+    replacement_path.replace(config_path)
+
+    with pytest.raises(checkpoint.CheckpointContractError, match="config.json sha256"):
+        checkpoint.load_verified_json_asset(snapshot, contract, "config.json")
+
+
 @pytest.mark.skipif(
     "CAIX_WHISPER_LARGE_V2_SNAPSHOT" not in os.environ,
     reason="set CAIX_WHISPER_LARGE_V2_SNAPSHOT to inspect the mmap-backed real source",

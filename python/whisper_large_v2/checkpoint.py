@@ -100,6 +100,7 @@ _APPROVED_ASSETS = {
     ),
     "vocab.json": "8f680bba319e01a653d2e8a5dbc17a9157179e0576e6ce74ce0c06356c6e24f9",
 }
+_MAX_JSON_ASSET_BYTES = 16 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -318,6 +319,46 @@ def validate_pinned_snapshot(
         weight_size_bytes=verified_weight.size_bytes,
         verified_asset_count=len(contract.assets),
     )
+
+
+def load_verified_json_asset(
+    snapshot: Path,
+    contract: WhisperSourceContract,
+    filename: str,
+) -> dict[str, Any]:
+    """Authenticate and parse one bounded JSON asset through its open descriptor."""
+    if filename != Path(filename).name or filename not in contract.assets:
+        raise CheckpointContractError(f"unapproved pinned JSON asset: {filename}")
+    with _verified_regular_file(
+        snapshot / filename,
+        expected_sha256=contract.assets[filename],
+        expected_size=None,
+        label=f"pinned source asset {filename}",
+    ) as verified:
+        if verified.size_bytes > _MAX_JSON_ASSET_BYTES:
+            raise CheckpointContractError(f"pinned source asset {filename} is too large")
+        try:
+            with verified.descriptor_path.open("rb", buffering=0) as source:
+                contents = source.read(_MAX_JSON_ASSET_BYTES + 1)
+        except OSError as error:
+            raise CheckpointContractError(
+                f"pinned source asset {filename} descriptor read failed"
+            ) from error
+        if len(contents) != verified.size_bytes:
+            raise CheckpointContractError(f"pinned source asset {filename} size changed")
+        try:
+            payload = json.loads(contents)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise CheckpointContractError(
+                f"pinned source asset {filename} is malformed JSON"
+            ) from error
+        if not isinstance(payload, dict) or not all(
+            isinstance(key, str) for key in payload
+        ):
+            raise CheckpointContractError(
+                f"pinned source asset {filename} must contain a JSON object"
+            )
+        return payload
 
 
 @contextmanager

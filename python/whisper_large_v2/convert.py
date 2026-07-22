@@ -17,10 +17,15 @@ from pathlib import Path
 import torch
 from safetensors import safe_open
 
+from whisper_large_v2.authoring_source import (
+    authenticated_authoring_source,
+    load_authoring_source_contract,
+)
 from whisper_large_v2.checkpoint import (
     WhisperSourceContract,
     _verified_regular_file,
     expected_large_v2_inventory,
+    load_verified_json_asset,
     load_source_contract,
     validate_pinned_snapshot,
 )
@@ -160,6 +165,17 @@ def _empty_model(config: object) -> torch.nn.Module:
     return model.eval()
 
 
+def _load_pinned_config(
+    snapshot: Path,
+    contract: WhisperSourceContract,
+) -> object:
+    from transformers import WhisperConfig
+
+    return WhisperConfig.from_dict(
+        load_verified_json_asset(snapshot, contract, "config.json")
+    )
+
+
 def _load_partition(
     handle: object,
     *,
@@ -201,8 +217,6 @@ def load_pinned_large_v2(
     max_resident_bytes: int = _DEFAULT_MAX_RESIDENT_BYTES,
 ) -> LoadedWhisperLargeV2:
     """Load exact large-v2 FP32 tensors into a partitioned FP16 meta model."""
-    from transformers import WhisperConfig
-
     contract = load_source_contract(source_contract_path)
     if snapshot.name != contract.revision:
         raise WhisperExportError("snapshot directory does not match the pinned revision")
@@ -213,7 +227,7 @@ def load_pinned_large_v2(
             "resident cap cannot hold the bounded Whisper FP16 weight working set"
         )
 
-    config = WhisperConfig.from_pretrained(snapshot, local_files_only=True)
+    config = _load_pinned_config(snapshot, contract)
     weight_path = snapshot / contract.weights.path
     with _verified_regular_file(
         weight_path,
@@ -292,38 +306,51 @@ def export_pinned_large_v2(
     source_contract_path: Path,
     output: Path,
     *,
+    authoring_source_path: Path,
+    coreai_models_repository: Path,
+    authoring_temp_root: Path,
     max_resident_bytes: int,
 ) -> dict[str, object]:
     """Author and atomically save the complete FP16 three-entrypoint AIProgram."""
-    stack = require_exact_authoring_stack()
-    _enforce_available_memory()
-    loaded = load_pinned_large_v2(
-        snapshot,
-        source_contract_path,
-        max_resident_bytes=max_resident_bytes,
-    )
-    _enforce_resident_budget(max_resident_bytes, phase="full checkpoint load")
-    input_features, token_id = full_export_inputs()
-    program = create_coreai_program(
-        loaded.split,
-        input_features=input_features,
-        token_id=token_id,
-    )
-    _enforce_resident_budget(max_resident_bytes, phase="CoreAI graph authoring")
-    del loaded
-    gc.collect()
-    save_program_atomically(program, output)
-    _enforce_resident_budget(max_resident_bytes, phase="CoreAI asset save")
-    asset_bytes = sum(path.stat().st_size for path in output.rglob("*") if path.is_file())
-    return {
-        "asset_bytes": asset_bytes,
-        "authoring_stack": stack,
-        "dtype": "float16",
-        "entrypoints": ["encode", "load_cross_kv", "decode_step"],
-        "output": str(output.resolve()),
-        "peak_resident_bytes": _peak_resident_bytes(),
-        "schema": "caix.whisper-split.v2",
-    }
+    authoring_contract = load_authoring_source_contract(authoring_source_path)
+    with authenticated_authoring_source(
+        coreai_models_repository,
+        authoring_contract,
+        temp_root=authoring_temp_root,
+    ):
+        stack = require_exact_authoring_stack()
+        _enforce_available_memory()
+        loaded = load_pinned_large_v2(
+            snapshot,
+            source_contract_path,
+            max_resident_bytes=max_resident_bytes,
+        )
+        _enforce_resident_budget(max_resident_bytes, phase="full checkpoint load")
+        input_features, token_id = full_export_inputs()
+        program = create_coreai_program(
+            loaded.split,
+            input_features=input_features,
+            token_id=token_id,
+        )
+        _enforce_resident_budget(max_resident_bytes, phase="CoreAI graph authoring")
+        del loaded
+        gc.collect()
+        save_program_atomically(program, output)
+        _enforce_resident_budget(max_resident_bytes, phase="CoreAI asset save")
+        asset_bytes = sum(
+            path.stat().st_size for path in output.rglob("*") if path.is_file()
+        )
+        return {
+            "asset_bytes": asset_bytes,
+            "authoring_stack": stack,
+            "coreai_models_revision": authoring_contract.revision,
+            "coreai_models_tree": authoring_contract.package_tree,
+            "dtype": "float16",
+            "entrypoints": ["encode", "load_cross_kv", "decode_step"],
+            "output": str(output.resolve()),
+            "peak_resident_bytes": _peak_resident_bytes(),
+            "schema": "caix.whisper-split.v2",
+        }
 
 
 def _dry_run_payload(
@@ -362,6 +389,9 @@ def _main() -> None:
     parser = argparse.ArgumentParser(description="Convert pinned Whisper large-v2 to CoreAI")
     parser.add_argument("--snapshot", required=True, type=Path)
     parser.add_argument("--source-contract", required=True, type=Path)
+    parser.add_argument("--authoring-source", type=Path)
+    parser.add_argument("--coreai-models-repository", type=Path)
+    parser.add_argument("--authoring-temp-root", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--load-proof", action="store_true")
@@ -389,10 +419,19 @@ def _main() -> None:
     else:
         if args.output is None:
             parser.error("--output is required with --export")
+        if args.authoring_source is None:
+            parser.error("--authoring-source is required with --export")
+        if args.coreai_models_repository is None:
+            parser.error("--coreai-models-repository is required with --export")
+        if args.authoring_temp_root is None:
+            parser.error("--authoring-temp-root is required with --export")
         payload = export_pinned_large_v2(
             args.snapshot,
             args.source_contract,
             args.output,
+            authoring_source_path=args.authoring_source,
+            coreai_models_repository=args.coreai_models_repository,
+            authoring_temp_root=args.authoring_temp_root,
             max_resident_bytes=int(args.max_resident_gib * 1024**3),
         )
     print(json.dumps(payload, sort_keys=True, separators=(",", ":")))

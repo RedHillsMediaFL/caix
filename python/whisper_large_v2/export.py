@@ -20,8 +20,13 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from coreai_models.primitives._ops import mutable_slice_update
 from whisper_large_v2.reference import WHISPER_DECODER_CACHE_CAPACITY
+
+
+def _mutable_slice_update(**arguments: torch.Tensor) -> torch.Tensor:
+    from coreai_models.primitives._ops import mutable_slice_update
+
+    return mutable_slice_update(**arguments)
 
 
 class WhisperExportError(RuntimeError):
@@ -201,7 +206,7 @@ class WhisperDecodeStep(nn.Module):
                 torch.tensor((update.shape[-1],), dtype=torch.int32, device=device),
             )
         )
-        mutable_slice_update(
+        _mutable_slice_update(
             x=cache,
             update=selected_update.unsqueeze(0),
             begin=begin,
