@@ -517,38 +517,97 @@ public final class EagleEngine {
             EagleND.kvSlice(o.vSliding, start: slideStart, len: slideLen, descriptor: ksd))
     }
 
-    /// Diagnostic: greedy-decode using ONLY the target (no draft). Isolates whether the EAGLE
-    /// target bundle is coherent (vs a bug in the draft/verify/seeding loop).
+    /// Decode using ONLY the target. Besides isolating target-bundle correctness, this is the
+    /// distribution-preserving path for sampled requests until EAGLE exposes draft probabilities
+    /// and implements probabilistic acceptance plus residual correction sampling.
     func generateTargetOnly(promptTokens: [Int], options: CoreAIPipeline.Options,
                             onToken: ((String) -> Void)?) async throws -> CoreAIPipeline.SpeculativeResult {
+        guard !promptTokens.isEmpty else {
+            throw CoreAIPipeline.RuntimeError.invalidBundle("prompt tokenized to 0 tokens")
+        }
         let maxTokens = max(0, options.maxTokens)
         target.allocateCache(capacity: min(promptTokens.count + maxTokens + 8, maxContext))
         let prompt32 = promptTokens.map { Int32($0) }
+        let prefillStart = Date()
         var pf: EagleTargetEngine.Out!
         var ps = 0
         while ps < prompt32.count { let pe = min(ps + 6, prompt32.count); pf = try await target.forward(Array(prompt32[ps..<pe])); ps = pe }
+        let prefillSeconds = Date().timeIntervalSince(prefillStart)
         var committed = promptTokens
         var generated: [Int] = []
         var streamed = ""
+        var finalTextOverride: String?
+        var stop: CoreAIPipeline.StopReason = .maxTokens
+        let stopSequences = options.stopSequences.filter { !$0.isEmpty }
+        let sampler = Sampler(
+            temperature: options.temperature,
+            topK: options.topK,
+            topP: options.topP)
+        var rng = SeededGenerator(seed: options.seed ?? UInt64.random(in: .min ... .max))
+
+        func emitVisibleText(_ text: String) {
+            guard let onToken else {
+                streamed = text
+                return
+            }
+            if text.hasPrefix(streamed) {
+                let delta = String(text.dropFirst(streamed.count))
+                if !delta.isEmpty { onToken(delta) }
+            }
+            streamed = text
+        }
+
         func emit(_ t: Int) -> Bool {
-            if stopIds.contains(t) || generated.count >= maxTokens { return false }
-            generated.append(t); committed.append(t)
-            if let onToken { let txt = tokenizer.decode(tokens: generated)
-                if txt.hasPrefix(streamed) { let d = String(txt.dropFirst(streamed.count)); if !d.isEmpty { onToken(d) } }
-                streamed = txt }
+            if stopIds.contains(t) {
+                stop = .eos
+                return false
+            }
+            if generated.count >= maxTokens {
+                stop = .maxTokens
+                return false
+            }
+            if committed.count >= maxContext {
+                stop = .contextLimit
+                return false
+            }
+            generated.append(t)
+            committed.append(t)
+            if onToken != nil || !stopSequences.isEmpty {
+                let text = tokenizer.decode(tokens: generated)
+                if let stopRange = CoreAIPipeline.firstStopRange(
+                    in: text,
+                    stopSequences: stopSequences)
+                {
+                    let visible = String(text[..<stopRange.lowerBound])
+                    emitVisibleText(visible)
+                    finalTextOverride = visible
+                    stop = .stopSequence
+                    return false
+                }
+                let visible = stopSequences.isEmpty
+                    ? text
+                    : CoreAIPipeline.visibleTextAvoidingPartialStop(
+                        text,
+                        stopSequences: stopSequences)
+                emitVisibleText(visible)
+            }
             return true
         }
         let t0 = Date()
-        var running = emit(Sampler.argmax(pf.logitsRows[pf.logitsRows.count - 1]))
+        var running = emit(sampler.sample(pf.logitsRows[pf.logitsRows.count - 1], using: &rng))
         while running {
             let o = try await target.forward([Int32(committed[committed.count - 1])])
-            running = emit(Sampler.argmax(o.logitsRows[0]))
+            running = emit(sampler.sample(o.logitsRows[0], using: &rng))
         }
         let dec = Date().timeIntervalSince(t0)
+        let text = finalTextOverride ?? tokenizer.decode(tokens: generated)
+        if finalTextOverride == nil, onToken != nil {
+            emitVisibleText(text)
+        }
         return CoreAIPipeline.SpeculativeResult(
-            text: tokenizer.decode(tokens: generated), promptTokenCount: promptTokens.count,
-            generatedTokenCount: generated.count, stopReason: .maxTokens, modelLoadSeconds: loadSeconds,
-            prefillSeconds: 0, decodeSeconds: dec, draftTokens: 0, draftedTokens: 0,
+            text: text, promptTokenCount: promptTokens.count,
+            generatedTokenCount: generated.count, stopReason: stop, modelLoadSeconds: loadSeconds,
+            prefillSeconds: prefillSeconds, decodeSeconds: dec, draftTokens: 0, draftedTokens: 0,
             acceptedDraftTokens: 0, iterations: generated.count)
     }
 
@@ -582,6 +641,12 @@ public final class EagleEngine {
         guard options.constrainedJSONSchema == nil else {
             throw CoreAIPipeline.RuntimeError.unsupportedFeature(
                 "JSON-schema constrained decoding is not supported on EAGLE speculative decoding backends")
+        }
+        if SpeculativeExecutionPolicy.route(options: options) == .targetOnlySampled {
+            return try await generateTargetOnly(
+                promptTokens: promptTokens,
+                options: options,
+                onToken: onToken)
         }
         func log(_ s: @autoclosure () -> String) {
             if options.verbose { FileHandle.standardError.write(Data(("[coreai] " + s() + "\n").utf8)) }
