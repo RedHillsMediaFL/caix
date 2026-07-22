@@ -1,5 +1,19 @@
 import Foundation
 
+/// Public serving seam for one resident Whisper implementation.
+///
+/// Keeping this protocol in `PipelineRuntime` lets the HTTP layer depend on native transcription
+/// without learning how Core AI state tensors are allocated or loaded. Production uses
+/// `WhisperResidentEngine`; tests can use a tiny recorder without loading an asset.
+public protocol WhisperTranscribing: Sendable {
+    func transcribe(
+        inputFeatures: [Float16],
+        requestedLanguage: String?,
+        includeTimestamps: Bool,
+        onTextToken: (@Sendable (Int32) -> Void)?
+    ) async throws -> WhisperResidentEngine.Result
+}
+
 /// Native session boundary used by the resident Whisper host.
 ///
 /// A session owns the large mutable decoder state for exactly one audio window. Implementations
@@ -234,6 +248,8 @@ public actor WhisperResidentEngine {
         }
     }
 }
+
+extension WhisperResidentEngine: WhisperTranscribing {}
 
 private actor WhisperInferenceAdmission {
     private struct Waiter {
