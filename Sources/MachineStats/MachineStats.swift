@@ -12,6 +12,34 @@ public struct MachineSnapshot: Codable, Sendable {
     public var gpuInUseMemoryBytes: UInt64?
 }
 
+/// Native macOS memory-pressure state. Unknown is deliberately distinct from green so callers
+/// never admit a large allocation when the kernel pressure probe fails.
+public enum MachineMemoryPressure: String, Codable, Sendable, Equatable {
+    case green
+    case yellow
+    case red
+    case unknown
+
+    init(rawDarwinValue: Int32?) {
+        switch rawDarwinValue {
+        case 1: self = .green
+        case 2: self = .yellow
+        case 4: self = .red
+        default: self = .unknown
+        }
+    }
+}
+
+/// Allocation-free inputs for the resident-model safety policy.
+public struct MachineMemorySafetySnapshot: Codable, Sendable, Equatable {
+    public var totalRAMBytes: UInt64
+    public var usedRAMBytes: UInt64
+    public var availableRAMBytes: UInt64
+    public var processPhysicalFootprintBytes: UInt64
+    public var pressure: MachineMemoryPressure
+    public var swapUsedBytes: UInt64?
+}
+
 /// Native host telemetry via sysctl / mach host_statistics64 / IOAccelerator.
 /// Off the inference hot path, so the GPU read may shell to ioreg for now.
 public enum MachineStats {
@@ -60,6 +88,54 @@ public enum MachineStats {
         let page = UInt64(pageSize)
         return (UInt64(stats.active_count) + UInt64(stats.wire_count)
             + UInt64(stats.compressor_page_count)) * page
+    }
+
+    /// Current process physical footprint, including compressed resident pages attributed by the
+    /// kernel. This is the value used for the CAIX worker high-water gate.
+    public static func processPhysicalFootprintBytes() -> UInt64 {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<task_vm_info_data_t>.stride / MemoryLayout<natural_t>.stride)
+        let result = withUnsafeMutablePointer(to: &info) { pointer -> kern_return_t in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(
+                    mach_task_self_,
+                    task_flavor_t(TASK_VM_INFO),
+                    $0,
+                    &count)
+            }
+        }
+        guard result == KERN_SUCCESS else { return 0 }
+        return UInt64(info.phys_footprint)
+    }
+
+    /// Point-in-time native inputs used to decide whether resident model loading and request
+    /// admission are safe. No model or large backing allocation is created by this probe.
+    public static func memorySafetySnapshot() -> MachineMemorySafetySnapshot {
+        let total = sysctlUInt64("hw.memsize") ?? 0
+        let used = min(usedRAMBytes(), total)
+
+        var rawPressure: Int32 = 0
+        var pressureSize = MemoryLayout<Int32>.size
+        let pressureStatus = sysctlbyname(
+            "kern.memorystatus_vm_pressure_level",
+            &rawPressure,
+            &pressureSize,
+            nil,
+            0)
+
+        var swap = xsw_usage()
+        var swapSize = MemoryLayout<xsw_usage>.size
+        let swapStatus = sysctlbyname("vm.swapusage", &swap, &swapSize, nil, 0)
+
+        return MachineMemorySafetySnapshot(
+            totalRAMBytes: total,
+            usedRAMBytes: used,
+            availableRAMBytes: total - used,
+            processPhysicalFootprintBytes: processPhysicalFootprintBytes(),
+            pressure: MachineMemoryPressure(
+                rawDarwinValue: pressureStatus == 0 ? rawPressure : nil),
+            swapUsedBytes: swapStatus == 0 ? UInt64(swap.xsu_used) : nil)
     }
 
     /// GPU "Device Utilization %" + in-use memory from IOAccelerator PerformanceStatistics.
