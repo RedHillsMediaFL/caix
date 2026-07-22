@@ -54,6 +54,7 @@ public struct WhisperDecodingPolicy: Sendable {
     public let transcribeTokenID: Int32
     public let maximumSequenceLength: Int
     private let languageToID: [String: Int32]
+    private let idToLanguage: [Int32: String]
     private let languageIDs: Set<Int32>
     private let suppressed: Set<Int32>
     private let beginSuppressed: Set<Int32>
@@ -105,6 +106,12 @@ public struct WhisperDecodingPolicy: Sendable {
         languageToID = source.languageToID.reduce(into: [:]) { result, item in
             result[item.key.lowercased()] = Int32(item.value)
         }
+        idToLanguage = source.languageToID.reduce(into: [:]) { result, item in
+            let key = item.key.lowercased()
+            let code = key.hasPrefix("<|") && key.hasSuffix("|>")
+                ? String(key.dropFirst(2).dropLast(2)) : key
+            result[Int32(item.value)] = code
+        }
         languageIDs = Set(source.languageToID.values.map(Int32.init))
         suppressed = Set(source.suppressTokens.map(Int32.init))
         beginSuppressed = Set(source.beginSuppressTokens.map(Int32.init))
@@ -127,6 +134,13 @@ public struct WhisperDecodingPolicy: Sendable {
             throw PolicyError.unsupportedLanguage(language)
         }
         return token
+    }
+
+    public func languageCode(for tokenID: Int32) throws -> String {
+        guard let language = idToLanguage[tokenID] else {
+            throw PolicyError.invalidLanguageToken(tokenID)
+        }
+        return language
     }
 
     public func detectLanguageToken(in logits: [Float]) throws -> Int32 {
