@@ -141,11 +141,28 @@ final class LLMEngine {
     }
 
     /// Preferred compute unit, overridable via `COREAI_COMPUTE` (gpu|ane|cpu|all). Default `.gpu`.
-    static func preferredComputeUnit() -> ComputeUnitKind {
-        switch ProcessInfo.processInfo.environment["COREAI_COMPUTE"]?.lowercased() {
+    static func preferredComputeUnit(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> ComputeUnitKind {
+        computeUnit(named: environment["COREAI_COMPUTE"]) ?? .gpu
+    }
+
+    /// EAGLE specialization can be routed independently from other resident models. This lets
+    /// packed-Q4 Gemma graphs use ANE while Whisper and standard LLMs retain their general
+    /// `COREAI_COMPUTE` selection.
+    static func preferredEagleComputeUnit(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> ComputeUnitKind {
+        computeUnit(named: environment["COREAI_EAGLE_COMPUTE"])
+            ?? preferredComputeUnit(environment: environment)
+    }
+
+    private static func computeUnit(named rawValue: String?) -> ComputeUnitKind? {
+        switch rawValue?.lowercased() {
         case "cpu": return .cpu
         case "ane", "ne", "neuralengine": return .neuralEngine
-        default: return .gpu  // "gpu", "all", nil
+        case "gpu": return .gpu
+        default: return nil
         }
     }
 

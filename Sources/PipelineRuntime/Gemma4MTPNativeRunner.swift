@@ -17,7 +17,8 @@
     static func load(aimodelURL: URL) async throws -> Gemma4MTPNativeRunner {
       try Gemma4MTPNativeContract.validateAssetURL(aimodelURL)
 
-      var options = SpecializationOptions(preferredComputeUnitKind: .gpu)
+      var options = SpecializationOptions(
+        preferredComputeUnitKind: LLMEngine.preferredEagleComputeUnit())
       options.expectFrequentReshapes = true
       let model = try await AIModel.specialize(
         contentsOf: aimodelURL,

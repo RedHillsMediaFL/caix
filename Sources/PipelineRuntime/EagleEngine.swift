@@ -182,7 +182,8 @@ final class EagleTargetEngine {
     private let vd: NDArrayDescriptor
 
     static func load(aimodelURL: URL, vocabSize: Int, hiddenSize: Int) async throws -> EagleTargetEngine {
-        var spec = SpecializationOptions(preferredComputeUnitKind: .gpu)
+        var spec = SpecializationOptions(
+            preferredComputeUnitKind: LLMEngine.preferredEagleComputeUnit())
         spec.expectFrequentReshapes = true
         let model = try await AIModel.specialize(
             contentsOf: aimodelURL, options: spec, cache: .default, cachePolicy: .persistent)
@@ -341,7 +342,8 @@ final class EagleDraftEngine {
     }
 
     static func load(aimodelURL: URL, vocabSize: Int, hiddenSize: Int) async throws -> EagleDraftEngine {
-        var spec = SpecializationOptions(preferredComputeUnitKind: .gpu)
+        var spec = SpecializationOptions(
+            preferredComputeUnitKind: LLMEngine.preferredEagleComputeUnit())
         spec.expectFrequentReshapes = true
         let model = try await AIModel.specialize(
             contentsOf: aimodelURL, options: spec, cache: .default, cachePolicy: .persistent)
@@ -414,7 +416,8 @@ final class EagleDraftUnrolledEngine {
     }
 
     static func load(aimodelURL: URL, hiddenSize: Int) async throws -> EagleDraftUnrolledEngine {
-        var spec = SpecializationOptions(preferredComputeUnitKind: .gpu)
+        var spec = SpecializationOptions(
+            preferredComputeUnitKind: LLMEngine.preferredEagleComputeUnit())
         spec.expectFrequentReshapes = true
         let model = try await AIModel.specialize(
             contentsOf: aimodelURL, options: spec, cache: .default, cachePolicy: .persistent)
