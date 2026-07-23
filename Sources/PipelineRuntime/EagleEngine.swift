@@ -23,6 +23,23 @@ import Tokenizers
 
 // MARK: - small NDArray helpers (f16; row-major, stride-aware)
 
+enum EaglePrefillPolicy {
+    static let defaultChunkSize = 6
+
+    static func chunkSize(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Int {
+        guard
+            let raw = environment["COREAI_EAGLE_PREFILL_CHUNK"],
+            let requested = Int(raw),
+            requested > 0
+        else {
+            return defaultChunkSize
+        }
+        return min(requested, defaultChunkSize)
+    }
+}
+
 enum EagleND {
     static func positiveTrailingDimension(_ descriptor: NDArrayDescriptor?) -> Int? {
         guard let dim = descriptor?.shape.last, dim > 0 else { return nil }
@@ -703,8 +720,11 @@ public final class EagleEngine {
             initial: min(4, maxDraftTokens),
             maximum: maxDraftTokens)
         let capacity = min(promptTokens.count + maxTokens + maxDraftTokens + 8, maxContext)
+        let prefillChunk = EaglePrefillPolicy.chunkSize()
         target.allocateCache(capacity: capacity)
-        log("eagle prompt -> \(promptTokens.count) tokens, K<=\(maxDraftTokens), cap=\(capacity)")
+        log(
+            "eagle prompt -> \(promptTokens.count) tokens, K<=\(maxDraftTokens), "
+                + "cap=\(capacity), prefill=\(prefillChunk)")
 
         // Chunk the prefill: the full-attention layer's MPS SDPA threadgroup memory scales with
         // query length and overflows (>32KB) past ~10 query tokens at head_dim 512. Feeding the
@@ -712,11 +732,10 @@ public final class EagleEngine {
         // and the LAST chunk's output carries the seed hidden + full-length representative KV.
         let prefillStart = Date()
         let prompt32 = promptTokens.map { Int32($0) }
-        let chunk = 6
         var pf: EagleTargetEngine.Out!
         var ps = 0
         while ps < prompt32.count {
-            let pe = min(ps + chunk, prompt32.count)
+            let pe = min(ps + prefillChunk, prompt32.count)
             pf = try await target.forward(Array(prompt32[ps..<pe]))
             ps = pe
         }
