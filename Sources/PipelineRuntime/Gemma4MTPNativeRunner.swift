@@ -18,7 +18,7 @@
       try Gemma4MTPNativeContract.validateAssetURL(aimodelURL)
 
       var options = LLMEngine.eagleSpecializationOptions()
-      options.expectFrequentReshapes = true
+      options.expectFrequentReshapes = false
       let model = try await AIModel(contentsOf: aimodelURL, options: options)
 
       guard let runtimeDescriptor = model.functionDescriptor(for: "main") else {

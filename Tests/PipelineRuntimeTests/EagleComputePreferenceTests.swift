@@ -85,6 +85,7 @@ final class EagleComputePreferenceTests: XCTestCase {
         let nativeRunnerSource = try source(named: "Gemma4MTPNativeRunner.swift")
         let selection = "LLMEngine.eagleSpecializationOptions()"
         let directLoad = "AIModel(contentsOf:"
+        let disableFrequentReshapes = "expectFrequentReshapes = false"
 
         XCTAssertEqual(
             eagleSource.components(separatedBy: selection).count - 1,
@@ -108,6 +109,16 @@ final class EagleComputePreferenceTests: XCTestCase {
             "the native MTP runner must use the direct CoreAI load path")
         XCTAssertFalse(eagleSource.contains("AIModel.specialize("))
         XCTAssertFalse(nativeRunnerSource.contains("AIModel.specialize("))
+        XCTAssertEqual(
+            eagleSource.components(separatedBy: disableFrequentReshapes).count - 1,
+            3,
+            "target, single-step draft, and unrolled draft must disable frequent reshapes")
+        XCTAssertEqual(
+            nativeRunnerSource.components(separatedBy: disableFrequentReshapes).count - 1,
+            1,
+            "the native MTP runner must disable frequent reshapes")
+        XCTAssertFalse(eagleSource.contains("expectFrequentReshapes = true"))
+        XCTAssertFalse(nativeRunnerSource.contains("expectFrequentReshapes = true"))
     }
 
     private func source(named filename: String) throws -> String {
