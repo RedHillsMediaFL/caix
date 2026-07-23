@@ -127,7 +127,7 @@ func printUsage() {
           --eagle-name <name>     Served name for the EAGLE/MTP model
           --eagle-target <dir>    EAGLE target .aimodel bundle
           --eagle-draft <dir>     EAGLE draft .aimodel bundle
-          --eagle-unrolled <dir>  Optional unrolled EAGLE draft .aimodel bundle
+          --eagle-unrolled <dir>  Explicit unrolled EAGLE draft .aimodel bundle (no default)
           --eagle-tokenizer <dir> Tokenizer directory for the EAGLE/MTP model
           --eagle-vocab <N>      EAGLE/MTP vocabulary size (default: 262144)
           --eagle-backbone <N>   EAGLE/MTP hidden size (default: 2816)
@@ -737,13 +737,13 @@ func serveCommand(_ argv: [String]) {
     var whisperMaximumQueuedRequests: Int? = nil
     var clusterManifest: String? = nil
     var clusterOptions = ClusterRuntimeOptions()
-    // EAGLE MTP model. Enabled by default with the known bundle paths; disable with --no-eagle,
-    // or override paths individually.
+    // EAGLE MTP model. Target and single-step draft retain their known defaults; an unrolled
+    // draft is enabled only by an explicit --eagle-unrolled path. Disable all EAGLE with --no-eagle.
     var eagleEnabled = true
     var eagleName = "gemma-4-26b-a4b-mtp"
     var eagleTarget = cwd + "/exports/gemma-4-26b-a4b-eagle-target/eagle_target.aimodel"
     var eagleDraft = "/Volumes/SSD/ai-dev/eagle-resume/eagle_draft.aimodel"
-    var eagleUnrolled: String? = "/Volumes/SSD/ai-dev/eagle-resume/eagle_draft_unrolled_k4.aimodel"
+    var eagleUnrolled: String? = nil
     var eagleTokenizer = cwd + "/exports/gemma-4-26b-a4b-coreai/tokenizer"
     var eagleVocab = 262144
     var eagleBackbone = 2816
