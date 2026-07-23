@@ -118,6 +118,97 @@ final class Gemma4EagleFixedShapeABITests: XCTestCase {
             .init(source: 2..<1_026, destination: 0..<1_024))
     }
 
+    // MARK: - geometry presets
+
+    func testGeometryPresetsMatchVerifiedGemma26BAnd31BTable() {
+        let g26 = Gemma4EagleGeometry.gemma26B
+        XCTAssertEqual(g26.layers, 30)
+        XCTAssertEqual(g26.backboneHiddenSize, 2_816)
+        XCTAssertEqual(g26.cacheKVHeads, 8)
+        XCTAssertEqual(g26.cacheHeadDimension, 256)
+        XCTAssertEqual(g26.fullKVHeads, 2)
+        XCTAssertEqual(g26.fullHeadDimension, 512)
+        XCTAssertEqual(g26.slidingKVHeads, 8)
+        XCTAssertEqual(g26.slidingHeadDimension, 256)
+        XCTAssertEqual(g26.vocabularySize, 262_144)
+        XCTAssertEqual(g26.cacheCapacity, 4_096)
+        XCTAssertEqual(g26.slidingWindow, 1_024)
+        XCTAssertEqual(g26.draftTokens, 4)
+
+        let g31 = Gemma4EagleGeometry.gemma31B
+        XCTAssertEqual(g31.layers, 60)
+        XCTAssertEqual(g31.backboneHiddenSize, 5_376)
+        XCTAssertEqual(g31.cacheKVHeads, 16)
+        XCTAssertEqual(g31.cacheHeadDimension, 256)
+        XCTAssertEqual(g31.fullKVHeads, 4)
+        XCTAssertEqual(g31.fullHeadDimension, 512)
+        XCTAssertEqual(g31.slidingKVHeads, 16)
+        XCTAssertEqual(g31.slidingHeadDimension, 256)
+        XCTAssertEqual(g31.vocabularySize, 262_144)
+        XCTAssertEqual(g31.cacheCapacity, 4_096)
+        XCTAssertEqual(g31.slidingWindow, 1_024)
+        XCTAssertEqual(g31.draftTokens, 4)
+    }
+
+    func testForBackboneResolvesFamiliesAndRejectsUnknownBackbones() {
+        XCTAssertEqual(Gemma4EagleGeometry.forBackbone(2_816), .gemma26B)
+        XCTAssertEqual(Gemma4EagleGeometry.forBackbone(5_376), .gemma31B)
+        XCTAssertNil(Gemma4EagleGeometry.forBackbone(4_096))
+        XCTAssertNil(Gemma4EagleGeometry.forBackbone(0))
+        XCTAssertEqual(
+            Gemma4EagleGeometry.supportedBackbones,
+            [2_816, 5_376])
+    }
+
+    func testTargetDescriptorsAreGeometryDrivenFor26BAnd31B() {
+        // 26B reproduces the exact current resident ABI descriptors.
+        let out26 = Gemma4EagleTargetContract.expectedOutputs(.gemma26B)
+        XCTAssertEqual(out26["logits"], .init(scalarType: .float16, shape: [1, -1, 262_144]))
+        XCTAssertEqual(out26["hidden"], .init(scalarType: .float16, shape: [1, -1, 2_816]))
+        XCTAssertEqual(out26["k_full"], .init(scalarType: .float16, shape: [1, 2, -1, 512]))
+        XCTAssertEqual(out26["v_full"], .init(scalarType: .float16, shape: [1, 2, -1, 512]))
+        XCTAssertEqual(out26["k_sliding"], .init(scalarType: .float16, shape: [1, 8, -1, 256]))
+        XCTAssertEqual(out26["v_sliding"], .init(scalarType: .float16, shape: [1, 8, -1, 256]))
+        let state26 = Gemma4EagleTargetContract.expectedStates(.gemma26B)
+        XCTAssertEqual(
+            state26["k_cache"],
+            .init(scalarType: .float16, shape: [30, 1, 8, 4_096, 256]))
+        XCTAssertEqual(
+            state26["v_cache"],
+            .init(scalarType: .float16, shape: [30, 1, 8, 4_096, 256]))
+
+        // 31B produces the new dense descriptors.
+        let out31 = Gemma4EagleTargetContract.expectedOutputs(.gemma31B)
+        XCTAssertEqual(out31["logits"], .init(scalarType: .float16, shape: [1, -1, 262_144]))
+        XCTAssertEqual(out31["hidden"], .init(scalarType: .float16, shape: [1, -1, 5_376]))
+        XCTAssertEqual(out31["k_full"], .init(scalarType: .float16, shape: [1, 4, -1, 512]))
+        XCTAssertEqual(out31["v_full"], .init(scalarType: .float16, shape: [1, 4, -1, 512]))
+        XCTAssertEqual(out31["k_sliding"], .init(scalarType: .float16, shape: [1, 16, -1, 256]))
+        XCTAssertEqual(out31["v_sliding"], .init(scalarType: .float16, shape: [1, 16, -1, 256]))
+        let state31 = Gemma4EagleTargetContract.expectedStates(.gemma31B)
+        XCTAssertEqual(
+            state31["k_cache"],
+            .init(scalarType: .float16, shape: [60, 1, 16, 4_096, 256]))
+        XCTAssertEqual(
+            state31["v_cache"],
+            .init(scalarType: .float16, shape: [60, 1, 16, 4_096, 256]))
+    }
+
+    func testTargetValidatesGemma31BResidentABIAndRejectsCrossGeometry() throws {
+        XCTAssertNoThrow(
+            try Gemma4EagleTargetContract.validate(
+                Self.valid31BTargetFunction, geometry: .gemma31B))
+
+        // The 31B target must fail closed under 26B geometry (default), and vice versa.
+        assertTargetRejected(Self.valid31BTargetFunction, contains: "hidden")
+        XCTAssertThrowsError(
+            try Gemma4EagleTargetContract.validate(
+                Self.validTargetFunction, geometry: .gemma31B)
+        ) { error in
+            XCTAssertTrue(String(describing: error).contains("hidden"))
+        }
+    }
+
     #if COREAI_RUNTIME
     func testProductionEngineConsumesFixedShapePolicyAndKVLength() throws {
         let source = try String(
@@ -215,5 +306,27 @@ final class Gemma4EagleFixedShapeABITests: XCTestCase {
             "v_cache": .init(
                 scalarType: .float16,
                 shape: [30, 1, 8, 4_096, 256]),
+        ])
+
+    private static let valid31BTargetFunction = Gemma4MTPFunctionDescriptor(
+        inputs: [
+            "input_ids": .init(scalarType: .int32, shape: [1, -1]),
+            "position_ids": .init(scalarType: .int32, shape: [1, -1]),
+        ],
+        outputs: [
+            "logits": .init(scalarType: .float16, shape: [1, -1, 262_144]),
+            "hidden": .init(scalarType: .float16, shape: [1, -1, 5_376]),
+            "k_full": .init(scalarType: .float16, shape: [1, 4, -1, 512]),
+            "v_full": .init(scalarType: .float16, shape: [1, 4, -1, 512]),
+            "k_sliding": .init(scalarType: .float16, shape: [1, 16, -1, 256]),
+            "v_sliding": .init(scalarType: .float16, shape: [1, 16, -1, 256]),
+        ],
+        states: [
+            "k_cache": .init(
+                scalarType: .float16,
+                shape: [60, 1, 16, 4_096, 256]),
+            "v_cache": .init(
+                scalarType: .float16,
+                shape: [60, 1, 16, 4_096, 256]),
         ])
 }

@@ -79,49 +79,65 @@ enum Gemma4MTPNativeContract {
   static let slidingKVHeads = 8
   static let slidingHeadDimension = 256
 
-  private static let expectedInputs: [String: Gemma4MTPTensorDescriptor] = [
-    "token_id": .init(scalarType: .int32, shape: [1, 1]),
-    "hidden": .init(scalarType: .float16, shape: [1, 1, backboneHiddenSize]),
-    "position_ids": .init(scalarType: .int32, shape: [1, 1]),
-    "k_full": .init(
-      scalarType: .float16,
-      shape: [1, fullKVHeads, cacheCapacity, fullHeadDimension]),
-    "v_full": .init(
-      scalarType: .float16,
-      shape: [1, fullKVHeads, cacheCapacity, fullHeadDimension]),
-    "k_sliding": .init(
-      scalarType: .float16,
-      shape: [1, slidingKVHeads, slidingWindow, slidingHeadDimension]),
-    "v_sliding": .init(
-      scalarType: .float16,
-      shape: [1, slidingKVHeads, slidingWindow, slidingHeadDimension]),
-    "kv_length": .init(scalarType: .int32, shape: [1]),
-  ]
+  /// Stateless draft inputs for a given geometry (`.gemma26B` reproduces the fixed July ABI).
+  /// The draft shares the target backbone width and full/sliding KV head geometry; its own
+  /// staging tensors are pinned to the target `cacheCapacity`/`slidingWindow`.
+  static func expectedInputs(
+    _ geometry: Gemma4EagleGeometry
+  ) -> [String: Gemma4MTPTensorDescriptor] {
+    [
+      "token_id": .init(scalarType: .int32, shape: [1, 1]),
+      "hidden": .init(scalarType: .float16, shape: [1, 1, geometry.backboneHiddenSize]),
+      "position_ids": .init(scalarType: .int32, shape: [1, 1]),
+      "k_full": .init(
+        scalarType: .float16,
+        shape: [1, geometry.fullKVHeads, geometry.cacheCapacity, geometry.fullHeadDimension]),
+      "v_full": .init(
+        scalarType: .float16,
+        shape: [1, geometry.fullKVHeads, geometry.cacheCapacity, geometry.fullHeadDimension]),
+      "k_sliding": .init(
+        scalarType: .float16,
+        shape: [1, geometry.slidingKVHeads, geometry.slidingWindow, geometry.slidingHeadDimension]),
+      "v_sliding": .init(
+        scalarType: .float16,
+        shape: [1, geometry.slidingKVHeads, geometry.slidingWindow, geometry.slidingHeadDimension]),
+      "kv_length": .init(scalarType: .int32, shape: [1]),
+    ]
+  }
 
-  private static let expectedOutputs: [String: Gemma4MTPTensorDescriptor] = [
-    "logits": .init(scalarType: .float16, shape: [1, 1, vocabularySize]),
-    "next_hidden": .init(
-      scalarType: .float16,
-      shape: [1, 1, backboneHiddenSize]),
-  ]
+  static func expectedOutputs(
+    _ geometry: Gemma4EagleGeometry
+  ) -> [String: Gemma4MTPTensorDescriptor] {
+    [
+      "logits": .init(scalarType: .float16, shape: [1, 1, geometry.vocabularySize]),
+      "next_hidden": .init(
+        scalarType: .float16,
+        shape: [1, 1, geometry.backboneHiddenSize]),
+    ]
+  }
 
-  private static let expectedUnrolledOutputs: [String: Gemma4MTPTensorDescriptor] = [
-    "draft_tokens": .init(
-      scalarType: .int32,
-      shape: [1, Gemma4EagleExecutionPolicy.draftTokens])
-  ]
+  static func expectedUnrolledOutputs(
+    _ geometry: Gemma4EagleGeometry
+  ) -> [String: Gemma4MTPTensorDescriptor] {
+    [
+      "draft_tokens": .init(
+        scalarType: .int32,
+        shape: [1, geometry.draftTokens])
+    ]
+  }
 
   static func validateModel(
     assetURL: URL,
     functionNames: [String],
-    function: Gemma4MTPFunctionDescriptor
+    function: Gemma4MTPFunctionDescriptor,
+    geometry: Gemma4EagleGeometry = .gemma26B
   ) throws {
     try validateAssetURL(assetURL)
     guard functionNames == ["main"] else {
       throw ContractError.invalid(
         "entrypoints must be exactly [\"main\"]; got \(functionNames.sorted())")
     }
-    try validate(function)
+    try validate(function, geometry: geometry)
   }
 
   static func validateAssetURL(_ assetURL: URL) throws {
@@ -131,34 +147,44 @@ enum Gemma4MTPNativeContract {
     }
   }
 
-  static func validate(_ function: Gemma4MTPFunctionDescriptor) throws {
-    guard Set(function.inputs.keys) == Set(expectedInputs.keys) else {
+  static func validate(
+    _ function: Gemma4MTPFunctionDescriptor,
+    geometry: Gemma4EagleGeometry = .gemma26B
+  ) throws {
+    let inputs = expectedInputs(geometry)
+    let outputs = expectedOutputs(geometry)
+    guard Set(function.inputs.keys) == Set(inputs.keys) else {
       throw ContractError.invalid(
-        "inputs must be exactly \(expectedInputs.keys.sorted()); "
+        "inputs must be exactly \(inputs.keys.sorted()); "
           + "got \(function.inputs.keys.sorted())")
     }
-    guard Set(function.outputs.keys) == Set(expectedOutputs.keys) else {
+    guard Set(function.outputs.keys) == Set(outputs.keys) else {
       throw ContractError.invalid(
-        "outputs must be exactly \(expectedOutputs.keys.sorted()); "
+        "outputs must be exactly \(outputs.keys.sorted()); "
           + "got \(function.outputs.keys.sorted())")
     }
     guard function.states.isEmpty else {
       throw ContractError.invalid(
         "states must be empty; got \(function.states.keys.sorted())")
     }
-    try validateDescriptors(function.inputs, expected: expectedInputs, category: "input")
-    try validateDescriptors(function.outputs, expected: expectedOutputs, category: "output")
+    try validateDescriptors(function.inputs, expected: inputs, category: "input")
+    try validateDescriptors(function.outputs, expected: outputs, category: "output")
   }
 
-  static func validateUnrolled(_ function: Gemma4MTPFunctionDescriptor) throws {
-    guard Set(function.inputs.keys) == Set(expectedInputs.keys) else {
+  static func validateUnrolled(
+    _ function: Gemma4MTPFunctionDescriptor,
+    geometry: Gemma4EagleGeometry = .gemma26B
+  ) throws {
+    let inputs = expectedInputs(geometry)
+    let unrolledOutputs = expectedUnrolledOutputs(geometry)
+    guard Set(function.inputs.keys) == Set(inputs.keys) else {
       throw ContractError.invalid(
-        "unrolled inputs must be exactly \(expectedInputs.keys.sorted()); "
+        "unrolled inputs must be exactly \(inputs.keys.sorted()); "
           + "got \(function.inputs.keys.sorted())")
     }
-    guard Set(function.outputs.keys) == Set(expectedUnrolledOutputs.keys) else {
+    guard Set(function.outputs.keys) == Set(unrolledOutputs.keys) else {
       throw ContractError.invalid(
-        "unrolled outputs must be exactly \(expectedUnrolledOutputs.keys.sorted()); "
+        "unrolled outputs must be exactly \(unrolledOutputs.keys.sorted()); "
           + "got \(function.outputs.keys.sorted())")
     }
     guard function.states.isEmpty else {
@@ -167,11 +193,11 @@ enum Gemma4MTPNativeContract {
     }
     try validateDescriptors(
       function.inputs,
-      expected: expectedInputs,
+      expected: inputs,
       category: "unrolled input")
     try validateDescriptors(
       function.outputs,
-      expected: expectedUnrolledOutputs,
+      expected: unrolledOutputs,
       category: "unrolled output")
   }
 
@@ -223,15 +249,17 @@ enum Gemma4MTPNativeContract {
     kFullShape: [Int],
     vFullShape: [Int],
     kSlidingShape: [Int],
-    vSlidingShape: [Int]
+    vSlidingShape: [Int],
+    geometry: Gemma4EagleGeometry = .gemma26B
   ) throws {
-    guard positionID >= 0, Int(positionID) < maxContextLength else {
+    let maxContext = geometry.cacheCapacity
+    guard positionID >= 0, Int(positionID) < maxContext else {
       throw ContractError.invalid(
-        "position_ids must be in 0..<\(maxContextLength); got \(positionID)")
+        "position_ids must be in 0..<\(maxContext); got \(positionID)")
     }
-    guard kvLength > 0, Int(kvLength) < cacheCapacity else {
+    guard kvLength > 0, Int(kvLength) < geometry.cacheCapacity else {
       throw ContractError.invalid(
-        "kv_length must be in 1..<\(cacheCapacity); got \(kvLength)")
+        "kv_length must be in 1..<\(geometry.cacheCapacity); got \(kvLength)")
     }
     guard positionID == kvLength else {
       throw ContractError.invalid(
@@ -240,11 +268,15 @@ enum Gemma4MTPNativeContract {
     }
 
     let expectedShapes: [(String, [Int], [Int])] = [
-      ("hidden", hiddenShape, [1, 1, backboneHiddenSize]),
-      ("k_full", kFullShape, [1, fullKVHeads, cacheCapacity, fullHeadDimension]),
-      ("v_full", vFullShape, [1, fullKVHeads, cacheCapacity, fullHeadDimension]),
-      ("k_sliding", kSlidingShape, [1, slidingKVHeads, slidingWindow, slidingHeadDimension]),
-      ("v_sliding", vSlidingShape, [1, slidingKVHeads, slidingWindow, slidingHeadDimension]),
+      ("hidden", hiddenShape, [1, 1, geometry.backboneHiddenSize]),
+      ("k_full", kFullShape,
+        [1, geometry.fullKVHeads, geometry.cacheCapacity, geometry.fullHeadDimension]),
+      ("v_full", vFullShape,
+        [1, geometry.fullKVHeads, geometry.cacheCapacity, geometry.fullHeadDimension]),
+      ("k_sliding", kSlidingShape,
+        [1, geometry.slidingKVHeads, geometry.slidingWindow, geometry.slidingHeadDimension]),
+      ("v_sliding", vSlidingShape,
+        [1, geometry.slidingKVHeads, geometry.slidingWindow, geometry.slidingHeadDimension]),
     ]
     for (name, actual, expected) in expectedShapes {
       guard actual == expected else {

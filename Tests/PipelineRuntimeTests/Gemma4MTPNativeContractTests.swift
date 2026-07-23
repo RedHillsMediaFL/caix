@@ -23,6 +23,89 @@ final class Gemma4MTPNativeContractTests: XCTestCase {
     assertUnrolledContractRejected(function, contains: "inputs must be exactly")
   }
 
+  // MARK: - geometry-driven assistant descriptors (26B + dense 31B)
+
+  func testAssistantDescriptorsAreGeometryDrivenFor26BAnd31B() {
+    // 26B reproduces the fixed July assistant ABI exactly.
+    let in26 = Gemma4MTPNativeContract.expectedInputs(.gemma26B)
+    XCTAssertEqual(in26["hidden"], .init(scalarType: .float16, shape: [1, 1, 2_816]))
+    XCTAssertEqual(in26["k_full"], .init(scalarType: .float16, shape: [1, 2, 4_096, 512]))
+    XCTAssertEqual(in26["v_full"], .init(scalarType: .float16, shape: [1, 2, 4_096, 512]))
+    XCTAssertEqual(in26["k_sliding"], .init(scalarType: .float16, shape: [1, 8, 1_024, 256]))
+    XCTAssertEqual(in26["v_sliding"], .init(scalarType: .float16, shape: [1, 8, 1_024, 256]))
+    XCTAssertEqual(in26["kv_length"], .init(scalarType: .int32, shape: [1]))
+    XCTAssertEqual(
+      Gemma4MTPNativeContract.expectedOutputs(.gemma26B)["next_hidden"],
+      .init(scalarType: .float16, shape: [1, 1, 2_816]))
+    XCTAssertEqual(
+      Gemma4MTPNativeContract.expectedUnrolledOutputs(.gemma26B)["draft_tokens"],
+      .init(scalarType: .int32, shape: [1, 4]))
+
+    // 31B shares vocab/capacity/window/K but doubles backbone + full/sliding KV heads.
+    let in31 = Gemma4MTPNativeContract.expectedInputs(.gemma31B)
+    XCTAssertEqual(in31["hidden"], .init(scalarType: .float16, shape: [1, 1, 5_376]))
+    XCTAssertEqual(in31["k_full"], .init(scalarType: .float16, shape: [1, 4, 4_096, 512]))
+    XCTAssertEqual(in31["v_full"], .init(scalarType: .float16, shape: [1, 4, 4_096, 512]))
+    XCTAssertEqual(in31["k_sliding"], .init(scalarType: .float16, shape: [1, 16, 1_024, 256]))
+    XCTAssertEqual(in31["v_sliding"], .init(scalarType: .float16, shape: [1, 16, 1_024, 256]))
+    XCTAssertEqual(in31["kv_length"], .init(scalarType: .int32, shape: [1]))
+    XCTAssertEqual(
+      Gemma4MTPNativeContract.expectedOutputs(.gemma31B)["next_hidden"],
+      .init(scalarType: .float16, shape: [1, 1, 5_376]))
+    // Draft depth K stays 4 (draft_tokens output [1,4]) for both geometries.
+    XCTAssertEqual(
+      Gemma4MTPNativeContract.expectedUnrolledOutputs(.gemma31B)["draft_tokens"],
+      .init(scalarType: .int32, shape: [1, 4]))
+  }
+
+  func testValidatesGemma31BAssistantContractAndRejectsCrossGeometry() throws {
+    XCTAssertNoThrow(
+      try Gemma4MTPNativeContract.validate(Self.valid31BFunction, geometry: .gemma31B))
+    XCTAssertNoThrow(
+      try Gemma4MTPNativeContract.validateUnrolled(
+        Self.valid31BUnrolledFunction, geometry: .gemma31B))
+
+    // A 31B assistant must not pass 26B validation, and a 26B assistant must not pass 31B.
+    XCTAssertThrowsError(
+      try Gemma4MTPNativeContract.validate(Self.valid31BFunction, geometry: .gemma26B)
+    ) { error in
+      XCTAssertTrue(String(describing: error).contains("hidden"))
+    }
+    XCTAssertThrowsError(
+      try Gemma4MTPNativeContract.validate(Self.validFunction, geometry: .gemma31B)
+    ) { error in
+      XCTAssertTrue(String(describing: error).contains("hidden"))
+    }
+  }
+
+  func testRuntimeInvocationValidatesGemma31BStaticStaging() throws {
+    XCTAssertNoThrow(
+      try Gemma4MTPNativeContract.validateRuntimeInvocation(
+        positionID: 1_025,
+        kvLength: 1_025,
+        hiddenShape: [1, 1, 5_376],
+        kFullShape: [1, 4, 4_096, 512],
+        vFullShape: [1, 4, 4_096, 512],
+        kSlidingShape: [1, 16, 1_024, 256],
+        vSlidingShape: [1, 16, 1_024, 256],
+        geometry: .gemma31B))
+
+    // 26B staging shapes are rejected under 31B geometry.
+    XCTAssertThrowsError(
+      try Gemma4MTPNativeContract.validateRuntimeInvocation(
+        positionID: 1_025,
+        kvLength: 1_025,
+        hiddenShape: [1, 1, 2_816],
+        kFullShape: [1, 2, 4_096, 512],
+        vFullShape: [1, 2, 4_096, 512],
+        kSlidingShape: [1, 8, 1_024, 256],
+        vSlidingShape: [1, 8, 1_024, 256],
+        geometry: .gemma31B)
+    ) { error in
+      XCTAssertTrue(String(describing: error).contains("hidden"))
+    }
+  }
+
   func testModelPreflightAcceptsOneAimodelWithOnlyMain() throws {
     XCTAssertNoThrow(
       try Gemma4MTPNativeContract.validateModel(
@@ -452,6 +535,30 @@ final class Gemma4MTPNativeContractTests: XCTestCase {
 
   private static let validUnrolledFunction = Gemma4MTPFunctionDescriptor(
     inputs: validFunction.inputs,
+    outputs: [
+      "draft_tokens": .init(scalarType: .int32, shape: [1, 4])
+    ],
+    states: [:])
+
+  private static let valid31BFunction = Gemma4MTPFunctionDescriptor(
+    inputs: [
+      "token_id": .init(scalarType: .int32, shape: [1, 1]),
+      "hidden": .init(scalarType: .float16, shape: [1, 1, 5_376]),
+      "position_ids": .init(scalarType: .int32, shape: [1, 1]),
+      "k_full": .init(scalarType: .float16, shape: [1, 4, 4_096, 512]),
+      "v_full": .init(scalarType: .float16, shape: [1, 4, 4_096, 512]),
+      "k_sliding": .init(scalarType: .float16, shape: [1, 16, 1_024, 256]),
+      "v_sliding": .init(scalarType: .float16, shape: [1, 16, 1_024, 256]),
+      "kv_length": .init(scalarType: .int32, shape: [1]),
+    ],
+    outputs: [
+      "logits": .init(scalarType: .float16, shape: [1, 1, 262_144]),
+      "next_hidden": .init(scalarType: .float16, shape: [1, 1, 5_376]),
+    ],
+    states: [:])
+
+  private static let valid31BUnrolledFunction = Gemma4MTPFunctionDescriptor(
+    inputs: valid31BFunction.inputs,
     outputs: [
       "draft_tokens": .init(scalarType: .int32, shape: [1, 4])
     ],

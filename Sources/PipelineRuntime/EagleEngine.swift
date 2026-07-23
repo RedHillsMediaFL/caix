@@ -164,6 +164,7 @@ final class EagleTargetEngine {
     private var accKSliding: NDArray
     private var accVSliding: NDArray
     private let hf: Int, df: Int, hs: Int, ds: Int  // full/sliding head counts + head dims
+    let geometry: Gemma4EagleGeometry
 
     struct Out {
         let logitsRows: [[Float]]
@@ -180,24 +181,27 @@ final class EagleTargetEngine {
         model: AIModel,
         assetURL: URL,
         vocabSize: Int,
-        hiddenSize: Int
+        hiddenSize: Int,
+        geometry: Gemma4EagleGeometry
     ) throws {
+        self.geometry = geometry
         guard let d = model.functionDescriptor(for: "main") else {
             throw CoreAIPipeline.RuntimeError.modelContract("eagle target: no 'main'")
         }
         try Gemma4EagleTargetContract.validateModel(
             assetURL: assetURL,
             functionNames: model.functionNames,
-            function: Gemma4MTPNativeRunner.project(d))
-        guard vocabSize == Gemma4EagleTargetContract.vocabularySize else {
+            function: Gemma4MTPNativeRunner.project(d),
+            geometry: geometry)
+        guard vocabSize == geometry.vocabularySize else {
             throw CoreAIPipeline.RuntimeError.modelContract(
                 "eagle target: configured vocabulary \(vocabSize) must equal "
-                    + "\(Gemma4EagleTargetContract.vocabularySize)")
+                    + "\(geometry.vocabularySize)")
         }
-        guard hiddenSize == Gemma4EagleTargetContract.backboneHiddenSize else {
+        guard hiddenSize == geometry.backboneHiddenSize else {
             throw CoreAIPipeline.RuntimeError.modelContract(
                 "eagle target: configured backbone \(hiddenSize) must equal "
-                    + "\(Gemma4EagleTargetContract.backboneHiddenSize)")
+                    + "\(geometry.backboneHiddenSize)")
         }
         func nd(_ which: String, _ name: String) -> NDArrayDescriptor? {
             let kind: NDArrayDescriptor?
@@ -214,19 +218,19 @@ final class EagleTargetEngine {
         for n in d.outputNames { outs[n] = nd("out", n) }
         self.inDesc = ins
         self.outDesc = outs
-        let resolvedHiddenSize = Gemma4EagleTargetContract.backboneHiddenSize
+        let resolvedHiddenSize = geometry.backboneHiddenSize
         let kfShp = outs["k_full"]!.shape
         let ksShp = outs["k_sliding"]!.shape
         self.hf = kfShp[1]; self.df = kfShp[3]
         self.hs = ksShp[1]; self.ds = ksShp[3]
         self.accKFull = NDArray(descriptor: outs["k_full"]!.resolvingDynamicDimensions(
-            [1, kfShp[1], Gemma4EagleTargetContract.cacheCapacity, kfShp[3]]))
+            [1, kfShp[1], geometry.cacheCapacity, kfShp[3]]))
         self.accVFull = NDArray(descriptor: outs["v_full"]!.resolvingDynamicDimensions(
-            [1, kfShp[1], Gemma4EagleTargetContract.cacheCapacity, kfShp[3]]))
+            [1, kfShp[1], geometry.cacheCapacity, kfShp[3]]))
         self.accKSliding = NDArray(descriptor: outs["k_sliding"]!.resolvingDynamicDimensions(
-            [1, ksShp[1], Gemma4EagleTargetContract.slidingWindow, ksShp[3]]))
+            [1, ksShp[1], geometry.slidingWindow, ksShp[3]]))
         self.accVSliding = NDArray(descriptor: outs["v_sliding"]!.resolvingDynamicDimensions(
-            [1, ksShp[1], Gemma4EagleTargetContract.slidingWindow, ksShp[3]]))
+            [1, ksShp[1], geometry.slidingWindow, ksShp[3]]))
         self.keyName = "k_cache"
         self.valueName = "v_cache"
         guard let kd = nd("state", keyName), let vd = nd("state", valueName) else {
@@ -246,7 +250,12 @@ final class EagleTargetEngine {
     private let kd: NDArrayDescriptor
     private let vd: NDArrayDescriptor
 
-    static func load(aimodelURL: URL, vocabSize: Int, hiddenSize: Int) async throws -> EagleTargetEngine {
+    static func load(
+        aimodelURL: URL,
+        vocabSize: Int,
+        hiddenSize: Int,
+        geometry: Gemma4EagleGeometry
+    ) async throws -> EagleTargetEngine {
         try Gemma4MTPNativeContract.validateAssetURL(aimodelURL)
         var spec = LLMEngine.eagleSpecializationOptions()
         spec.expectFrequentReshapes = false
@@ -255,20 +264,21 @@ final class EagleTargetEngine {
             model: model,
             assetURL: aimodelURL,
             vocabSize: vocabSize,
-            hiddenSize: hiddenSize)
+            hiddenSize: hiddenSize,
+            geometry: geometry)
     }
 
     func allocateCache() {
         keyCache = NDArray(descriptor: kd)
         valueCache = NDArray(descriptor: vd)
         accKFull = NDArray(descriptor: outDesc["k_full"]!.resolvingDynamicDimensions(
-            [1, hf, Gemma4EagleTargetContract.cacheCapacity, df]))
+            [1, hf, geometry.cacheCapacity, df]))
         accVFull = NDArray(descriptor: outDesc["v_full"]!.resolvingDynamicDimensions(
-            [1, hf, Gemma4EagleTargetContract.cacheCapacity, df]))
+            [1, hf, geometry.cacheCapacity, df]))
         accKSliding = NDArray(descriptor: outDesc["k_sliding"]!.resolvingDynamicDimensions(
-            [1, hs, Gemma4EagleTargetContract.slidingWindow, ds]))
+            [1, hs, geometry.slidingWindow, ds]))
         accVSliding = NDArray(descriptor: outDesc["v_sliding"]!.resolvingDynamicDimensions(
-            [1, hs, Gemma4EagleTargetContract.slidingWindow, ds]))
+            [1, hs, geometry.slidingWindow, ds]))
         processed = 0
         hostProcessed = 0
     }
@@ -337,7 +347,7 @@ final class EagleTargetEngine {
         guard output.startOffset == hostProcessed,
               count > 0,
               count <= output.queryWidth,
-              hostProcessed + count <= Gemma4EagleTargetContract.cacheCapacity
+              hostProcessed + count <= geometry.cacheCapacity
         else {
             throw CoreAIPipeline.RuntimeError.modelContract(
                 "eagle target: invalid host KV commit start=\(output.startOffset), "
@@ -415,22 +425,26 @@ final class EagleDraftEngine {
     private let nextHiddenOutputName: String
     let vocabSize: Int
     let hiddenSize: Int
+    let geometry: Gemma4EagleGeometry
 
-    private init(model: AIModel, vocabSize: Int, hiddenSize: Int) throws {
+    private init(model: AIModel, vocabSize: Int, hiddenSize: Int, geometry: Gemma4EagleGeometry) throws {
+        self.geometry = geometry
         guard let d = model.functionDescriptor(for: "main") else {
             throw CoreAIPipeline.RuntimeError.modelContract("eagle draft: no 'main'")
         }
-        try Gemma4MTPNativeContract.validate(Gemma4MTPNativeRunner.project(d))
+        try Gemma4MTPNativeContract.validate(Gemma4MTPNativeRunner.project(d), geometry: geometry)
         guard model.functionNames == ["main"] else {
             throw CoreAIPipeline.RuntimeError.modelContract(
                 "eagle draft: entrypoints must be exactly [\"main\"]; "
                     + "got \(model.functionNames.sorted())")
         }
-        guard vocabSize == Gemma4MTPNativeContract.vocabularySize,
-              hiddenSize == Gemma4MTPNativeContract.backboneHiddenSize
+        guard vocabSize == geometry.vocabularySize,
+              hiddenSize == geometry.backboneHiddenSize
         else {
             throw CoreAIPipeline.RuntimeError.modelContract(
-                "eagle draft: configured 26B geometry does not match fixed assistant ABI")
+                "eagle draft: configured geometry (vocab \(vocabSize), backbone \(hiddenSize)) "
+                    + "does not match fixed assistant ABI "
+                    + "(vocab \(geometry.vocabularySize), backbone \(geometry.backboneHiddenSize))")
         }
         var ins: [String: NDArrayDescriptor] = [:]
         for n in d.inputNames { if case .ndArray(let x) = d.inputDescriptor(of: n) { ins[n] = x } }
@@ -448,19 +462,25 @@ final class EagleDraftEngine {
         self.logitsOutputName = "logits"
         self.nextHiddenOutputName = "next_hidden"
         self.vocabSize = vocabSize
-        self.hiddenSize = Gemma4MTPNativeContract.backboneHiddenSize
+        self.hiddenSize = geometry.backboneHiddenSize
         guard let fn = try model.loadFunction(named: "main") else {
             throw CoreAIPipeline.RuntimeError.modelContract("eagle draft: load 'main' failed")
         }
         self.function = fn
     }
 
-    static func load(aimodelURL: URL, vocabSize: Int, hiddenSize: Int) async throws -> EagleDraftEngine {
+    static func load(
+        aimodelURL: URL,
+        vocabSize: Int,
+        hiddenSize: Int,
+        geometry: Gemma4EagleGeometry
+    ) async throws -> EagleDraftEngine {
         try Gemma4MTPNativeContract.validateAssetURL(aimodelURL)
         var spec = LLMEngine.eagleSpecializationOptions()
         spec.expectFrequentReshapes = false
         let model = try await AIModel(contentsOf: aimodelURL, options: spec)
-        return try EagleDraftEngine(model: model, vocabSize: vocabSize, hiddenSize: hiddenSize)
+        return try EagleDraftEngine(
+            model: model, vocabSize: vocabSize, hiddenSize: hiddenSize, geometry: geometry)
     }
 
     struct Out { let logits: [Float]; let nextHidden: NDArray }
@@ -484,7 +504,8 @@ final class EagleDraftEngine {
             kFullShape: kFull.shape,
             vFullShape: vFull.shape,
             kSlidingShape: kSliding.shape,
-            vSlidingShape: vSliding.shape)
+            vSlidingShape: vSliding.shape,
+            geometry: geometry)
         var tokenId = NDArray(descriptor: inDesc[tokenInputName]!.resolvingDynamicDimensions([1, 1]))
         EagleND.fillI32(&tokenId, [token])
         var pos = NDArray(descriptor: inDesc[positionInputName]!.resolvingDynamicDimensions([1, 1]))
@@ -527,20 +548,24 @@ final class EagleDraftUnrolledEngine {
     private let outDesc: NDArrayDescriptor
     let numSteps: Int
     let hiddenSize: Int
+    let geometry: Gemma4EagleGeometry
 
-    private init(model: AIModel, hiddenSize: Int) throws {
+    private init(model: AIModel, hiddenSize: Int, geometry: Gemma4EagleGeometry) throws {
+        self.geometry = geometry
         guard let d = model.functionDescriptor(for: "main") else {
             throw CoreAIPipeline.RuntimeError.modelContract("eagle unrolled draft: no 'main'")
         }
-        try Gemma4MTPNativeContract.validateUnrolled(Gemma4MTPNativeRunner.project(d))
+        try Gemma4MTPNativeContract.validateUnrolled(
+            Gemma4MTPNativeRunner.project(d), geometry: geometry)
         guard model.functionNames == ["main"] else {
             throw CoreAIPipeline.RuntimeError.modelContract(
                 "eagle unrolled draft: entrypoints must be exactly [\"main\"]; "
                     + "got \(model.functionNames.sorted())")
         }
-        guard hiddenSize == Gemma4MTPNativeContract.backboneHiddenSize else {
+        guard hiddenSize == geometry.backboneHiddenSize else {
             throw CoreAIPipeline.RuntimeError.modelContract(
-                "eagle unrolled draft: configured backbone does not match fixed 26B ABI")
+                "eagle unrolled draft: configured backbone \(hiddenSize) does not match fixed ABI "
+                    + "\(geometry.backboneHiddenSize)")
         }
         var ins: [String: NDArrayDescriptor] = [:]
         for n in d.inputNames { if case .ndArray(let x) = d.inputDescriptor(of: n) { ins[n] = x } }
@@ -549,20 +574,24 @@ final class EagleDraftUnrolledEngine {
         }
         self.inDesc = ins
         self.outDesc = od
-        self.numSteps = Gemma4EagleExecutionPolicy.draftTokens
-        self.hiddenSize = Gemma4MTPNativeContract.backboneHiddenSize
+        self.numSteps = geometry.draftTokens
+        self.hiddenSize = geometry.backboneHiddenSize
         guard let fn = try model.loadFunction(named: "main") else {
             throw CoreAIPipeline.RuntimeError.modelContract("eagle unrolled draft: load 'main' failed")
         }
         self.function = fn
     }
 
-    static func load(aimodelURL: URL, hiddenSize: Int) async throws -> EagleDraftUnrolledEngine {
+    static func load(
+        aimodelURL: URL,
+        hiddenSize: Int,
+        geometry: Gemma4EagleGeometry
+    ) async throws -> EagleDraftUnrolledEngine {
         try Gemma4MTPNativeContract.validateAssetURL(aimodelURL)
         var spec = LLMEngine.eagleSpecializationOptions()
         spec.expectFrequentReshapes = false
         let model = try await AIModel(contentsOf: aimodelURL, options: spec)
-        return try EagleDraftUnrolledEngine(model: model, hiddenSize: hiddenSize)
+        return try EagleDraftUnrolledEngine(model: model, hiddenSize: hiddenSize, geometry: geometry)
     }
 
     private let outputName = "draft_tokens"
@@ -585,7 +614,8 @@ final class EagleDraftUnrolledEngine {
             kFullShape: kFull.shape,
             vFullShape: vFull.shape,
             kSlidingShape: kSliding.shape,
-            vSlidingShape: vSliding.shape)
+            vSlidingShape: vSliding.shape,
+            geometry: geometry)
         var tokenId = NDArray(descriptor: inDesc["token_id"]!.resolvingDynamicDimensions([1, 1]))
         EagleND.fillI32(&tokenId, [token])
         var pos = NDArray(descriptor: inDesc["position_ids"]!.resolvingDynamicDimensions([1, 1]))
@@ -641,15 +671,23 @@ public final class EagleEngine {
                             verbose: Bool, unrolledURL: URL? = nil) async throws -> EagleEngine {
         let t0 = Date()
         _ = verbose
-        guard draftTokens == Gemma4EagleExecutionPolicy.draftTokens,
-              vocabSize == Gemma4EagleTargetContract.vocabularySize,
-              backbone == Gemma4EagleTargetContract.backboneHiddenSize,
-              slidingWindow == Gemma4EagleTargetContract.slidingWindow,
-              maxContext == Gemma4EagleTargetContract.cacheCapacity
+        // The backbone width selects the whole fixed-shape family (26B or the dense 31B). Everything
+        // else in the ABI (K, vocab, sliding window, context) is shared, so it is validated against
+        // the resolved geometry rather than hardcoded to one model.
+        guard let geometry = Gemma4EagleGeometry.forBackbone(backbone) else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "eagle requires a supported Gemma 4 EAGLE backbone; got \(backbone), "
+                    + "supported \(Gemma4EagleGeometry.supportedBackbones)")
+        }
+        guard draftTokens == geometry.draftTokens,
+              vocabSize == geometry.vocabularySize,
+              slidingWindow == geometry.slidingWindow,
+              maxContext == geometry.cacheCapacity
         else {
             throw CoreAIPipeline.RuntimeError.modelContract(
-                "eagle requires the fixed Gemma 4 26B ABI: K=4, vocab=262144, "
-                    + "backbone=2816, sliding=1024, context=4096")
+                "eagle requires the fixed Gemma 4 ABI for backbone=\(geometry.backboneHiddenSize): "
+                    + "K=\(geometry.draftTokens), vocab=\(geometry.vocabularySize), "
+                    + "sliding=\(geometry.slidingWindow), context=\(geometry.cacheCapacity)")
         }
         // Authenticate and compile the July prompt contract before allocating either model.
         // EAGLE is the Gemma 4 MTP backend; stale Gemma templates must fail closed rather than
@@ -658,15 +696,22 @@ public final class EagleEngine {
             tokenizerDirectory: tokenizerDir)
         async let tok = AutoTokenizer.from(modelFolder: tokenizerDir)
         let target = try await EagleTargetEngine.load(
-            aimodelURL: targetURL, vocabSize: vocabSize, hiddenSize: backbone)
+            aimodelURL: targetURL, vocabSize: vocabSize, hiddenSize: backbone, geometry: geometry)
         let resolvedBackbone = target.hiddenSize
+        guard resolvedBackbone == geometry.backboneHiddenSize else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "eagle target backbone \(resolvedBackbone) does not match selected geometry "
+                    + "\(geometry.backboneHiddenSize)")
+        }
         async let drf = EagleDraftEngine.load(
-            aimodelURL: draftURL, vocabSize: vocabSize, hiddenSize: resolvedBackbone)
+            aimodelURL: draftURL, vocabSize: vocabSize, hiddenSize: resolvedBackbone,
+            geometry: geometry)
         let tokenizer = try await tok
         let draft = try await drf
         var unrolled: EagleDraftUnrolledEngine? = nil
         if let u = unrolledURL {
-            unrolled = try await EagleDraftUnrolledEngine.load(aimodelURL: u, hiddenSize: resolvedBackbone)
+            unrolled = try await EagleDraftUnrolledEngine.load(
+                aimodelURL: u, hiddenSize: resolvedBackbone, geometry: geometry)
         }
         // Same turn-ending stop set as the standard engine, read from the model's published
         // generation_config.json eos_token_id list (gemma-4: [1,106,50]) so greedy EAGLE halts at
@@ -687,9 +732,9 @@ public final class EagleEngine {
         guard !promptTokens.isEmpty else {
             throw CoreAIPipeline.RuntimeError.invalidBundle("prompt tokenized to 0 tokens")
         }
-        guard promptTokens.count <= Gemma4EagleTargetContract.cacheCapacity else {
+        guard promptTokens.count <= target.geometry.cacheCapacity else {
             throw CoreAIPipeline.RuntimeError.invalidBundle(
-                "eagle prompt exceeds fixed 4096-token target state")
+                "eagle prompt exceeds fixed \(target.geometry.cacheCapacity)-token target state")
         }
         let maxTokens = max(0, options.maxTokens)
         target.allocateCache()
@@ -872,9 +917,9 @@ public final class EagleEngine {
         guard !promptTokens.isEmpty else {
             throw CoreAIPipeline.RuntimeError.invalidBundle("prompt tokenized to 0 tokens")
         }
-        guard promptTokens.count <= Gemma4EagleTargetContract.cacheCapacity else {
+        guard promptTokens.count <= target.geometry.cacheCapacity else {
             throw CoreAIPipeline.RuntimeError.invalidBundle(
-                "eagle prompt exceeds fixed 4096-token target state")
+                "eagle prompt exceeds fixed \(target.geometry.cacheCapacity)-token target state")
         }
         func log(_ s: @autoclosure () -> String) {
             if options.verbose { FileHandle.standardError.write(Data(("[coreai] " + s() + "\n").utf8)) }
@@ -882,8 +927,8 @@ public final class EagleEngine {
         let maxTokens = max(0, options.maxTokens)
         target.allocateCache()
         log(
-            "eagle prompt -> \(promptTokens.count) tokens, K=4, "
-                + "cap=\(Gemma4EagleTargetContract.cacheCapacity), prefill=Q5+Q1-tail")
+            "eagle prompt -> \(promptTokens.count) tokens, K=\(target.geometry.draftTokens), "
+                + "cap=\(target.geometry.cacheCapacity), prefill=Q5+Q1-tail")
 
         // Keep specialization bounded to the ABI's two query shapes: complete Q5 blocks followed
         // by one Q1 forward per tail token. The last forward supplies the anchor logits/hidden.
