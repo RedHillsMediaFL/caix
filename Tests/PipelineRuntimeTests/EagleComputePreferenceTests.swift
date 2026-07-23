@@ -66,8 +66,10 @@ final class EagleComputePreferenceTests: XCTestCase {
         XCTAssertNil(options.preferredComputeUnitKind)
     }
 
-    func testEagleGPUAndDefaultSpecializationPreservePreferredGPUOptions() {
-        let expected = SpecializationOptions(preferredComputeUnitKind: .gpu)
+    func testEagleGPUAndDefaultSpecializationExcludeNeuralEngine() {
+        let expected = SpecializationOptions(
+            caixAllowedComputeUnitKinds: [.cpu, .gpu],
+            caixPreferredComputeUnitKind: .gpu)
         let explicit = LLMEngine.eagleSpecializationOptions(environment: [
             "COREAI_EAGLE_COMPUTE": "gpu",
             "COREAI_COMPUTE": "ane",
@@ -76,8 +78,9 @@ final class EagleComputePreferenceTests: XCTestCase {
 
         XCTAssertEqual(explicit, expected)
         XCTAssertEqual(defaulted, expected)
-        XCTAssertEqual(expected.allowedComputeUnitKinds, [.cpu, .gpu, .neuralEngine])
+        XCTAssertEqual(expected.allowedComputeUnitKinds, [.cpu, .gpu])
         XCTAssertEqual(expected.preferredComputeUnitKind, .gpu)
+        XCTAssertFalse(expected.allowedComputeUnitKinds.contains(.neuralEngine))
     }
 
     func testEveryProductionEagleLoaderUsesEaglePreferenceWithoutHardcodedGPU() throws {

@@ -7,8 +7,10 @@ import Tokenizers
 
 // CoreAI 27 publicly exposes CPU-only specialization and an all-device preferred-device
 // initializer, but not the framework's existing allowed-device-set initializer. Packed Q4
-// EAGLE graphs cannot include GPU in that set because MPS currently aborts while lowering
-// `mps.dequantize`. Keep the ABI bridge isolated here until Apple exposes the initializer.
+// EAGLE graphs need accelerator isolation: ANE mode must exclude GPU to avoid MPS dequantize
+// lowering, while GPU mode must exclude the Neural Engine to avoid ANEC conversion fallback and
+// an eventual GPU::ANEHelper evaluation abort. Keep the ABI bridge isolated here until Apple
+// exposes the initializer.
 extension SpecializationOptions {
     @_silgen_name("$s15CoreAIDelegates21SpecializationOptionsV23allowedComputeUnitKinds09preferredfG4KindACShyAA0fgJ0OG_AGSgtcfC")
     init(
@@ -171,9 +173,10 @@ final class LLMEngine {
 
     /// Specialization policy for EAGLE target and MTP assistant graphs.
     ///
-    /// ANE preference alone still allows GPU partitioning. Excluding GPU is required for packed
-    /// Q4 graphs on CoreAI 27 because the current MPS compiler aborts on their dequantize op.
-    /// CPU remains available as a safe fallback for operators the Neural Engine cannot lower.
+    /// A preferred compute unit alone still allows partitioning onto every accelerator. Use
+    /// explicit allowed sets so ANE and GPU modes cannot silently cross onto the other backend.
+    /// CPU remains available as a safe fallback for operators the selected accelerator cannot
+    /// lower.
     static func eagleSpecializationOptions(
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> SpecializationOptions {
@@ -186,7 +189,9 @@ final class LLMEngine {
                 caixAllowedComputeUnitKinds: [.cpu, .neuralEngine],
                 caixPreferredComputeUnitKind: .neuralEngine)
         }
-        return SpecializationOptions(preferredComputeUnitKind: .gpu)
+        return SpecializationOptions(
+            caixAllowedComputeUnitKinds: [.cpu, .gpu],
+            caixPreferredComputeUnitKind: .gpu)
     }
 
     private static func computeUnit(named rawValue: String?) -> ComputeUnitKind? {
