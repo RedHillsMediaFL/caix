@@ -345,28 +345,63 @@ final class EagleTargetEngine {
         var vFullNew = out("v_full", [1, hf, n, df])
         var kSlidingNew = out("k_sliding", [1, hs, n, ds])
         var vSlidingNew = out("v_sliding", [1, hs, n, ds])
-        // Split-only 7th output: in-graph per-row argmax of logits.
-        var verifyTokens = outDesc["verify_tokens"].map {
-            NDArray(descriptor: $0.resolvingDynamicDimensions([1, n]))
-        }
+        // Split-only 7th output: in-graph per-row argmax of logits (nil on unified).
+        var verifyTokens: NDArray? = nil
 
-        var states = InferenceFunction.MutableViews()
-        for index in stateBuffers.indices {
-            states.insert(&stateBuffers[index], for: stateNames[index])
+        // Build states + output views and run. The `~Escapable` MutableViews borrows every
+        // inserted buffer for the whole `function.run`, so each borrow must be of a stable
+        // local binding — not an array subscript (`&stateBuffers[i]` overlaps/escapes) and not
+        // a force-unwrapped optional (`&verifyTokens!` escapes). Branch by variant so the
+        // borrow set is fixed within one scope (mirrors the distributed N-state path), then
+        // write the state handles back. NDArray is a reference-backed handle, so the run
+        // updates the shared backing in place; the write-back is a no-op safeguard.
+        let inputs = ["input_ids": inputIds, "position_ids": positionIds]
+        switch variant {
+        case .unified:
+            var s0 = stateBuffers[0]
+            var s1 = stateBuffers[1]
+            var states = InferenceFunction.MutableViews()
+            states.insert(&s0, for: stateNames[0])
+            states.insert(&s1, for: stateNames[1])
+            var ov = InferenceFunction.MutableViews()
+            ov.insert(&logits, for: "logits")
+            ov.insert(&hidden, for: "hidden")
+            ov.insert(&kFullNew, for: "k_full")
+            ov.insert(&vFullNew, for: "v_full")
+            ov.insert(&kSlidingNew, for: "k_sliding")
+            ov.insert(&vSlidingNew, for: "v_sliding")
+            _ = try await function.run(
+                inputs: inputs, states: consume states, outputViews: consume ov)
+            stateBuffers[0] = s0
+            stateBuffers[1] = s1
+        case .split:
+            var s0 = stateBuffers[0]
+            var s1 = stateBuffers[1]
+            var s2 = stateBuffers[2]
+            var s3 = stateBuffers[3]
+            var vtok = NDArray(
+                descriptor: outDesc["verify_tokens"]!.resolvingDynamicDimensions([1, n]))
+            var states = InferenceFunction.MutableViews()
+            states.insert(&s0, for: stateNames[0])
+            states.insert(&s1, for: stateNames[1])
+            states.insert(&s2, for: stateNames[2])
+            states.insert(&s3, for: stateNames[3])
+            var ov = InferenceFunction.MutableViews()
+            ov.insert(&logits, for: "logits")
+            ov.insert(&hidden, for: "hidden")
+            ov.insert(&kFullNew, for: "k_full")
+            ov.insert(&vFullNew, for: "v_full")
+            ov.insert(&kSlidingNew, for: "k_sliding")
+            ov.insert(&vSlidingNew, for: "v_sliding")
+            ov.insert(&vtok, for: "verify_tokens")
+            _ = try await function.run(
+                inputs: inputs, states: consume states, outputViews: consume ov)
+            stateBuffers[0] = s0
+            stateBuffers[1] = s1
+            stateBuffers[2] = s2
+            stateBuffers[3] = s3
+            verifyTokens = vtok
         }
-        var ov = InferenceFunction.MutableViews()
-        ov.insert(&logits, for: "logits")
-        ov.insert(&hidden, for: "hidden")
-        ov.insert(&kFullNew, for: "k_full")
-        ov.insert(&vFullNew, for: "v_full")
-        ov.insert(&kSlidingNew, for: "k_sliding")
-        ov.insert(&vSlidingNew, for: "v_sliding")
-        if verifyTokens != nil {
-            ov.insert(&verifyTokens!, for: "verify_tokens")
-        }
-        _ = try await function.run(
-            inputs: ["input_ids": inputIds, "position_ids": positionIds],
-            states: consume states, outputViews: consume ov)
 
         processed += n
         let greedyTokens: [Int]
