@@ -45,10 +45,45 @@ final class EagleComputePreferenceTests: XCTestCase {
             .gpu)
     }
 
+    func testEagleANESpecializationExcludesGPU() {
+        let options = LLMEngine.eagleSpecializationOptions(environment: [
+            "COREAI_EAGLE_COMPUTE": "ane",
+            "COREAI_COMPUTE": "gpu",
+        ])
+
+        XCTAssertEqual(options.allowedComputeUnitKinds, [.cpu, .neuralEngine])
+        XCTAssertEqual(options.preferredComputeUnitKind, .neuralEngine)
+    }
+
+    func testEagleCPUSpecializationUsesCPUOnlyOptions() {
+        let options = LLMEngine.eagleSpecializationOptions(environment: [
+            "COREAI_EAGLE_COMPUTE": "cpu",
+            "COREAI_COMPUTE": "gpu",
+        ])
+
+        XCTAssertEqual(options, .cpuOnly)
+        XCTAssertEqual(options.allowedComputeUnitKinds, [.cpu])
+        XCTAssertNil(options.preferredComputeUnitKind)
+    }
+
+    func testEagleGPUAndDefaultSpecializationPreservePreferredGPUOptions() {
+        let expected = SpecializationOptions(preferredComputeUnitKind: .gpu)
+        let explicit = LLMEngine.eagleSpecializationOptions(environment: [
+            "COREAI_EAGLE_COMPUTE": "gpu",
+            "COREAI_COMPUTE": "ane",
+        ])
+        let defaulted = LLMEngine.eagleSpecializationOptions(environment: [:])
+
+        XCTAssertEqual(explicit, expected)
+        XCTAssertEqual(defaulted, expected)
+        XCTAssertEqual(expected.allowedComputeUnitKinds, [.cpu, .gpu, .neuralEngine])
+        XCTAssertEqual(expected.preferredComputeUnitKind, .gpu)
+    }
+
     func testEveryProductionEagleLoaderUsesEaglePreferenceWithoutHardcodedGPU() throws {
         let eagleSource = try source(named: "EagleEngine.swift")
         let nativeRunnerSource = try source(named: "Gemma4MTPNativeRunner.swift")
-        let selection = "preferredComputeUnitKind: LLMEngine.preferredEagleComputeUnit()"
+        let selection = "LLMEngine.eagleSpecializationOptions()"
 
         XCTAssertEqual(
             eagleSource.components(separatedBy: selection).count - 1,
@@ -60,6 +95,8 @@ final class EagleComputePreferenceTests: XCTestCase {
             "the native MTP assistant runner must share the EAGLE preference")
         XCTAssertFalse(eagleSource.contains("preferredComputeUnitKind: .gpu"))
         XCTAssertFalse(nativeRunnerSource.contains("preferredComputeUnitKind: .gpu"))
+        XCTAssertFalse(eagleSource.contains("LLMEngine.preferredEagleComputeUnit()"))
+        XCTAssertFalse(nativeRunnerSource.contains("LLMEngine.preferredEagleComputeUnit()"))
     }
 
     private func source(named filename: String) throws -> String {

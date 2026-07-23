@@ -5,6 +5,18 @@ import CoreAI
 import Foundation
 import Tokenizers
 
+// CoreAI 27 publicly exposes CPU-only specialization and an all-device preferred-device
+// initializer, but not the framework's existing allowed-device-set initializer. Packed Q4
+// EAGLE graphs cannot include GPU in that set because MPS currently aborts while lowering
+// `mps.dequantize`. Keep the ABI bridge isolated here until Apple exposes the initializer.
+extension SpecializationOptions {
+    @_silgen_name("$s15CoreAIDelegates21SpecializationOptionsV23allowedComputeUnitKinds09preferredfG4KindACShyAA0fgJ0OG_AGSgtcfC")
+    init(
+        caixAllowedComputeUnitKinds: Set<ComputeUnitKind>,
+        caixPreferredComputeUnitKind: ComputeUnitKind?
+    )
+}
+
 /// Native Core AI prefill + decode engine for exported dynamic LLM `.aimodel` bundles.
 ///
 /// The runtime contract is the one verified by `python/runner/run_aimodel.py` against the
@@ -155,6 +167,26 @@ final class LLMEngine {
     ) -> ComputeUnitKind {
         computeUnit(named: environment["COREAI_EAGLE_COMPUTE"])
             ?? preferredComputeUnit(environment: environment)
+    }
+
+    /// Specialization policy for EAGLE target and MTP assistant graphs.
+    ///
+    /// ANE preference alone still allows GPU partitioning. Excluding GPU is required for packed
+    /// Q4 graphs on CoreAI 27 because the current MPS compiler aborts on their dequantize op.
+    /// CPU remains available as a safe fallback for operators the Neural Engine cannot lower.
+    static func eagleSpecializationOptions(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> SpecializationOptions {
+        let computeUnit = preferredEagleComputeUnit(environment: environment)
+        if computeUnit == .cpu {
+            return .cpuOnly
+        }
+        if computeUnit == .neuralEngine {
+            return SpecializationOptions(
+                caixAllowedComputeUnitKinds: [.cpu, .neuralEngine],
+                caixPreferredComputeUnitKind: .neuralEngine)
+        }
+        return SpecializationOptions(preferredComputeUnitKind: .gpu)
     }
 
     private static func computeUnit(named rawValue: String?) -> ComputeUnitKind? {
