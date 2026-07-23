@@ -19,11 +19,7 @@
 
       var options = LLMEngine.eagleSpecializationOptions()
       options.expectFrequentReshapes = true
-      let model = try await AIModel.specialize(
-        contentsOf: aimodelURL,
-        options: options,
-        cache: .default,
-        cachePolicy: .persistent)
+      let model = try await AIModel(contentsOf: aimodelURL, options: options)
 
       guard let runtimeDescriptor = model.functionDescriptor(for: "main") else {
         throw Gemma4MTPNativeContract.ContractError.invalid(

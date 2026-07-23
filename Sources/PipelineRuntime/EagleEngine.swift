@@ -184,8 +184,7 @@ final class EagleTargetEngine {
     static func load(aimodelURL: URL, vocabSize: Int, hiddenSize: Int) async throws -> EagleTargetEngine {
         var spec = LLMEngine.eagleSpecializationOptions()
         spec.expectFrequentReshapes = true
-        let model = try await AIModel.specialize(
-            contentsOf: aimodelURL, options: spec, cache: .default, cachePolicy: .persistent)
+        let model = try await AIModel(contentsOf: aimodelURL, options: spec)
         return try EagleTargetEngine(model: model, vocabSize: vocabSize, hiddenSize: hiddenSize)
     }
 
@@ -343,8 +342,7 @@ final class EagleDraftEngine {
     static func load(aimodelURL: URL, vocabSize: Int, hiddenSize: Int) async throws -> EagleDraftEngine {
         var spec = LLMEngine.eagleSpecializationOptions()
         spec.expectFrequentReshapes = true
-        let model = try await AIModel.specialize(
-            contentsOf: aimodelURL, options: spec, cache: .default, cachePolicy: .persistent)
+        let model = try await AIModel(contentsOf: aimodelURL, options: spec)
         return try EagleDraftEngine(model: model, vocabSize: vocabSize, hiddenSize: hiddenSize)
     }
 
@@ -416,8 +414,7 @@ final class EagleDraftUnrolledEngine {
     static func load(aimodelURL: URL, hiddenSize: Int) async throws -> EagleDraftUnrolledEngine {
         var spec = LLMEngine.eagleSpecializationOptions()
         spec.expectFrequentReshapes = true
-        let model = try await AIModel.specialize(
-            contentsOf: aimodelURL, options: spec, cache: .default, cachePolicy: .persistent)
+        let model = try await AIModel(contentsOf: aimodelURL, options: spec)
         return try EagleDraftUnrolledEngine(model: model, hiddenSize: hiddenSize)
     }
 

@@ -84,6 +84,7 @@ final class EagleComputePreferenceTests: XCTestCase {
         let eagleSource = try source(named: "EagleEngine.swift")
         let nativeRunnerSource = try source(named: "Gemma4MTPNativeRunner.swift")
         let selection = "LLMEngine.eagleSpecializationOptions()"
+        let directLoad = "AIModel(contentsOf:"
 
         XCTAssertEqual(
             eagleSource.components(separatedBy: selection).count - 1,
@@ -97,6 +98,16 @@ final class EagleComputePreferenceTests: XCTestCase {
         XCTAssertFalse(nativeRunnerSource.contains("preferredComputeUnitKind: .gpu"))
         XCTAssertFalse(eagleSource.contains("LLMEngine.preferredEagleComputeUnit()"))
         XCTAssertFalse(nativeRunnerSource.contains("LLMEngine.preferredEagleComputeUnit()"))
+        XCTAssertEqual(
+            eagleSource.components(separatedBy: directLoad).count - 1,
+            3,
+            "all EAGLE engines must use the direct CoreAI load path")
+        XCTAssertEqual(
+            nativeRunnerSource.components(separatedBy: directLoad).count - 1,
+            1,
+            "the native MTP runner must use the direct CoreAI load path")
+        XCTAssertFalse(eagleSource.contains("AIModel.specialize("))
+        XCTAssertFalse(nativeRunnerSource.contains("AIModel.specialize("))
     }
 
     private func source(named filename: String) throws -> String {
