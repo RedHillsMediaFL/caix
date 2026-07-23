@@ -1095,7 +1095,7 @@ public actor ModelManager {
                     targetURL: URL(fileURLWithPath: cfg.targetPath),
                     draftURL: URL(fileURLWithPath: cfg.draftPath),
                     tokenizerDir: URL(fileURLWithPath: cfg.tokenizerDir),
-                    draftTokens: 7, vocabSize: cfg.vocab, backbone: cfg.backbone,
+                    draftTokens: 4, vocabSize: cfg.vocab, backbone: cfg.backbone,
                     slidingWindow: cfg.slidingWindow, maxContext: cfg.maxContext, verbose: verbose,
                     unrolledURL: cfg.unrolledPath.map { URL(fileURLWithPath: $0) })
                 return ModelHandle(eagle: engine, name: cfg.name, bytes: cfg.bundleBytes)
@@ -1113,7 +1113,7 @@ public actor ModelManager {
                     targetURL: root.appendingPathComponent("eagle_target.aimodel", isDirectory: true),
                     draftURL: root.appendingPathComponent("eagle_draft.aimodel", isDirectory: true),
                     tokenizerDir: root.appendingPathComponent("tokenizer", isDirectory: true),
-                    draftTokens: 7, vocabSize: 262144, backbone: 2816,
+                    draftTokens: 4, vocabSize: 262144, backbone: 2816,
                     slidingWindow: 1024, maxContext: 4096, verbose: verbose,
                     unrolledURL: Self.eagleUnrolledURL(in: root))
                 return ModelHandle(eagle: engine, name: name, bytes: Self.dirSize(root))

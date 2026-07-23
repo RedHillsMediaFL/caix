@@ -119,8 +119,16 @@ extension OutputFormat {
                     "<|channel>final\n", "<|channel>final", "//final", "<turn|>", "<|turn>",
                     "<pad>", "<bos>", "<eos>", "</s>"
                 ],
-                implicitReasoningStart: detectImplicitReasoningStart(
-                    template: template, opens: ["<|channel>thought", "<|channel>analysis", "//thought", "<|think|>"], closes: ["<channel|>", "//final"]))
+                // The Gemma 4 generation prompt (add_generation_prompt=true, thinking disabled — the
+                // only mode this server renders) emits a *closed* empty thought
+                // `<|channel>thought\n<channel|>`, so the model begins in the FINAL channel, not
+                // inside reasoning. It never begins mid-reasoning here. The raw-template heuristic
+                // over-counts opens because the template's mutually-exclusive if/elif branches each
+                // spell out `<|channel>thought`; counting literals across dead branches wrongly
+                // reported a dangling open and misfiled the entire answer as reasoning (empty text).
+                // Any genuine reasoning is still captured: the model emits an explicit
+                // `<|channel>thought` open in-stream, which `reasoningStarts` handles.
+                implicitReasoningStart: false)
         }
 
         return .passthrough
