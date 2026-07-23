@@ -7,25 +7,6 @@ import XCTest
 import CoreAI
 
 final class EagleComputePreferenceTests: XCTestCase {
-    func testEaglePrefillChunkDefaultsToSix() {
-        XCTAssertEqual(EaglePrefillPolicy.chunkSize(environment: [:]), 6)
-    }
-
-    func testEaglePrefillChunkAcceptsBoundedPositiveOverride() {
-        XCTAssertEqual(
-            EaglePrefillPolicy.chunkSize(environment: ["COREAI_EAGLE_PREFILL_CHUNK": "1"]),
-            1)
-        XCTAssertEqual(
-            EaglePrefillPolicy.chunkSize(environment: ["COREAI_EAGLE_PREFILL_CHUNK": "99"]),
-            6)
-        XCTAssertEqual(
-            EaglePrefillPolicy.chunkSize(environment: ["COREAI_EAGLE_PREFILL_CHUNK": "0"]),
-            6)
-        XCTAssertEqual(
-            EaglePrefillPolicy.chunkSize(environment: ["COREAI_EAGLE_PREFILL_CHUNK": "bogus"]),
-            6)
-    }
-
     func testEagleOverrideWinsOverGeneralComputePreference() {
         XCTAssertEqual(
             LLMEngine.preferredEagleComputeUnit(environment: [

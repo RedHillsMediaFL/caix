@@ -49,6 +49,7 @@ struct Gemma4MTPProposalRequest: Sendable, Equatable {
   var vFull: Gemma4MTPHostTensor
   var kSliding: Gemma4MTPHostTensor
   var vSliding: Gemma4MTPHostTensor
+  var kvLength: Int32
 }
 
 struct Gemma4MTPProposalResult: Sendable, Equatable {
@@ -69,12 +70,13 @@ enum Gemma4MTPNativeContract {
   }
 
   static let vocabularySize = 262_144
-  static let backboneHiddenSize = 5_376
-  static let maxContextLength = 262_144
+  static let backboneHiddenSize = 2_816
+  static let cacheCapacity = 4_096
+  static let maxContextLength = cacheCapacity
   static let slidingWindow = 1_024
-  static let fullKVHeads = 4
+  static let fullKVHeads = 2
   static let fullHeadDimension = 512
-  static let slidingKVHeads = 16
+  static let slidingKVHeads = 8
   static let slidingHeadDimension = 256
 
   private static let expectedInputs: [String: Gemma4MTPTensorDescriptor] = [
@@ -83,16 +85,17 @@ enum Gemma4MTPNativeContract {
     "position_ids": .init(scalarType: .int32, shape: [1, 1]),
     "k_full": .init(
       scalarType: .float16,
-      shape: [1, fullKVHeads, -1, fullHeadDimension]),
+      shape: [1, fullKVHeads, cacheCapacity, fullHeadDimension]),
     "v_full": .init(
       scalarType: .float16,
-      shape: [1, fullKVHeads, -1, fullHeadDimension]),
+      shape: [1, fullKVHeads, cacheCapacity, fullHeadDimension]),
     "k_sliding": .init(
       scalarType: .float16,
-      shape: [1, slidingKVHeads, -1, slidingHeadDimension]),
+      shape: [1, slidingKVHeads, slidingWindow, slidingHeadDimension]),
     "v_sliding": .init(
       scalarType: .float16,
-      shape: [1, slidingKVHeads, -1, slidingHeadDimension]),
+      shape: [1, slidingKVHeads, slidingWindow, slidingHeadDimension]),
+    "kv_length": .init(scalarType: .int32, shape: [1]),
   ]
 
   private static let expectedOutputs: [String: Gemma4MTPTensorDescriptor] = [
@@ -100,6 +103,12 @@ enum Gemma4MTPNativeContract {
     "next_hidden": .init(
       scalarType: .float16,
       shape: [1, 1, backboneHiddenSize]),
+  ]
+
+  private static let expectedUnrolledOutputs: [String: Gemma4MTPTensorDescriptor] = [
+    "draft_tokens": .init(
+      scalarType: .int32,
+      shape: [1, Gemma4EagleExecutionPolicy.draftTokens])
   ]
 
   static func validateModel(
@@ -141,61 +150,107 @@ enum Gemma4MTPNativeContract {
     try validateDescriptors(function.outputs, expected: expectedOutputs, category: "output")
   }
 
+  static func validateUnrolled(_ function: Gemma4MTPFunctionDescriptor) throws {
+    guard Set(function.inputs.keys) == Set(expectedInputs.keys) else {
+      throw ContractError.invalid(
+        "unrolled inputs must be exactly \(expectedInputs.keys.sorted()); "
+          + "got \(function.inputs.keys.sorted())")
+    }
+    guard Set(function.outputs.keys) == Set(expectedUnrolledOutputs.keys) else {
+      throw ContractError.invalid(
+        "unrolled outputs must be exactly \(expectedUnrolledOutputs.keys.sorted()); "
+          + "got \(function.outputs.keys.sorted())")
+    }
+    guard function.states.isEmpty else {
+      throw ContractError.invalid(
+        "unrolled states must be empty; got \(function.states.keys.sorted())")
+    }
+    try validateDescriptors(
+      function.inputs,
+      expected: expectedInputs,
+      category: "unrolled input")
+    try validateDescriptors(
+      function.outputs,
+      expected: expectedUnrolledOutputs,
+      category: "unrolled output")
+  }
+
   static func validate(_ request: Gemma4MTPProposalRequest) throws {
     guard request.tokenID >= 0, Int(request.tokenID) < vocabularySize else {
       throw ContractError.invalid(
         "token_id must be in 0..<\(vocabularySize); got \(request.tokenID)")
     }
-    guard request.positionID >= 0, Int(request.positionID) < maxContextLength else {
-      throw ContractError.invalid(
-        "position_ids must be in 0..<\(maxContextLength); got \(request.positionID)")
-    }
+    try validateRuntimeInvocation(
+      positionID: request.positionID,
+      kvLength: request.kvLength,
+      hiddenShape: request.hidden.shape,
+      kFullShape: request.kFull.shape,
+      vFullShape: request.vFull.shape,
+      kSlidingShape: request.kSliding.shape,
+      vSlidingShape: request.vSliding.shape)
 
     try validateHostTensor(
       request.hidden,
       name: "hidden",
       expectedType: .float16,
       expectedShape: [1, 1, backboneHiddenSize])
-    let fullKeyLength = try validateKV(
+    try validateHostTensor(
       request.kFull,
       name: "k_full",
-      heads: fullKVHeads,
-      headDimension: fullHeadDimension,
-      maximumLength: maxContextLength)
-    let fullValueLength = try validateKV(
+      expectedType: .float16,
+      expectedShape: [1, fullKVHeads, cacheCapacity, fullHeadDimension])
+    try validateHostTensor(
       request.vFull,
       name: "v_full",
-      heads: fullKVHeads,
-      headDimension: fullHeadDimension,
-      maximumLength: maxContextLength)
-    guard fullKeyLength == fullValueLength else {
-      throw ContractError.invalid(
-        "full key/value sequence lengths must match; got "
-          + "\(fullKeyLength) and \(fullValueLength)")
-    }
-
-    let slidingKeyLength = try validateKV(
+      expectedType: .float16,
+      expectedShape: [1, fullKVHeads, cacheCapacity, fullHeadDimension])
+    try validateHostTensor(
       request.kSliding,
       name: "k_sliding",
-      heads: slidingKVHeads,
-      headDimension: slidingHeadDimension,
-      maximumLength: slidingWindow)
-    let slidingValueLength = try validateKV(
+      expectedType: .float16,
+      expectedShape: [1, slidingKVHeads, slidingWindow, slidingHeadDimension])
+    try validateHostTensor(
       request.vSliding,
       name: "v_sliding",
-      heads: slidingKVHeads,
-      headDimension: slidingHeadDimension,
-      maximumLength: slidingWindow)
-    guard slidingKeyLength == slidingValueLength else {
+      expectedType: .float16,
+      expectedShape: [1, slidingKVHeads, slidingWindow, slidingHeadDimension])
+  }
+
+  static func validateRuntimeInvocation(
+    positionID: Int32,
+    kvLength: Int32,
+    hiddenShape: [Int],
+    kFullShape: [Int],
+    vFullShape: [Int],
+    kSlidingShape: [Int],
+    vSlidingShape: [Int]
+  ) throws {
+    guard positionID >= 0, Int(positionID) < maxContextLength else {
       throw ContractError.invalid(
-        "sliding key/value sequence lengths must match; got "
-          + "\(slidingKeyLength) and \(slidingValueLength)")
+        "position_ids must be in 0..<\(maxContextLength); got \(positionID)")
     }
-    let expectedSlidingLength = min(fullKeyLength, slidingWindow)
-    guard slidingKeyLength == expectedSlidingLength else {
+    guard kvLength > 0, Int(kvLength) < cacheCapacity else {
       throw ContractError.invalid(
-        "sliding sequence length must equal min(full length, \(slidingWindow)); "
-          + "expected \(expectedSlidingLength), got \(slidingKeyLength)")
+        "kv_length must be in 1..<\(cacheCapacity); got \(kvLength)")
+    }
+    guard positionID == kvLength else {
+      throw ContractError.invalid(
+        "position_ids must equal kv_length for the next absolute token; "
+          + "got \(positionID) and \(kvLength)")
+    }
+
+    let expectedShapes: [(String, [Int], [Int])] = [
+      ("hidden", hiddenShape, [1, 1, backboneHiddenSize]),
+      ("k_full", kFullShape, [1, fullKVHeads, cacheCapacity, fullHeadDimension]),
+      ("v_full", vFullShape, [1, fullKVHeads, cacheCapacity, fullHeadDimension]),
+      ("k_sliding", kSlidingShape, [1, slidingKVHeads, slidingWindow, slidingHeadDimension]),
+      ("v_sliding", vSlidingShape, [1, slidingKVHeads, slidingWindow, slidingHeadDimension]),
+    ]
+    for (name, actual, expected) in expectedShapes {
+      guard actual == expected else {
+        throw ContractError.invalid(
+          "\(name) must have static runtime shape \(expected); got \(actual)")
+      }
     }
   }
 
@@ -224,29 +279,6 @@ enum Gemma4MTPNativeContract {
             + "got \(String(describing: actual[name]))")
       }
     }
-  }
-
-  private static func validateKV(
-    _ tensor: Gemma4MTPHostTensor,
-    name: String,
-    heads: Int,
-    headDimension: Int,
-    maximumLength: Int
-  ) throws -> Int {
-    guard tensor.scalarType == .float16,
-      tensor.shape.count == 4,
-      tensor.shape[0] == 1,
-      tensor.shape[1] == heads,
-      tensor.shape[2] > 0,
-      tensor.shape[2] <= maximumLength,
-      tensor.shape[3] == headDimension
-    else {
-      throw ContractError.invalid(
-        "\(name) must be FP16 [1, \(heads), 1...\(maximumLength), "
-          + "\(headDimension)]; got \(tensor.scalarType.rawValue) \(tensor.shape)")
-    }
-    try validateStorage(tensor, name: name)
-    return tensor.shape[2]
   }
 
   private static func validateHostTensor(

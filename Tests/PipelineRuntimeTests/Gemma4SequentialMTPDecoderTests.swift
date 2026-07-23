@@ -39,12 +39,18 @@ final class Gemma4SequentialMTPDecoderTests: XCTestCase {
         XCTAssertEqual(targetForwardedTokens, [10, 11, 12, 13])
         XCTAssertFalse(targetForwardedTokens.contains(99))
         XCTAssertEqual(proposalRequests.map(\.positionID), [3, 3, 5, 5])
+        XCTAssertEqual(proposalRequests.map(\.kvLength), [3, 3, 5, 5])
         XCTAssertEqual(proposalRequests.map(\.tokenID), [10, 11, 12, 13])
         XCTAssertEqual(
             proposalRequests.map { Self.bitPatterns($0.hidden) },
             [[3], [Float16(7).bitPattern], [5], [Float16(7).bitPattern]])
         XCTAssertEqual(proposalRequests.map(\.kFull.shape), [
-            [1, 1, 3, 1], [1, 1, 3, 1], [1, 1, 5, 1], [1, 1, 5, 1],
+            [1, 1, 4_096, 1], [1, 1, 4_096, 1],
+            [1, 1, 4_096, 1], [1, 1, 4_096, 1],
+        ])
+        XCTAssertEqual(proposalRequests.map(\.kSliding.shape), [
+            [1, 1, 1_024, 1], [1, 1, 1_024, 1],
+            [1, 1, 1_024, 1], [1, 1, 1_024, 1],
         ])
         XCTAssertEqual(outcome.telemetry.draftedTokens, 4)
         XCTAssertEqual(outcome.telemetry.acceptedDraftTokens, 3)
@@ -155,13 +161,15 @@ final class Gemma4SequentialMTPDecoderTests: XCTestCase {
 
         let request = try XCTUnwrap(captured)
         XCTAssertEqual(Self.bitPatterns(request.hidden), [0x8000])
-        XCTAssertEqual(Self.bitPatterns(request.kFull), exactBits)
-        XCTAssertEqual(Self.bitPatterns(request.vFull), exactBits)
-        XCTAssertEqual(Self.bitPatterns(request.kSliding), exactBits)
-        XCTAssertEqual(Self.bitPatterns(request.vSliding), exactBits)
+        Self.assertLeftAligned(request.kFull, prefix: exactBits, capacity: 4_096)
+        Self.assertLeftAligned(request.vFull, prefix: exactBits, capacity: 4_096)
+        Self.assertLeftAligned(request.kSliding, prefix: exactBits, capacity: 1_024)
+        Self.assertLeftAligned(request.vSliding, prefix: exactBits, capacity: 1_024)
+        XCTAssertEqual(request.kvLength, 4)
     }
 
     func testRejectsDraftWidthOutsideBoundedRuntimeRangeWithoutExecutingInference() {
+        XCTAssertEqual(Gemma4MTPDecodeConfiguration.maximumDraftTokens, 4)
         XCTAssertThrowsError(try Gemma4SequentialMTPDecoder(
             draftTokens: 0,
             propose: { _ in
@@ -183,6 +191,31 @@ final class Gemma4SequentialMTPDecoderTests: XCTestCase {
                 XCTFail("target inference must not execute")
                 throw TestError.unexpectedExecution
             }))
+    }
+
+    func testRejectsTargetSnapshotBeyondFixedNativeCapacityBeforeInference() async throws {
+        let oversized = try Self.artifacts(length: 4_097, slidingLength: 1_024)
+        let decoder = try Gemma4SequentialMTPDecoder(
+            draftTokens: 1,
+            propose: { _ in
+                XCTFail("proposal inference must not execute")
+                throw TestError.unexpectedExecution
+            },
+            targetDecode: { _, _ in
+                XCTFail("target inference must not execute")
+                throw TestError.unexpectedExecution
+            })
+
+        do {
+            _ = try await decoder.run(
+                anchorToken: 7,
+                targetArtifacts: oversized,
+                maximumAdditionalTokens: 1,
+                commit: { _ in true })
+            XCTFail("oversized native target snapshot unexpectedly decoded")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("4096"))
+        }
     }
 
     func testRejectsTargetSnapshotWithWrongSlidingWindowCoverageBeforeInference() async throws {
@@ -220,6 +253,22 @@ final class Gemma4SequentialMTPDecoderTests: XCTestCase {
             return []
         }
         return values.map(\.bitPattern)
+    }
+
+    private static func assertLeftAligned(
+        _ tensor: Gemma4MTPHostTensor,
+        prefix: [UInt16],
+        capacity: Int,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let values = bitPatterns(tensor)
+        XCTAssertEqual(values.count, capacity, file: file, line: line)
+        XCTAssertEqual(Array(values.prefix(prefix.count)), prefix, file: file, line: line)
+        XCTAssertTrue(
+            values.dropFirst(prefix.count).allSatisfy { $0 == 0 },
+            file: file,
+            line: line)
     }
 
     private static func artifacts(

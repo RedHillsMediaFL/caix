@@ -90,6 +90,9 @@
       let vFull = try makeArray(request.vFull, named: "v_full")
       let kSliding = try makeArray(request.kSliding, named: "k_sliding")
       let vSliding = try makeArray(request.vSliding, named: "v_sliding")
+      let kvLength = try makeArray(
+        .int32(shape: [1], values: [request.kvLength]),
+        named: "kv_length")
 
       var logits = try outputArray(
         named: "logits",
@@ -110,6 +113,7 @@
           "v_full": vFull,
           "k_sliding": kSliding,
           "v_sliding": vSliding,
+          "kv_length": kvLength,
         ],
         states: consume noStates,
         outputViews: consume outputViews)
@@ -170,7 +174,7 @@
       return .float16(shape: [1, 1, width], values: values)
     }
 
-    private static func project(
+    static func project(
       _ descriptor: InferenceFunctionDescriptor
     ) throws -> Gemma4MTPFunctionDescriptor {
       func tensor(

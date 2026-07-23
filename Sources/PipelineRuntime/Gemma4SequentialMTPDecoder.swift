@@ -2,7 +2,7 @@ import Foundation
 
 public enum Gemma4MTPDecodeConfiguration {
     public static let defaultDraftTokens = 4
-    public static let maximumDraftTokens = 8
+    public static let maximumDraftTokens = 4
 }
 
 /// Raw counters for staged Gemma 4 MTP decoding.
@@ -119,7 +119,8 @@ struct Gemma4SequentialMTPDecoder {
                     kFull: fixedKV.kFull,
                     vFull: fixedKV.vFull,
                     kSliding: fixedKV.kSliding,
-                    vSliding: fixedKV.vSliding))
+                    vSliding: fixedKV.vSliding,
+                    kvLength: positionID))
                 proposals.append(result.proposedToken)
                 draftInputToken = result.proposedToken
                 draftHidden = result.nextHidden
@@ -184,6 +185,10 @@ struct Gemma4SequentialMTPDecoder {
                 "Gemma 4 MTP full target KV must begin at position 0")
         }
         let fullEnd = artifacts.fullPositionRange.upperBound
+        guard fullEnd <= Gemma4MTPNativeContract.cacheCapacity else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "Gemma 4 MTP full target KV exceeds fixed 4096-token assistant capacity")
+        }
         let expectedSlidingCount = min(
             fullEnd,
             Gemma4MTPNativeContract.slidingWindow)
@@ -226,10 +231,50 @@ struct Gemma4SequentialMTPDecoder {
         vSliding: Gemma4MTPHostTensor
     ) {
         (
-            kFull: hostTensor(from: artifacts.fullKey),
-            vFull: hostTensor(from: artifacts.fullValue),
-            kSliding: hostTensor(from: artifacts.slidingKey),
-            vSliding: hostTensor(from: artifacts.slidingValue))
+            kFull: stagedHostTensor(
+                from: artifacts.fullKey,
+                capacity: Gemma4MTPNativeContract.cacheCapacity),
+            vFull: stagedHostTensor(
+                from: artifacts.fullValue,
+                capacity: Gemma4MTPNativeContract.cacheCapacity),
+            kSliding: stagedHostTensor(
+                from: artifacts.slidingKey,
+                capacity: Gemma4MTPNativeContract.slidingWindow),
+            vSliding: stagedHostTensor(
+                from: artifacts.slidingValue,
+                capacity: Gemma4MTPNativeContract.slidingWindow))
+    }
+
+    /// Pads committed target KV into the assistant's fixed, left-aligned staging ABI.
+    private static func stagedHostTensor(
+        from tensor: DistributedEagleTargetTensor,
+        capacity: Int
+    ) -> Gemma4MTPHostTensor {
+        let shape = tensor.shape
+        guard shape.count == 4 else {
+            return hostTensor(from: tensor)
+        }
+        let heads = shape[1]
+        let sourceLength = shape[2]
+        let headDimension = shape[3]
+        let stagedShape = [1, heads, capacity, headDimension]
+        var staged = [Float16](
+            repeating: 0,
+            count: heads * capacity * headDimension)
+        let source = tensor.float16BitPatterns
+        for head in 0..<heads {
+            let sourceHeadBase = head * sourceLength * headDimension
+            let stagedHeadBase = head * capacity * headDimension
+            for position in 0..<min(sourceLength, capacity) {
+                let sourceBase = sourceHeadBase + position * headDimension
+                let stagedBase = stagedHeadBase + position * headDimension
+                for dimension in 0..<headDimension {
+                    staged[stagedBase + dimension] = Float16(
+                        bitPattern: source[sourceBase + dimension])
+                }
+            }
+        }
+        return .float16(shape: stagedShape, values: staged)
     }
 
     private static func telemetry(
