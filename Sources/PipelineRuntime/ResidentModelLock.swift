@@ -1,11 +1,11 @@
 import Foundation
 
-/// Immutable source identities and conversion-critical contracts for the two resident models.
+/// Immutable source identities and conversion-critical contracts for approved resident deployments.
 ///
 /// This lock describes Hugging Face source artifacts, not downloaded or converted output. In
 /// particular, the Gemma target QAT checkpoint contains BF16 source weights whose conversion
-/// target is Q4_0, while the resident MTP assistant uses the same BF16 QAT source provenance
-/// and is converted to FP16 at runtime.
+/// target is Q4_0. The matched MTP assistant uses the same BF16 QAT source family and the exact
+/// runtime precision selected by its deployment contract.
 public struct ResidentModelLock: Codable, Sendable, Equatable {
     public struct WeightArtifact: Codable, Sendable, Equatable {
         public let path: String
@@ -269,40 +269,37 @@ public struct ResidentModelLock: Codable, Sendable, Equatable {
         guard schema == Approved.schema else {
             throw ResidentModelLockError.unsupportedSchema(schema)
         }
-        try Self.require(deployment == Approved.deployment, "deployment")
 
-        try Self.require(llm.publicModelID == Approved.llmPublicID, "llm.public_model_id")
+        let approvedLLM: Approved.LLMContract
+        switch deployment {
+        case Approved.gemma31B.deployment:
+            approvedLLM = Approved.gemma31B
+        case Approved.gemma26BA4B.deployment:
+            approvedLLM = Approved.gemma26BA4B
+        default:
+            throw ResidentModelLockError.contractViolation("deployment")
+        }
+
+        try Self.require(llm.publicModelID == approvedLLM.publicModelID, "llm.public_model_id")
         try Self.validateGemmaSource(
             llm.target,
-            approvedRepository: Approved.targetRepository,
-            approvedRevision: Approved.targetRevision,
-            approvedWeights: Approved.targetWeights,
-            approvedMetadata: Approved.targetMetadata,
-            sourcePrecision: "bf16",
-            qatRecipe: "q4_0",
-            runtimePrecision: "q4_0",
+            approved: approvedLLM.target,
             field: "llm.target")
         try Self.validateGemmaSource(
             llm.assistant,
-            approvedRepository: Approved.assistantRepository,
-            approvedRevision: Approved.assistantRevision,
-            approvedWeights: Approved.assistantWeights,
-            approvedMetadata: Approved.assistantMetadata,
-            sourcePrecision: "bf16",
-            qatRecipe: "q4_0",
-            runtimePrecision: "fp16",
+            approved: approvedLLM.assistant,
             field: "llm.assistant")
         try Self.require(
             Self.isLowercaseHex(llm.chatTemplateSHA256, count: 64)
-                && llm.chatTemplateSHA256 == Approved.chatTemplateSHA256,
+                && llm.chatTemplateSHA256 == approvedLLM.chatTemplateSHA256,
             "llm.chat_template_sha256")
-        try Self.require(llm.geometry == Approved.gemmaGeometry, "llm.geometry")
+        try Self.require(llm.geometry == approvedLLM.geometry, "llm.geometry")
         try Self.require(
-            llm.assistantGeometry == Approved.assistantGeometry,
+            llm.assistantGeometry == approvedLLM.assistantGeometry,
             "llm.assistant_geometry")
-        try Self.require(llm.sampling == Approved.sampling, "llm.sampling")
+        try Self.require(llm.sampling == approvedLLM.sampling, "llm.sampling")
         try Self.require(
-            llm.contextCandidates == Approved.contextCandidates,
+            llm.contextCandidates == approvedLLM.contextCandidates,
             "llm.context_candidates")
 
         try Self.require(
@@ -327,24 +324,22 @@ public struct ResidentModelLock: Codable, Sendable, Equatable {
 
     private static func validateGemmaSource(
         _ source: GemmaSource,
-        approvedRepository: String,
-        approvedRevision: String,
-        approvedWeights: [WeightArtifact],
-        approvedMetadata: GemmaMetadata,
-        sourcePrecision: String,
-        qatRecipe: String,
-        runtimePrecision: String,
+        approved: GemmaSource,
         field: String
     ) throws {
-        try require(source.repository == approvedRepository, "\(field).repository")
+        try require(source.repository == approved.repository, "\(field).repository")
         try require(
-            isLowercaseHex(source.revision, count: 40) && source.revision == approvedRevision,
+            isLowercaseHex(source.revision, count: 40) && source.revision == approved.revision,
             "\(field).revision")
-        try require(source.sourcePrecision == sourcePrecision, "\(field).source_precision")
-        try require(source.qatRecipe == qatRecipe, "\(field).qat_recipe")
-        try require(source.runtimePrecision == runtimePrecision, "\(field).runtime_precision")
-        try validateWeights(source.weights, approved: approvedWeights, field: "\(field).weights")
-        try validateGemmaMetadata(source.metadata, approved: approvedMetadata, field: field)
+        try require(
+            source.sourcePrecision == approved.sourcePrecision,
+            "\(field).source_precision")
+        try require(source.qatRecipe == approved.qatRecipe, "\(field).qat_recipe")
+        try require(
+            source.runtimePrecision == approved.runtimePrecision,
+            "\(field).runtime_precision")
+        try validateWeights(source.weights, approved: approved.weights, field: "\(field).weights")
+        try validateGemmaMetadata(source.metadata, approved: approved.metadata, field: field)
     }
 
     private static func validateWeights(
@@ -472,6 +467,18 @@ extension ResidentModelLockError: LocalizedError {
 
 private extension ResidentModelLock {
     enum Approved {
+        struct LLMContract {
+            let deployment: String
+            let publicModelID: String
+            let target: GemmaSource
+            let assistant: GemmaSource
+            let chatTemplateSHA256: String
+            let geometry: GemmaGeometry
+            let assistantGeometry: AssistantGeometry
+            let sampling: SamplingDefaults
+            let contextCandidates: [Int]
+        }
+
         static let schema = "caix.resident-model-lock.v1"
         static let deployment = "gemma4-31b-whisper-large-v2"
         static let llmPublicID = "google/gemma-4-31B-it"
@@ -554,6 +561,115 @@ private extension ResidentModelLock {
             eosTokenIDs: [1, 106, 50],
             padTokenID: 0)
         static let contextCandidates = [262_144, 131_072, 65_536, 32_768, 16_384]
+
+        static let gemma31B = LLMContract(
+            deployment: deployment,
+            publicModelID: llmPublicID,
+            target: GemmaSource(
+                repository: targetRepository,
+                revision: targetRevision,
+                sourcePrecision: "bf16",
+                qatRecipe: "q4_0",
+                runtimePrecision: "q4_0",
+                weights: targetWeights,
+                metadata: targetMetadata),
+            assistant: GemmaSource(
+                repository: assistantRepository,
+                revision: assistantRevision,
+                sourcePrecision: "bf16",
+                qatRecipe: "q4_0",
+                runtimePrecision: "fp16",
+                weights: assistantWeights,
+                metadata: assistantMetadata),
+            chatTemplateSHA256: chatTemplateSHA256,
+            geometry: gemmaGeometry,
+            assistantGeometry: assistantGeometry,
+            sampling: sampling,
+            contextCandidates: contextCandidates)
+
+        static let gemma26BA4B = LLMContract(
+            deployment: "gemma4-26b-a4b-whisper-large-v2",
+            publicModelID: "google/gemma-4-26B-A4B-it",
+            target: GemmaSource(
+                repository: "google/gemma-4-26B-A4B-it-qat-q4_0-unquantized",
+                revision: "f1e06dc520982d9b9edd76859fdb7ab209449949",
+                sourcePrecision: "bf16",
+                qatRecipe: "q4_0",
+                runtimePrecision: "q4_0",
+                weights: [
+                    WeightArtifact(
+                        path: "model-00001-of-00002.safetensors",
+                        sizeBytes: 49_907_246_508,
+                        sha256: "d57e8bde0feda8b0ebf51a81d04b5d988f82fead7f9242d9231625929421453e"),
+                    WeightArtifact(
+                        path: "model-00002-of-00002.safetensors",
+                        sizeBytes: 1_704_763_408,
+                        sha256: "e5e6e258f562a77be81b0f5136eb2ca71e0d973cf30c4291e4d2c7b1fd712f99"),
+                ],
+                metadata: GemmaMetadata(
+                    configSHA256:
+                        "ece3392c07744553f4e8bb2b5905bc68b0a7d7ab2927133bb621875b8e4a3289",
+                    generationConfigSHA256:
+                        "b69207f9be617e982d13cc273cce6fd88c98dda99a4bdc5e2d52ffe0a0d9f0a9",
+                    chatTemplateSHA256: chatTemplateSHA256,
+                    tokenizerJSONSHA256:
+                        "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f",
+                    tokenizerConfigSHA256:
+                        "3ab5c7b94dc97d65ca7064496fa69b88ff875378e1cb7ee3e43070c3a8170999",
+                    weightsIndexSHA256:
+                        "907826a6e46ff454272bd6db1fee629d5531a2303be22986d825a0871d7dc7a7")),
+            assistant: GemmaSource(
+                repository:
+                    "google/gemma-4-26B-A4B-it-qat-q4_0-unquantized-assistant",
+                revision: "9537141506fe8875b3ed45b264af13580cb29166",
+                sourcePrecision: "bf16",
+                qatRecipe: "q4_0",
+                runtimePrecision: "q4_0",
+                weights: [
+                    WeightArtifact(
+                        path: "model.safetensors",
+                        sizeBytes: 839_427_840,
+                        sha256: "c082cc581c3ec90d70285c1a41c81544ff56cbc96650f16c900a280940655801")
+                ],
+                metadata: GemmaMetadata(
+                    configSHA256:
+                        "23d2bc4a8920f24c23653ff6871437bbd95e52527bf50007aaad05b0b6cab510",
+                    generationConfigSHA256:
+                        "fb53f4c64e58896a63472e8eb304397db4a39453e1da0f5d57625ec5a8c1050e",
+                    chatTemplateSHA256: chatTemplateSHA256,
+                    tokenizerJSONSHA256:
+                        "75a6583c1a418e2bbd79c60d95d28e0f5bf549ad3f2990b5bdb5238c6c2bf70c",
+                    tokenizerConfigSHA256:
+                        "01f2ff1c21ef2e722891380323edcaecd9c86a776aeb9b40148e2f35e3cee4d3",
+                    weightsIndexSHA256: nil)),
+            chatTemplateSHA256: chatTemplateSHA256,
+            geometry: GemmaGeometry(
+                vocabularySize: 262_144,
+                hiddenSize: 2_816,
+                layers: 30,
+                maxContextLength: 262_144,
+                slidingWindow: 1_024,
+                attentionHeads: 16,
+                slidingKVHeads: 8,
+                globalKVHeads: 2,
+                headDimension: 256,
+                globalHeadDimension: 512,
+                slidingLayers: 25,
+                fullLayers: 5),
+            assistantGeometry: AssistantGeometry(
+                vocabularySize: 262_144,
+                maxContextLength: 262_144,
+                backboneHiddenSize: 2_816,
+                hiddenSize: 1_024,
+                layers: 4,
+                slidingLayers: 3,
+                fullLayers: 1,
+                attentionHeads: 16,
+                kvHeads: 8,
+                globalKVHeads: 2,
+                sharedKVLayers: 4),
+            sampling: sampling,
+            contextCandidates: contextCandidates)
 
         static let whisperRepository = "openai/whisper-large-v2"
         static let whisperRevision = "ae4642769ce2ad8fc292556ccea8e901f1530655"

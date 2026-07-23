@@ -1,0 +1,132 @@
+{
+  "schema": "caix.resident-model-lock.v1",
+  "deployment": "gemma4-26b-a4b-whisper-large-v2",
+  "llm": {
+    "public_model_id": "google/gemma-4-26B-A4B-it",
+    "target": {
+      "repository": "google/gemma-4-26B-A4B-it-qat-q4_0-unquantized",
+      "revision": "f1e06dc520982d9b9edd76859fdb7ab209449949",
+      "source_precision": "bf16",
+      "qat_recipe": "q4_0",
+      "runtime_precision": "q4_0",
+      "weights": [
+        {
+          "path": "model-00001-of-00002.safetensors",
+          "size_bytes": 49907246508,
+          "sha256": "d57e8bde0feda8b0ebf51a81d04b5d988f82fead7f9242d9231625929421453e"
+        },
+        {
+          "path": "model-00002-of-00002.safetensors",
+          "size_bytes": 1704763408,
+          "sha256": "e5e6e258f562a77be81b0f5136eb2ca71e0d973cf30c4291e4d2c7b1fd712f99"
+        }
+      ],
+      "metadata": {
+        "config_sha256": "ece3392c07744553f4e8bb2b5905bc68b0a7d7ab2927133bb621875b8e4a3289",
+        "generation_config_sha256": "b69207f9be617e982d13cc273cce6fd88c98dda99a4bdc5e2d52ffe0a0d9f0a9",
+        "chat_template_sha256": "ae53464bf3be25802b3a5b37def7fd89667067d7577049b3b2d74c4d8de4c6d4",
+        "tokenizer_json_sha256": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f",
+        "tokenizer_config_sha256": "3ab5c7b94dc97d65ca7064496fa69b88ff875378e1cb7ee3e43070c3a8170999",
+        "weights_index_sha256": "907826a6e46ff454272bd6db1fee629d5531a2303be22986d825a0871d7dc7a7"
+      }
+    },
+    "assistant": {
+      "repository": "google/gemma-4-26B-A4B-it-qat-q4_0-unquantized-assistant",
+      "revision": "9537141506fe8875b3ed45b264af13580cb29166",
+      "source_precision": "bf16",
+      "qat_recipe": "q4_0",
+      "runtime_precision": "q4_0",
+      "weights": [
+        {
+          "path": "model.safetensors",
+          "size_bytes": 839427840,
+          "sha256": "c082cc581c3ec90d70285c1a41c81544ff56cbc96650f16c900a280940655801"
+        }
+      ],
+      "metadata": {
+        "config_sha256": "23d2bc4a8920f24c23653ff6871437bbd95e52527bf50007aaad05b0b6cab510",
+        "generation_config_sha256": "fb53f4c64e58896a63472e8eb304397db4a39453e1da0f5d57625ec5a8c1050e",
+        "chat_template_sha256": "ae53464bf3be25802b3a5b37def7fd89667067d7577049b3b2d74c4d8de4c6d4",
+        "tokenizer_json_sha256": "75a6583c1a418e2bbd79c60d95d28e0f5bf549ad3f2990b5bdb5238c6c2bf70c",
+        "tokenizer_config_sha256": "01f2ff1c21ef2e722891380323edcaecd9c86a776aeb9b40148e2f35e3cee4d3"
+      }
+    },
+    "chat_template_sha256": "ae53464bf3be25802b3a5b37def7fd89667067d7577049b3b2d74c4d8de4c6d4",
+    "geometry": {
+      "vocabulary_size": 262144,
+      "hidden_size": 2816,
+      "layers": 30,
+      "max_context_length": 262144,
+      "sliding_window": 1024,
+      "attention_heads": 16,
+      "sliding_kv_heads": 8,
+      "global_kv_heads": 2,
+      "head_dimension": 256,
+      "global_head_dimension": 512,
+      "sliding_layers": 25,
+      "full_layers": 5
+    },
+    "assistant_geometry": {
+      "vocabulary_size": 262144,
+      "max_context_length": 262144,
+      "backbone_hidden_size": 2816,
+      "hidden_size": 1024,
+      "layers": 4,
+      "sliding_layers": 3,
+      "full_layers": 1,
+      "attention_heads": 16,
+      "kv_heads": 8,
+      "global_kv_heads": 2,
+      "shared_kv_layers": 4
+    },
+    "sampling": {
+      "temperature": 1.0,
+      "top_k": 64,
+      "top_p": 0.95,
+      "eos_token_ids": [1, 106, 50],
+      "pad_token_id": 0
+    },
+    "context_candidates": [262144, 131072, 65536, 32768, 16384]
+  },
+  "speech": {
+    "public_model_id": "openai/whisper-large-v2",
+    "repository": "openai/whisper-large-v2",
+    "revision": "ae4642769ce2ad8fc292556ccea8e901f1530655",
+    "source_precision": "fp32",
+    "runtime_precision": "fp16",
+    "weights": [
+      {
+        "path": "model.safetensors",
+        "size_bytes": 6173370152,
+        "sha256": "57a1ba2a82c093cabff2541409ae778c97145378b9ddfa722763cb1cb8f9020b"
+      }
+    ],
+    "metadata": {
+      "config_sha256": "5f1573015838f8d679678b09354b537061561c55fd22eecd129ef4cf8588a470",
+      "generation_config_sha256": "031721643aab5be7250eb668c6b9b5c67d2549420522ac1291bfd346bfff6297",
+      "preprocessor_config_sha256": "9b5cd03a36fbb8a627c64d98a5b5b126ead95a77720723944487311f0110b666",
+      "tokenizer_json_sha256": "27fc476bfe7f17299480be2273fc0608e4d5a99aba2ab5dec5374b4482d1a566",
+      "tokenizer_config_sha256": "2a4c4281cf9f51ac6ccc406fdc711a087afe6530f671fa7b80953edc498275ce",
+      "added_tokens_sha256": "9715fd2243b6f06a5858b5e32950d2853f73dd5bc201aafcf76f5082a2d8acd1",
+      "merges_sha256": "2df2990a395e35e8dfbc7511e08c12d56018d8d04691e0133e5d63b21e154dc6",
+      "vocab_sha256": "8f680bba319e01a653d2e8a5dbc17a9157179e0576e6ce74ce0c06356c6e24f9",
+      "normalizer_sha256": "bf1c507dc8724ca9cf9903640dacfb69dae2f00edee4f21ceba106a7392f26dd"
+    },
+    "geometry": {
+      "sample_rate_hz": 16000,
+      "mel_bins": 80,
+      "window_seconds": 30,
+      "window_samples": 480000,
+      "fft_size": 400,
+      "hop_length": 160,
+      "max_source_positions": 1500,
+      "max_decoder_positions": 448,
+      "vocabulary_size": 51865,
+      "model_dimension": 1280,
+      "encoder_layers": 32,
+      "decoder_layers": 32,
+      "encoder_attention_heads": 20,
+      "decoder_attention_heads": 20
+    }
+  }
+}

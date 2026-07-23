@@ -23,6 +23,12 @@ final class ResidentModelLockTests: XCTestCase {
             .appendingPathComponent(ResidentModelLock.filename)
     }
 
+    private var gemma26A4BLockURL: URL {
+        repositoryRoot
+            .appendingPathComponent("models", isDirectory: true)
+            .appendingPathComponent("gemma4-26b-a4b-whisper-lock.json")
+    }
+
     func testCanonicalLockPinsApprovedResidentSourcesAndPrecisionSemantics() throws {
         let lock = try ResidentModelLock.load(from: canonicalLockURL)
 
@@ -86,6 +92,90 @@ final class ResidentModelLockTests: XCTestCase {
         XCTAssertEqual(lock.speech.geometry.sampleRateHz, 16_000)
         XCTAssertEqual(lock.speech.geometry.melBins, 80)
         XCTAssertEqual(lock.speech.geometry.windowSamples, 480_000)
+    }
+
+    func testGemma26A4BLockPinsMatchedQATQ4SourcesAndCurrentChatTemplate() throws {
+        let lock = try ResidentModelLock.load(from: gemma26A4BLockURL)
+
+        XCTAssertEqual(lock.schema, "caix.resident-model-lock.v1")
+        XCTAssertEqual(lock.deployment, "gemma4-26b-a4b-whisper-large-v2")
+        XCTAssertEqual(lock.llm.publicModelID, "google/gemma-4-26B-A4B-it")
+        XCTAssertEqual(
+            lock.llm.target.repository,
+            "google/gemma-4-26B-A4B-it-qat-q4_0-unquantized")
+        XCTAssertEqual(
+            lock.llm.target.revision,
+            "f1e06dc520982d9b9edd76859fdb7ab209449949")
+        XCTAssertEqual(lock.llm.target.sourcePrecision, "bf16")
+        XCTAssertEqual(lock.llm.target.qatRecipe, "q4_0")
+        XCTAssertEqual(lock.llm.target.runtimePrecision, "q4_0")
+        XCTAssertEqual(
+            lock.llm.target.weights.map(\.sizeBytes),
+            [49_907_246_508, 1_704_763_408])
+
+        XCTAssertEqual(
+            lock.llm.assistant.repository,
+            "google/gemma-4-26B-A4B-it-qat-q4_0-unquantized-assistant")
+        XCTAssertEqual(
+            lock.llm.assistant.revision,
+            "9537141506fe8875b3ed45b264af13580cb29166")
+        XCTAssertEqual(lock.llm.assistant.sourcePrecision, "bf16")
+        XCTAssertEqual(lock.llm.assistant.qatRecipe, "q4_0")
+        XCTAssertEqual(lock.llm.assistant.runtimePrecision, "q4_0")
+        XCTAssertEqual(lock.llm.assistant.weights.single?.sizeBytes, 839_427_840)
+
+        XCTAssertEqual(
+            lock.llm.chatTemplateSHA256,
+            "ae53464bf3be25802b3a5b37def7fd89667067d7577049b3b2d74c4d8de4c6d4")
+        XCTAssertEqual(lock.llm.target.metadata.chatTemplateSHA256, lock.llm.chatTemplateSHA256)
+        XCTAssertEqual(lock.llm.assistant.metadata.chatTemplateSHA256, lock.llm.chatTemplateSHA256)
+        XCTAssertEqual(lock.llm.geometry.hiddenSize, 2_816)
+        XCTAssertEqual(lock.llm.geometry.layers, 30)
+        XCTAssertEqual(lock.llm.geometry.attentionHeads, 16)
+        XCTAssertEqual(lock.llm.geometry.slidingKVHeads, 8)
+        XCTAssertEqual(lock.llm.geometry.globalKVHeads, 2)
+        XCTAssertEqual(lock.llm.geometry.slidingLayers, 25)
+        XCTAssertEqual(lock.llm.geometry.fullLayers, 5)
+        XCTAssertEqual(lock.llm.assistantGeometry.backboneHiddenSize, 2_816)
+        XCTAssertEqual(lock.llm.assistantGeometry.attentionHeads, 16)
+        XCTAssertEqual(lock.llm.assistantGeometry.kvHeads, 8)
+        XCTAssertEqual(lock.llm.assistantGeometry.globalKVHeads, 2)
+
+        let existingLock = try ResidentModelLock.load(from: canonicalLockURL)
+        XCTAssertEqual(lock.speech, existingLock.speech, "Whisper contract must remain unchanged")
+    }
+
+    func testGemma26A4BValidationRejectsAssistantFrom31BContract() throws {
+        let url = try mutatedLock(
+            at: gemma26A4BLockURL,
+            replacing: "google/gemma-4-26B-A4B-it-qat-q4_0-unquantized-assistant",
+            with: "google/gemma-4-31B-it-qat-q4_0-unquantized-assistant")
+
+        assertContractViolation("llm.assistant.repository") {
+            _ = try ResidentModelLock.load(from: url)
+        }
+    }
+
+    func testGemma26A4BValidationRequiresQ4AssistantRuntimePrecision() throws {
+        let url = try mutatedLock(
+            at: gemma26A4BLockURL,
+            replacing: """
+            "runtime_precision": "q4_0",
+                  "weights": [
+                    {
+                      "path": "model.safetensors"
+            """,
+            with: """
+            "runtime_precision": "fp16",
+                  "weights": [
+                    {
+                      "path": "model.safetensors"
+            """,
+            expectedOccurrences: 1)
+
+        assertContractViolation("llm.assistant.runtime_precision") {
+            _ = try ResidentModelLock.load(from: url)
+        }
     }
 
     func testValidationRejectsUnapprovedTargetRevision() throws {
@@ -268,7 +358,20 @@ final class ResidentModelLockTests: XCTestCase {
         with new: String,
         expectedOccurrences: Int = 1
     ) throws -> URL {
-        var contents = try String(contentsOf: canonicalLockURL, encoding: .utf8)
+        try mutatedLock(
+            at: canonicalLockURL,
+            replacing: old,
+            with: new,
+            expectedOccurrences: expectedOccurrences)
+    }
+
+    private func mutatedLock(
+        at sourceURL: URL,
+        replacing old: String,
+        with new: String,
+        expectedOccurrences: Int = 1
+    ) throws -> URL {
+        var contents = try String(contentsOf: sourceURL, encoding: .utf8)
         let occurrences = contents.components(separatedBy: old).count - 1
         XCTAssertEqual(occurrences, expectedOccurrences, "fixture mutation must be unambiguous")
         contents = contents.replacingOccurrences(of: old, with: new)
