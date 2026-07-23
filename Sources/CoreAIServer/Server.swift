@@ -82,7 +82,7 @@ public enum CoreAIServer {
                   dashboard   http://\(host):\(port)/
                   shell       http://\(host):\(port)/shell
                   openai      POST /v1/chat/completions   GET /v1/models
-                              POST /v1/audio/transcriptions
+                              POST /v1/responses          POST /v1/audio/transcriptions
                   anthropic   POST /v1/messages
                   dashboard   GET /api/stats  GET /api/models  GET /api/jobs
                               POST /api/convert  POST /api/load  POST /api/offload
@@ -306,6 +306,7 @@ final class ServerRuntime: Sendable {
         // OpenAI-compatible
         router.get("/v1/models") { _, _ in await self.openAIModelsHandler() }
         router.post("/v1/chat/completions") { req, ctx in try await self.openAIChatHandler(req, ctx) }
+        router.post("/v1/responses") { req, ctx in try await self.openAIResponsesHandler(req, ctx) }
         router.post("/v1/audio/transcriptions") { req, ctx in
             try await self.openAIAudioTranscriptionHandler(req, ctx)
         }
@@ -1383,12 +1384,6 @@ final class ServerRuntime: Sendable {
             return JSONResponder.error("invalid OpenAI chat request: \(error)", status: .badRequest)
         }
         let gen = req.toGeneration()
-        if let response = Self.rejectUnsupportedResponseFormatIfNeeded(gen) {
-            await activity.record(
-                method: "POST", path: "/v1/chat/completions", status: 400, startedAt: started,
-                model: gen.model, summary: "response_format request rejected")
-            return response
-        }
         let modelName = await resolveModelName(gen.model)
         log("request model=\(gen.model) resolved=\(modelName) messages=\(gen.messages.count) maxTokens=\(gen.maxTokens)")
         let handle: ModelHandle
@@ -1407,15 +1402,29 @@ final class ServerRuntime: Sendable {
                 model: modelName, summary: "multimodal request rejected")
             return response
         }
-        if let response = Self.rejectUnsupportedResponseFormatIfNeeded(gen, handle: handle) {
+        // Honor `response_format`: true constrained decoding when the backend supports it, otherwise
+        // best-effort server-side JSON coercion (inject a JSON-only instruction + post-extract) so a
+        // structured-output request is no longer rejected on non-constrained backends (e.g. EAGLE).
+        let plan = Self.constraintPlan(
+            for: gen,
+            backendSupportsConstrainedDecoding:
+                CoreAIPipeline.supportsConstrainedDecoding && handle.supportsConstrainedDecoding)
+        if case .reject(let response) = plan {
             await activity.record(
                 method: "POST", path: "/v1/chat/completions", status: 400, startedAt: started,
                 model: modelName, summary: "response_format unsupported by backend")
             return response
         }
 
-        let messages = Self.messagePayload(gen.messages)
+        var messages = Self.messagePayload(gen.messages)
         var options = Self.options(from: gen)
+        if case .coerce(let responseFormat) = plan {
+            if let instruction = JSONCoercion.systemInstruction(for: responseFormat) {
+                JSONCoercion.inject(instruction: instruction, into: &messages)
+            }
+            // Let the engine decode normally; coercion happens on the produced text.
+            options.constrainedJSONSchema = nil
+        }
         options.temperature = gen.resolvedTemperature(
             defaultingToGreedy: handle.defaultsToGreedyWhenTemperatureOmitted)
         options.verbose = verbose
@@ -1451,8 +1460,15 @@ final class ServerRuntime: Sendable {
             log("generation done for \(modelName): \(result.generatedTokenCount) tokens")
             // Normalize the raw base-format output into reasoning_content + content + tool_calls.
             let norm = StreamingNormalizer.normalizeComplete(result.text, format: format)
+            var finalText = norm.text
+            if case .coerce(let responseFormat) = plan {
+                finalText = await coerceJSON(
+                    normalizedText: norm.text, responseFormat: responseFormat, handle: handle,
+                    messages: messages, options: options, tools: tools,
+                    additionalContext: additionalContext, format: format, model: modelName)
+            }
             let message = OpenAIResponseMessage(
-                content: norm.text.isEmpty && norm.hasToolCalls ? nil : norm.text,
+                content: finalText.isEmpty && norm.hasToolCalls ? nil : finalText,
                 reasoning_content: norm.reasoning.isEmpty ? nil : norm.reasoning,
                 tool_calls: norm.hasToolCalls
                     ? norm.toolCalls.map { OpenAIToolCall(id: $0.id, name: $0.name, arguments: $0.arguments) }
@@ -1476,6 +1492,43 @@ final class ServerRuntime: Sendable {
                 model: modelName, summary: "generation failed: \(error)")
             return JSONResponder.error("generation failed: \(error)", status: .internalServerError)
         }
+    }
+
+    /// Best-effort coercion of a generated answer into a conforming JSON object for backends that
+    /// cannot truly constrain-decode. Extracts the first balanced top-level JSON object from
+    /// `normalizedText`; on failure, regenerates once with a stricter reminder appended and extracts
+    /// again. Returns the extracted JSON when found, otherwise the original normalized text unchanged
+    /// (so a downstream strict validator rejects it and falls back, exactly as before coercion).
+    func coerceJSON(
+        normalizedText: String,
+        responseFormat: OpenAIResponseFormat,
+        handle: ModelHandle,
+        messages: [[String: any Sendable]],
+        options: CoreAIPipeline.Options,
+        tools: [[String: any Sendable]]?,
+        additionalContext: [String: any Sendable]?,
+        format: OutputFormat,
+        model: String
+    ) async -> String {
+        let requiredKeys = JSONCoercion.requiredKeys(for: responseFormat)
+        var extracted = JSONCoercion.extractJSONObject(from: normalizedText, requiredKeys: requiredKeys)
+        if extracted == nil {
+            var retryMessages = messages
+            retryMessages.append(["role": "user", "content": JSONCoercion.retryReminder()])
+            if let retryResult = try? await handle.generate(
+                messages: retryMessages, options: options, tools: tools,
+                additionalContext: additionalContext)
+            {
+                let retryNorm = StreamingNormalizer.normalizeComplete(retryResult.text, format: format)
+                extracted = JSONCoercion.extractJSONObject(
+                    from: retryNorm.text, requiredKeys: requiredKeys)
+            }
+        }
+        FileHandle.standardError.write(
+            Data(
+                "[openai] json coercion applied for \(model) (schema \(responseFormat.diagnosticName)) valid=\(extracted != nil)\n"
+                    .utf8))
+        return extracted ?? normalizedText
     }
 
     // MARK: - Anthropic handler
@@ -1575,7 +1628,7 @@ final class ServerRuntime: Sendable {
         }
     }
 
-    private func conversionGuardResponse(method: String, path: String, startedAt: Date) async -> Response? {
+    func conversionGuardResponse(method: String, path: String, startedAt: Date) async -> Response? {
         guard let decision = conversionGuard.decision() else { return nil }
         await activity.record(
             method: method,
@@ -1586,7 +1639,7 @@ final class ServerRuntime: Sendable {
         return JSONResponder.conversionActive(decision)
     }
 
-    private func residentMemoryGuardResponse(
+    func residentMemoryGuardResponse(
         method: String,
         path: String,
         startedAt: Date
@@ -1647,7 +1700,7 @@ final class ServerRuntime: Sendable {
         }
     }
 
-    private static func nonStreamingFirstTokenSeconds(
+    static func nonStreamingFirstTokenSeconds(
         startedAt: Date,
         completedAt: Date,
         result: CoreAIPipeline.Result
@@ -1662,7 +1715,7 @@ final class ServerRuntime: Sendable {
 
     /// Map a requested model name to an available bundle, falling back to the first bundle so
     /// generic client model ids (e.g. "gpt-4") still resolve to the local model.
-    private func resolveModelName(_ requested: String) async -> String {
+    func resolveModelName(_ requested: String) async -> String {
         if let resolved = await manager.resolveServedModelName(requested) { return resolved }
         let bundles = await manager.servedModelsPreferredForChat()
         if bundles.contains(where: { $0.name == requested }) { return requested }
@@ -1751,6 +1804,40 @@ final class ServerRuntime: Sendable {
                 status: .badRequest)
         }
         return nil
+    }
+
+    /// How a request's `response_format` should be honored, given what the resolved backend can do.
+    enum ConstraintPlan {
+        /// No structured-output request (or `.text`); generate normally.
+        case none
+        /// Backend supports real constrained decoding; keep the schema in `options` and decode under it.
+        case trueConstrained
+        /// Backend cannot constrain-decode; inject a JSON-only instruction and post-process the text.
+        case coerce(OpenAIResponseFormat)
+        /// A structured-output request that cannot be served at all; return this 400.
+        case reject(Response)
+    }
+
+    /// Decide how to honor `gen.responseFormat`. `.coerce` is chosen whenever a structured-output
+    /// request is made but the backend cannot do true constrained decoding — the server then
+    /// best-effort coerces the model's text into JSON instead of rejecting it (no regression: an
+    /// unconformable answer is returned as-is and rejected downstream, exactly as today).
+    static func constraintPlan(
+        for gen: GenerationRequest,
+        backendSupportsConstrainedDecoding: Bool
+    ) -> ConstraintPlan {
+        guard let responseFormat = gen.responseFormat, responseFormat.requiresConstrainedDecoding else {
+            return .none
+        }
+        guard backendSupportsConstrainedDecoding else {
+            return .coerce(responseFormat)
+        }
+        guard responseFormat.constrainedJSONSchema != nil else {
+            return .reject(JSONResponder.error(
+                "response_format \(responseFormat.diagnosticName) did not produce a JSON schema for constrained decoding",
+                status: .badRequest))
+        }
+        return .trueConstrained
     }
 
     static func options(from gen: GenerationRequest) -> CoreAIPipeline.Options {
