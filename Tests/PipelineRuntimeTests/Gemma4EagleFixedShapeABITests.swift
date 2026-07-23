@@ -109,6 +109,254 @@ final class Gemma4EagleFixedShapeABITests: XCTestCase {
         assertTargetRejected(function, contains: "hidden")
     }
 
+    // MARK: - split cache variant (additive, selected by the loaded asset's state descriptor)
+
+    func testSplitCachePresetMatches26BExporterABI() {
+        let split = Gemma4EagleSplitCacheGeometry.gemma26B
+        XCTAssertEqual(split.slidingLayers, 25)
+        XCTAssertEqual(split.fullLayers, 5)
+        XCTAssertEqual(split.fullCacheCapacity, 16_384)
+        XCTAssertEqual(
+            split.slidingLayers + split.fullLayers,
+            Gemma4EagleGeometry.gemma26B.layers)
+        XCTAssertEqual(Gemma4EagleSplitCacheGeometry.forGeometry(.gemma26B), split)
+        // The exporter has not defined a 31B split ABI: fail closed.
+        XCTAssertNil(Gemma4EagleSplitCacheGeometry.forGeometry(.gemma31B))
+    }
+
+    func testCacheVariantContextCapacity() {
+        XCTAssertEqual(Gemma4EagleCacheVariant.unified.contextCapacity(.gemma26B), 4_096)
+        XCTAssertEqual(Gemma4EagleCacheVariant.unified.contextCapacity(.gemma31B), 4_096)
+        XCTAssertEqual(
+            Gemma4EagleCacheVariant.split(.gemma26B).contextCapacity(.gemma26B),
+            16_384)
+    }
+
+    func testSplitTargetDescriptorsAddVerifyTokensAndNativeSplitStates() {
+        let variant = Gemma4EagleCacheVariant.split(.gemma26B)
+        let outputs = Gemma4EagleTargetContract.expectedOutputs(.gemma26B, variant: variant)
+        XCTAssertEqual(outputs.count, 7)
+        XCTAssertEqual(
+            outputs["verify_tokens"],
+            .init(scalarType: .int32, shape: [1, -1]))
+        // The six fp16 outputs keep the exact unified descriptors.
+        for (name, descriptor) in Gemma4EagleTargetContract.expectedOutputs(.gemma26B) {
+            XCTAssertEqual(outputs[name], descriptor, "split output \(name) diverged from unified")
+        }
+        // The unified output set is untouched by the additive variant.
+        XCTAssertNil(Gemma4EagleTargetContract.expectedOutputs(.gemma26B)["verify_tokens"])
+
+        let states = Gemma4EagleTargetContract.expectedStates(.gemma26B, variant: variant)
+        XCTAssertEqual(states.count, 4)
+        XCTAssertEqual(
+            states["sliding_k_cache"],
+            .init(scalarType: .float16, shape: [25, 1, 8, 1_024, 256]))
+        XCTAssertEqual(
+            states["sliding_v_cache"],
+            .init(scalarType: .float16, shape: [25, 1, 8, 1_024, 256]))
+        XCTAssertEqual(
+            states["full_k_cache"],
+            .init(scalarType: .float16, shape: [5, 1, 2, 16_384, 512]))
+        XCTAssertEqual(
+            states["full_v_cache"],
+            .init(scalarType: .float16, shape: [5, 1, 2, 16_384, 512]))
+        // Unified state descriptors are untouched by the additive variant.
+        XCTAssertEqual(
+            Gemma4EagleTargetContract.expectedStates(.gemma26B),
+            Gemma4EagleTargetContract.expectedStates(.gemma26B, variant: .unified))
+    }
+
+    func testDetectCacheVariantSelectsByStateNamesAndFailsClosed() throws {
+        XCTAssertEqual(
+            try Gemma4EagleTargetContract.detectCacheVariant(
+                stateNames: ["k_cache", "v_cache"],
+                geometry: .gemma26B),
+            .unified)
+        XCTAssertEqual(
+            try Gemma4EagleTargetContract.detectCacheVariant(
+                stateNames: [
+                    "sliding_k_cache", "sliding_v_cache", "full_k_cache", "full_v_cache",
+                ],
+                geometry: .gemma26B),
+            .split(.gemma26B))
+
+        // 31B split assets fail closed until the exporter defines that preset.
+        XCTAssertThrowsError(
+            try Gemma4EagleTargetContract.detectCacheVariant(
+                stateNames: [
+                    "sliding_k_cache", "sliding_v_cache", "full_k_cache", "full_v_cache",
+                ],
+                geometry: .gemma31B)
+        ) { error in
+            XCTAssertTrue(String(describing: error).contains("split"))
+        }
+
+        // Mixed or unknown state sets fail closed.
+        XCTAssertThrowsError(
+            try Gemma4EagleTargetContract.detectCacheVariant(
+                stateNames: ["k_cache", "v_cache", "full_k_cache"],
+                geometry: .gemma26B)
+        ) { error in
+            XCTAssertTrue(String(describing: error).contains("states must be exactly"))
+        }
+    }
+
+    func testValidateModelDetectsVariantFromStatesAndValidatesIt() throws {
+        XCTAssertEqual(
+            try Gemma4EagleTargetContract.validateModel(
+                assetURL: URL(fileURLWithPath: "/tmp/eagle-target.aimodel"),
+                functionNames: ["main"],
+                function: Self.validSplitTargetFunction),
+            .split(.gemma26B))
+        // The unified production descriptor still resolves to .unified, unchanged.
+        XCTAssertEqual(
+            try Gemma4EagleTargetContract.validateModel(
+                assetURL: URL(fileURLWithPath: "/tmp/eagle-target.aimodel"),
+                functionNames: ["main"],
+                function: Self.validTargetFunction),
+            .unified)
+    }
+
+    func testSplitTargetRejectsMissingOrMistypedVerifyTokensAndWrongStateGeometry() {
+        var function = Self.validSplitTargetFunction
+        function.outputs.removeValue(forKey: "verify_tokens")
+        assertSplitModelRejected(function, contains: "output")
+
+        function = Self.validSplitTargetFunction
+        function.outputs["verify_tokens"] = .init(scalarType: .float16, shape: [1, -1])
+        assertSplitModelRejected(function, contains: "verify_tokens")
+
+        function = Self.validSplitTargetFunction
+        function.states["full_k_cache"] = .init(
+            scalarType: .float16, shape: [5, 1, 2, 4_096, 512])
+        assertSplitModelRejected(function, contains: "full_k_cache")
+
+        function = Self.validSplitTargetFunction
+        function.states["sliding_k_cache"] = .init(
+            scalarType: .float16, shape: [25, 1, 8, 4_096, 256])
+        assertSplitModelRejected(function, contains: "sliding_k_cache")
+    }
+
+    func testInvocationHonorsSplitContextCapacity() throws {
+        XCTAssertNoThrow(
+            try Gemma4EagleTargetContract.validateInvocation(
+                queryWidth: 5,
+                positionIDs: [16_379, 16_380, 16_381, 16_382, 16_383],
+                processedTokens: 16_379,
+                contextCapacity: 16_384))
+        XCTAssertNoThrow(
+            try Gemma4EagleTargetContract.validateInvocation(
+                queryWidth: 1,
+                positionIDs: [16_383],
+                processedTokens: 16_383,
+                contextCapacity: 16_384))
+        XCTAssertThrowsError(
+            try Gemma4EagleTargetContract.validateInvocation(
+                queryWidth: 1,
+                positionIDs: [16_384],
+                processedTokens: 16_384,
+                contextCapacity: 16_384)
+        ) { error in
+            XCTAssertTrue(String(describing: error).contains("16384"))
+        }
+        // The default capacity still pins the unified 4096 ceiling.
+        assertInvocationRejected(
+            queryWidth: 1,
+            positions: [4_096],
+            processed: 4_096,
+            contains: "4096")
+    }
+
+    func testDecodeQueryWidthDegradesToQ1BetweenStagingAndSplitContext() {
+        // Split 26B serving: context 16_384, assistant staging fixed at 4_096. Q5 verify runs
+        // while a complete K4 pass fits the staging, then Q1 target-only decode to the ceiling.
+        XCTAssertEqual(
+            Gemma4EagleExecutionPolicy.decodeQueryWidth(
+                processedTokens: 4_091, contextCapacity: 16_384, stagingCapacity: 4_096),
+            5)
+        XCTAssertEqual(
+            Gemma4EagleExecutionPolicy.decodeQueryWidth(
+                processedTokens: 4_092, contextCapacity: 16_384, stagingCapacity: 4_096),
+            1)
+        XCTAssertEqual(
+            Gemma4EagleExecutionPolicy.decodeQueryWidth(
+                processedTokens: 10_000, contextCapacity: 16_384, stagingCapacity: 4_096),
+            1)
+        XCTAssertEqual(
+            Gemma4EagleExecutionPolicy.decodeQueryWidth(
+                processedTokens: 16_383, contextCapacity: 16_384, stagingCapacity: 4_096),
+            1)
+        XCTAssertNil(
+            Gemma4EagleExecutionPolicy.decodeQueryWidth(
+                processedTokens: 16_384, contextCapacity: 16_384, stagingCapacity: 4_096))
+    }
+
+    func testShouldRunDecodeUsesSplitContextCeiling() {
+        XCTAssertTrue(
+            Gemma4EagleExecutionPolicy.shouldRunDecode(
+                generatedTokens: 0,
+                maximumTokens: 4,
+                processedTokens: 4_096,
+                contextCapacity: 16_384,
+                stagingCapacity: 4_096))
+        XCTAssertTrue(
+            Gemma4EagleExecutionPolicy.shouldRunDecode(
+                generatedTokens: 0,
+                maximumTokens: 4,
+                processedTokens: 16_382,
+                contextCapacity: 16_384,
+                stagingCapacity: 4_096))
+        XCTAssertFalse(
+            Gemma4EagleExecutionPolicy.shouldRunDecode(
+                generatedTokens: 0,
+                maximumTokens: 4,
+                processedTokens: 16_383,
+                contextCapacity: 16_384,
+                stagingCapacity: 4_096))
+        XCTAssertFalse(
+            Gemma4EagleExecutionPolicy.shouldRunDecode(
+                generatedTokens: 0,
+                maximumTokens: 4,
+                processedTokens: 16_384,
+                contextCapacity: 16_384,
+                stagingCapacity: 4_096))
+    }
+
+    // MARK: - greedy verify over per-slot target tokens (split targets: in-graph verify_tokens)
+
+    func testGreedyVerifyAcceptsLongestPrefixAndCorrectsFirstMismatch() {
+        let all = GreedySpeculativeVerify.verify(
+            drafts: [5, 6, 7, 8],
+            targetGreedyTokens: [5, 6, 7, 8, 9])
+        XCTAssertEqual(all.acceptedTokens, [5, 6, 7, 8])
+        XCTAssertEqual(all.acceptedCount, 4)
+        XCTAssertEqual(all.correctionToken, 9)  // bonus slot
+
+        let mid = GreedySpeculativeVerify.verify(
+            drafts: [5, 6, 7, 8],
+            targetGreedyTokens: [5, 6, 99, 100, 101])
+        XCTAssertEqual(mid.acceptedTokens, [5, 6])
+        XCTAssertEqual(mid.correctionToken, 99)
+
+        let none = GreedySpeculativeVerify.verify(
+            drafts: [5, 6, 7, 8],
+            targetGreedyTokens: [1, 2, 3, 4, 5])
+        XCTAssertEqual(none.acceptedTokens, [])
+        XCTAssertEqual(none.correctionToken, 1)
+    }
+
+    #if COREAI_RUNTIME
+    func testRowVerifyMatchesTokenVerify() {
+        // argmax per row: 1, 0, 2 — accept d0=1, reject d1=2 with correction 0.
+        let rows: [[Float]] = [[0, 3, 1], [2, 0, 1], [0, 0, 5]]
+        let byRows = SpeculativeEngine.verify(drafts: [1, 2], targetRows: rows)
+        let byTokens = SpeculativeEngine.verify(drafts: [1, 2], targetGreedyTokens: [1, 0, 2])
+        XCTAssertEqual(byRows, byTokens)
+        XCTAssertEqual(byRows.acceptedTokens, [1])
+        XCTAssertEqual(byRows.correctionToken, 0)
+    }
+    #endif
+
     func testSlidingStagePlanKeepsNewestWindowLeftAligned() {
         XCTAssertEqual(
             Gemma4EagleExecutionPolicy.slidingStagePlan(validFullLength: 100),
@@ -231,6 +479,15 @@ final class Gemma4EagleFixedShapeABITests: XCTestCase {
             "single-step and unrolled assistant dispatches must pass kv_length")
         XCTAssertFalse(source.contains("resolvingDynamicDimensions([1, seqLen])"))
         XCTAssertFalse(source.contains("allocateCache(capacity:"))
+
+        // Split-cache ABI: the greedy verify path reads the in-graph verify_tokens argmax and
+        // never materializes logits rows; the decode policy is driven by the loaded variant's
+        // context capacity; staging past the assistant window goes through the gated path.
+        XCTAssertTrue(source.contains("\"verify_tokens\""))
+        XCTAssertTrue(source.contains("materializeLogits: false"))
+        XCTAssertTrue(source.contains("targetGreedyTokens: vf.greedyTokens"))
+        XCTAssertTrue(source.contains("contextCapacity: target.contextCapacity"))
+        XCTAssertTrue(source.contains("stageHostKV("))
     }
 
     private static func pipelineRuntimeSource(named filename: String) -> URL {
@@ -286,6 +543,30 @@ final class Gemma4EagleFixedShapeABITests: XCTestCase {
         }
     }
 
+    /// Rejection through the model-preflight path (detects the variant from states first),
+    /// mirroring how the runtime engine loads split assets.
+    private func assertSplitModelRejected(
+        _ function: Gemma4MTPFunctionDescriptor,
+        contains expected: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertThrowsError(
+            try Gemma4EagleTargetContract.validateModel(
+                assetURL: URL(fileURLWithPath: "/tmp/eagle-target.aimodel"),
+                functionNames: ["main"],
+                function: function),
+            file: file,
+            line: line
+        ) { error in
+            XCTAssertTrue(
+                String(describing: error).contains(expected),
+                "\(error) does not contain \(expected)",
+                file: file,
+                line: line)
+        }
+    }
+
     private static let validTargetFunction = Gemma4MTPFunctionDescriptor(
         inputs: [
             "input_ids": .init(scalarType: .int32, shape: [1, -1]),
@@ -306,6 +587,37 @@ final class Gemma4EagleFixedShapeABITests: XCTestCase {
             "v_cache": .init(
                 scalarType: .float16,
                 shape: [30, 1, 8, 4_096, 256]),
+        ])
+
+    /// The split-cache 26B target exactly as the new exporter emits it: 4 native-geometry split
+    /// states + the 7th `verify_tokens` output (in-graph argmax of logits).
+    private static let validSplitTargetFunction = Gemma4MTPFunctionDescriptor(
+        inputs: [
+            "input_ids": .init(scalarType: .int32, shape: [1, -1]),
+            "position_ids": .init(scalarType: .int32, shape: [1, -1]),
+        ],
+        outputs: [
+            "logits": .init(scalarType: .float16, shape: [1, -1, 262_144]),
+            "verify_tokens": .init(scalarType: .int32, shape: [1, -1]),
+            "hidden": .init(scalarType: .float16, shape: [1, -1, 2_816]),
+            "k_full": .init(scalarType: .float16, shape: [1, 2, -1, 512]),
+            "v_full": .init(scalarType: .float16, shape: [1, 2, -1, 512]),
+            "k_sliding": .init(scalarType: .float16, shape: [1, 8, -1, 256]),
+            "v_sliding": .init(scalarType: .float16, shape: [1, 8, -1, 256]),
+        ],
+        states: [
+            "sliding_k_cache": .init(
+                scalarType: .float16,
+                shape: [25, 1, 8, 1_024, 256]),
+            "sliding_v_cache": .init(
+                scalarType: .float16,
+                shape: [25, 1, 8, 1_024, 256]),
+            "full_k_cache": .init(
+                scalarType: .float16,
+                shape: [5, 1, 2, 16_384, 512]),
+            "full_v_cache": .init(
+                scalarType: .float16,
+                shape: [5, 1, 2, 16_384, 512]),
         ])
 
     private static let valid31BTargetFunction = Gemma4MTPFunctionDescriptor(

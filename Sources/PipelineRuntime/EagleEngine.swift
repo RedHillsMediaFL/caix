@@ -13,6 +13,12 @@ import Tokenizers
 //
 //   TARGET (Gemma4EagleTarget):  inputs (input_ids, position_ids) + KV-cache state ->
 //     outputs (logits, hidden, k_full, v_full, k_sliding, v_sliding)  [all f16]
+//     Cache variants (selected by the loaded asset's state descriptor, additive):
+//       unified — k_cache/v_cache, one shared-geometry state pair over all layers (production);
+//       split   — sliding_k_cache/sliding_v_cache (rolling in-graph window) +
+//                 full_k_cache/full_v_cache (absolute positions, FULL_CAP = served context
+//                 ceiling), plus a 7th output verify_tokens = in-graph argmax of logits, which
+//                 the greedy verify path reads INSTEAD of materializing logits rows.
 //   DRAFT  (Gemma4AssistantForCausalLM): inputs (token_id, hidden, position_ids, k_full, v_full,
 //     k_sliding, v_sliding, kv_length) -> outputs (logits, next_hidden)  [stateless]
 //
@@ -143,22 +149,29 @@ enum EagleND {
     }
 }
 
-// MARK: - EAGLE target (6-output + KV state)
+// MARK: - EAGLE target (6/7-output + KV state, unified or split cache variant)
 
 final class EagleTargetEngine {
     private let function: InferenceFunction
     private let inDesc: [String: NDArrayDescriptor]
     private let outDesc: [String: NDArrayDescriptor]
-    private var keyCache: NDArray
-    private var valueCache: NDArray
-    private let keyName: String
-    private let valueName: String
+    // Persistent KV-cache state buffers, parallel to `stateNames`/`stateDescriptors` (unified:
+    // k_cache/v_cache; split: sliding + full pairs). The graph mutates them in place per forward;
+    // the runtime never indexes into them.
+    private var stateBuffers: [NDArray]
+    private let stateNames: [String]
+    private let stateDescriptors: [NDArrayDescriptor]
+    /// Cache layout of the loaded asset, detected from its state descriptor names.
+    let variant: Gemma4EagleCacheVariant
+    /// Served context ceiling for target forwards: unified `cacheCapacity`, or the split FULL_CAP.
+    let contextCapacity: Int
     let vocabSize: Int
     let hiddenSize: Int
     private(set) var processed: Int = 0
     private(set) var hostProcessed: Int = 0
-    // Static assistant staging: full KV is absolute-position aligned to 4096; sliding KV contains
-    // the newest min(kv_length, 1024) positions left-aligned.
+    // Static assistant staging: full KV is absolute-position aligned to the assistant's fixed
+    // `cacheCapacity`; sliding KV contains the newest min(kv_length, slidingWindow) positions
+    // left-aligned. Split targets can decode past this staging (see `stageHostKV`).
     private var accKFull: NDArray
     private var accVFull: NDArray
     private var accKSliding: NDArray
@@ -167,6 +180,12 @@ final class EagleTargetEngine {
     let geometry: Gemma4EagleGeometry
 
     struct Out {
+        /// Per-row greedy token: the in-graph `verify_tokens` argmax on split targets, or the
+        /// host argmax of the fp16 logits row on unified targets. The greedy verify/emit path
+        /// reads THIS and never materializes logits rows.
+        let greedyTokens: [Int]
+        /// Full-vocabulary logits rows; populated only when `forward(materializeLogits: true)`
+        /// was requested (the sampled target-only path). Empty otherwise.
         let logitsRows: [[Float]]
         let hidden: NDArray  // [1, Q, D]
         let kFullNew: NDArray
@@ -188,11 +207,13 @@ final class EagleTargetEngine {
         guard let d = model.functionDescriptor(for: "main") else {
             throw CoreAIPipeline.RuntimeError.modelContract("eagle target: no 'main'")
         }
-        try Gemma4EagleTargetContract.validateModel(
+        let variant = try Gemma4EagleTargetContract.validateModel(
             assetURL: assetURL,
             functionNames: model.functionNames,
             function: Gemma4MTPNativeRunner.project(d),
             geometry: geometry)
+        self.variant = variant
+        self.contextCapacity = variant.contextCapacity(geometry)
         guard vocabSize == geometry.vocabularySize else {
             throw CoreAIPipeline.RuntimeError.modelContract(
                 "eagle target: configured vocabulary \(vocabSize) must equal "
@@ -231,24 +252,26 @@ final class EagleTargetEngine {
             [1, ksShp[1], geometry.slidingWindow, ksShp[3]]))
         self.accVSliding = NDArray(descriptor: outs["v_sliding"]!.resolvingDynamicDimensions(
             [1, ksShp[1], geometry.slidingWindow, ksShp[3]]))
-        self.keyName = "k_cache"
-        self.valueName = "v_cache"
-        guard let kd = nd("state", keyName), let vd = nd("state", valueName) else {
-            throw CoreAIPipeline.RuntimeError.modelContract("eagle target: KV state not NDArray")
+        let stateNames = Gemma4EagleTargetContract.stateNames(for: variant)
+        var stateDescriptors: [NDArrayDescriptor] = []
+        stateDescriptors.reserveCapacity(stateNames.count)
+        for name in stateNames {
+            guard let stateDescriptor = nd("state", name) else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "eagle target: KV state \(name) not NDArray")
+            }
+            stateDescriptors.append(stateDescriptor)
         }
-        self.keyCache = NDArray(descriptor: kd)
-        self.valueCache = NDArray(descriptor: vd)
+        self.stateNames = stateNames
+        self.stateDescriptors = stateDescriptors
+        self.stateBuffers = stateDescriptors.map { NDArray(descriptor: $0) }
         self.vocabSize = vocabSize
         self.hiddenSize = resolvedHiddenSize
         guard let fn = try model.loadFunction(named: "main") else {
             throw CoreAIPipeline.RuntimeError.modelContract("eagle target: load 'main' failed")
         }
         self.function = fn
-        self.kd = kd
-        self.vd = vd
     }
-    private let kd: NDArrayDescriptor
-    private let vd: NDArrayDescriptor
 
     static func load(
         aimodelURL: URL,
@@ -269,8 +292,9 @@ final class EagleTargetEngine {
     }
 
     func allocateCache() {
-        keyCache = NDArray(descriptor: kd)
-        valueCache = NDArray(descriptor: vd)
+        for index in stateBuffers.indices {
+            stateBuffers[index] = NDArray(descriptor: stateDescriptors[index])
+        }
         accKFull = NDArray(descriptor: outDesc["k_full"]!.resolvingDynamicDimensions(
             [1, hf, geometry.cacheCapacity, df]))
         accVFull = NDArray(descriptor: outDesc["v_full"]!.resolvingDynamicDimensions(
@@ -292,14 +316,19 @@ final class EagleTargetEngine {
         processed = count
     }
 
-    func forward(_ tokens: [Int32]) async throws -> Out {
+    /// One target forward over `tokens`. `materializeLogits` gates the host copy of the
+    /// full-vocabulary fp16 logits into `Out.logitsRows`; the greedy verify/emit path passes
+    /// `false` and reads `Out.greedyTokens` instead (on split targets that is the in-graph
+    /// `verify_tokens` argmax, so the logits are never touched on the host).
+    func forward(_ tokens: [Int32], materializeLogits: Bool = true) async throws -> Out {
         let n = tokens.count
         let offset = processed
         let absolutePositions = (offset..<(offset + n)).map(Int32.init)
         try Gemma4EagleTargetContract.validateInvocation(
             queryWidth: n,
             positionIDs: absolutePositions,
-            processedTokens: offset)
+            processedTokens: offset,
+            contextCapacity: contextCapacity)
         var inputIds = NDArray(descriptor: inDesc["input_ids"]!.resolvingDynamicDimensions([1, n]))
         EagleND.fillI32(&inputIds, tokens)
         var positionIds = NDArray(
@@ -316,10 +345,15 @@ final class EagleTargetEngine {
         var vFullNew = out("v_full", [1, hf, n, df])
         var kSlidingNew = out("k_sliding", [1, hs, n, ds])
         var vSlidingNew = out("v_sliding", [1, hs, n, ds])
+        // Split-only 7th output: in-graph per-row argmax of logits.
+        var verifyTokens = outDesc["verify_tokens"].map {
+            NDArray(descriptor: $0.resolvingDynamicDimensions([1, n]))
+        }
 
         var states = InferenceFunction.MutableViews()
-        states.insert(&keyCache, for: keyName)
-        states.insert(&valueCache, for: valueName)
+        for index in stateBuffers.indices {
+            states.insert(&stateBuffers[index], for: stateNames[index])
+        }
         var ov = InferenceFunction.MutableViews()
         ov.insert(&logits, for: "logits")
         ov.insert(&hidden, for: "hidden")
@@ -327,13 +361,23 @@ final class EagleTargetEngine {
         ov.insert(&vFullNew, for: "v_full")
         ov.insert(&kSlidingNew, for: "k_sliding")
         ov.insert(&vSlidingNew, for: "v_sliding")
+        if verifyTokens != nil {
+            ov.insert(&verifyTokens!, for: "verify_tokens")
+        }
         _ = try await function.run(
             inputs: ["input_ids": inputIds, "position_ids": positionIds],
             states: consume states, outputViews: consume ov)
 
         processed += n
+        let greedyTokens: [Int]
+        if let verifyTokens {
+            greedyTokens = Self.int32Row(verifyTokens, count: n)
+        } else {
+            greedyTokens = Self.argmaxRows(logits, vocab: vocabSize)
+        }
         return Out(
-            logitsRows: Self.allRows(logits, vocab: vocabSize),
+            greedyTokens: greedyTokens,
+            logitsRows: materializeLogits ? Self.allRows(logits, vocab: vocabSize) : [],
             hidden: hidden,
             kFullNew: kFullNew,
             vFullNew: vFullNew,
@@ -341,6 +385,26 @@ final class EagleTargetEngine {
             vSlidingNew: vSlidingNew,
             startOffset: offset,
             queryWidth: n)
+    }
+
+    /// Variant-aware host-staging gate for the prefill/Q1 paths. Unified targets stage every
+    /// committed row strictly (exactly the production behavior). Split targets decode past the
+    /// assistant's fixed `cacheCapacity` staging window: from the first row that no longer fits —
+    /// or once staging has fallen behind `processed` — the draft can never be consulted again, so
+    /// staging quietly retires instead of failing the request (`stagedKV()` still fails closed if
+    /// a draft were attempted afterwards). The Q5 verify path keeps calling the strict
+    /// `commitHostKV` directly: there the policy has already guaranteed staging room.
+    func stageHostKV(_ output: Out, count: Int) throws {
+        switch variant {
+        case .unified:
+            try commitHostKV(output, count: count)
+        case .split:
+            guard count > 0,
+                  output.startOffset == hostProcessed,
+                  hostProcessed + count <= geometry.cacheCapacity
+            else { return }
+            try commitHostKV(output, count: count)
+        }
     }
 
     func commitHostKV(_ output: Out, count: Int) throws {
@@ -404,6 +468,41 @@ final class EagleTargetEngine {
             var o = [[Float]](repeating: [Float](repeating: 0, count: vocab), count: rows)
             for r in 0..<rows { let b = r * rs; for v in 0..<vocab { o[r][v] = Float(ptr[b + v * cs]) } }
             return o
+        }
+    }
+
+    /// Host argmax per logits row, mirroring `Sampler.argmax` exactly (strictly-greater compare,
+    /// first maximum wins) so the unified greedy path stays byte-identical to materializing the
+    /// rows and calling `Sampler.argmax` on each.
+    private static func argmaxRows(_ a: NDArray, vocab: Int) -> [Int] {
+        a.view(as: Float16.self).withUnsafePointer { ptr, shape, st in
+            let rows = shape[shape.count - 2]
+            let rs = st[st.count - 2], cs = st[st.count - 1]
+            var o = [Int]()
+            o.reserveCapacity(rows)
+            for r in 0..<rows {
+                let b = r * rs
+                var best = Float(ptr[b])
+                var bestIndex = 0
+                for v in 1..<vocab {
+                    let value = Float(ptr[b + v * cs])
+                    if value > best {
+                        best = value
+                        bestIndex = v
+                    }
+                }
+                o.append(bestIndex)
+            }
+            return o
+        }
+    }
+
+    /// Copy the `count` leading int32 elements of a `[1, count]` array (the split target's
+    /// `verify_tokens` output row).
+    private static func int32Row(_ a: NDArray, count: Int) -> [Int] {
+        a.view(as: Int32.self).withUnsafePointer { ptr, _, st in
+            let cs = st[st.count - 1]
+            return (0..<count).map { Int(ptr[$0 * cs]) }
         }
     }
 }
@@ -671,9 +770,10 @@ public final class EagleEngine {
                             verbose: Bool, unrolledURL: URL? = nil) async throws -> EagleEngine {
         let t0 = Date()
         _ = verbose
-        // The backbone width selects the whole fixed-shape family (26B or the dense 31B). Everything
-        // else in the ABI (K, vocab, sliding window, context) is shared, so it is validated against
-        // the resolved geometry rather than hardcoded to one model.
+        // The backbone width selects the whole fixed-shape family (26B or the dense 31B). K,
+        // vocab, and sliding window are shared, so they validate against the resolved geometry;
+        // the context ceiling depends on the loaded asset's cache variant and is validated after
+        // the target load below.
         guard let geometry = Gemma4EagleGeometry.forBackbone(backbone) else {
             throw CoreAIPipeline.RuntimeError.modelContract(
                 "eagle requires a supported Gemma 4 EAGLE backbone; got \(backbone), "
@@ -681,13 +781,12 @@ public final class EagleEngine {
         }
         guard draftTokens == geometry.draftTokens,
               vocabSize == geometry.vocabularySize,
-              slidingWindow == geometry.slidingWindow,
-              maxContext == geometry.cacheCapacity
+              slidingWindow == geometry.slidingWindow
         else {
             throw CoreAIPipeline.RuntimeError.modelContract(
                 "eagle requires the fixed Gemma 4 ABI for backbone=\(geometry.backboneHiddenSize): "
                     + "K=\(geometry.draftTokens), vocab=\(geometry.vocabularySize), "
-                    + "sliding=\(geometry.slidingWindow), context=\(geometry.cacheCapacity)")
+                    + "sliding=\(geometry.slidingWindow)")
         }
         // Authenticate and compile the July prompt contract before allocating either model.
         // EAGLE is the Gemma 4 MTP backend; stale Gemma templates must fail closed rather than
@@ -702,6 +801,13 @@ public final class EagleEngine {
             throw CoreAIPipeline.RuntimeError.modelContract(
                 "eagle target backbone \(resolvedBackbone) does not match selected geometry "
                     + "\(geometry.backboneHiddenSize)")
+        }
+        // The served context ceiling is dictated by the loaded asset's cache variant: unified
+        // assets keep the fixed cacheCapacity (4096); split assets serve their FULL_CAP.
+        guard maxContext == target.contextCapacity else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "eagle maxContext \(maxContext) must equal the loaded target's context capacity "
+                    + "\(target.contextCapacity)")
         }
         async let drf = EagleDraftEngine.load(
             aimodelURL: draftURL, vocabSize: vocabSize, hiddenSize: resolvedBackbone,
@@ -732,9 +838,9 @@ public final class EagleEngine {
         guard !promptTokens.isEmpty else {
             throw CoreAIPipeline.RuntimeError.invalidBundle("prompt tokenized to 0 tokens")
         }
-        guard promptTokens.count <= target.geometry.cacheCapacity else {
+        guard promptTokens.count <= target.contextCapacity else {
             throw CoreAIPipeline.RuntimeError.invalidBundle(
-                "eagle prompt exceeds fixed \(target.geometry.cacheCapacity)-token target state")
+                "eagle prompt exceeds fixed \(target.contextCapacity)-token target state")
         }
         let maxTokens = max(0, options.maxTokens)
         target.allocateCache()
@@ -747,7 +853,7 @@ public final class EagleEngine {
         {
             let pe = ps + queryWidth
             pf = try await target.forward(Array(prompt32[ps..<pe]))
-            try target.commitHostKV(pf, count: queryWidth)
+            try target.stageHostKV(pf, count: queryWidth)
             ps = pe
         }
         let prefillSeconds = Date().timeIntervalSince(prefillStart)
@@ -816,10 +922,12 @@ public final class EagleEngine {
         while running && Gemma4EagleExecutionPolicy.shouldRunDecode(
             generatedTokens: generated.count,
             maximumTokens: maxTokens,
-            processedTokens: target.processed)
+            processedTokens: target.processed,
+            contextCapacity: target.contextCapacity,
+            stagingCapacity: target.geometry.cacheCapacity)
         {
             let o = try await target.forward([Int32(committed[committed.count - 1])])
-            try target.commitHostKV(o, count: 1)
+            try target.stageHostKV(o, count: 1)
             running = emit(sampler.sample(o.logitsRows[0], using: &rng))
         }
         if running && generated.count < maxTokens {
@@ -917,9 +1025,9 @@ public final class EagleEngine {
         guard !promptTokens.isEmpty else {
             throw CoreAIPipeline.RuntimeError.invalidBundle("prompt tokenized to 0 tokens")
         }
-        guard promptTokens.count <= target.geometry.cacheCapacity else {
+        guard promptTokens.count <= target.contextCapacity else {
             throw CoreAIPipeline.RuntimeError.invalidBundle(
-                "eagle prompt exceeds fixed \(target.geometry.cacheCapacity)-token target state")
+                "eagle prompt exceeds fixed \(target.contextCapacity)-token target state")
         }
         func log(_ s: @autoclosure () -> String) {
             if options.verbose { FileHandle.standardError.write(Data(("[coreai] " + s() + "\n").utf8)) }
@@ -928,10 +1036,12 @@ public final class EagleEngine {
         target.allocateCache()
         log(
             "eagle prompt -> \(promptTokens.count) tokens, K=\(target.geometry.draftTokens), "
-                + "cap=\(target.geometry.cacheCapacity), prefill=Q5+Q1-tail")
+                + "cap=\(target.contextCapacity), prefill=Q5+Q1-tail")
 
         // Keep specialization bounded to the ABI's two query shapes: complete Q5 blocks followed
-        // by one Q1 forward per tail token. The last forward supplies the anchor logits/hidden.
+        // by one Q1 forward per tail token. The last forward supplies the anchor tokens/hidden.
+        // Greedy path: logits rows are never materialized (`Out.greedyTokens` carries the
+        // per-row argmax — in-graph `verify_tokens` on split targets).
         let prefillStart = Date()
         let prompt32 = promptTokens.map { Int32($0) }
         var pf: EagleTargetEngine.Out!
@@ -940,11 +1050,11 @@ public final class EagleEngine {
             tokenCount: prompt32.count)
         {
             let pe = ps + queryWidth
-            pf = try await target.forward(Array(prompt32[ps..<pe]))
-            try target.commitHostKV(pf, count: queryWidth)
+            pf = try await target.forward(Array(prompt32[ps..<pe]), materializeLogits: false)
+            try target.stageHostKV(pf, count: queryWidth)
             ps = pe
         }
-        let lastChunkRows = pf.logitsRows.count  // rows of the final prefill chunk
+        let lastChunkRows = pf.greedyTokens.count  // rows of the final prefill chunk
         let prefillSeconds = Date().timeIntervalSince(prefillStart)
 
         var committed = promptTokens
@@ -993,41 +1103,48 @@ public final class EagleEngine {
         }
 
         let decodeStart = Date()
-        var running = emit(Sampler.argmax(pf.logitsRows[lastChunkRows - 1]))
+        var running = emit(pf.greedyTokens[lastChunkRows - 1])
 
         // Seed the first draft: hidden that produced the just-emitted token (last row of the final
-        // prefill chunk) + KV over the prompt.
+        // prefill chunk). The staged KV is fetched at draft time (Q5 branch), where the policy
+        // guarantees the assistant staging still covers the whole committed prefix.
         var seedHidden = EagleND.hiddenRow(pf.hidden, row: lastChunkRows - 1,
                                            dim: backbone, descriptor: target.hiddenDescriptor())
-        var seedKV = try target.stagedKV()
 
         while running && Gemma4EagleExecutionPolicy.shouldRunDecode(
             generatedTokens: generated.count,
             maximumTokens: maxTokens,
-            processedTokens: target.processed)
+            processedTokens: target.processed,
+            contextCapacity: target.contextCapacity,
+            stagingCapacity: target.geometry.cacheCapacity)
         {
             let L = committed.count
             let anchor = committed[L - 1]
             let pos = Int32(L - 1)
             guard let queryWidth = Gemma4EagleExecutionPolicy.decodeQueryWidth(
-                processedTokens: target.processed)
+                processedTokens: target.processed,
+                contextCapacity: target.contextCapacity,
+                stagingCapacity: target.geometry.cacheCapacity)
             else {
                 break
             }
 
             if queryWidth == 1 {
-                let q1 = try await target.forward([Int32(anchor)])
-                try target.commitHostKV(q1, count: 1)
+                let q1 = try await target.forward([Int32(anchor)], materializeLogits: false)
+                try target.stageHostKV(q1, count: 1)
                 iters += 1
-                running = emit(Sampler.argmax(q1.logitsRows[0]))
+                running = emit(q1.greedyTokens[0])
                 seedHidden = EagleND.hiddenRow(
                     q1.hidden,
                     row: 0,
                     dim: backbone,
                     descriptor: target.hiddenDescriptor())
-                seedKV = try target.stagedKV()
                 continue
             }
+
+            // Q5: the policy guarantees the whole committed prefix is host-staged here, so the
+            // draft's fixed staging tensors + kv_length are valid.
+            let seedKV = try target.stagedKV()
 
             // The resident ABI always drafts K4 and verifies [anchor, d0, d1, d2, d3] as Q5.
             var drafts: [Int]
@@ -1054,9 +1171,14 @@ public final class EagleEngine {
                 }
             }
 
-            // VERIFY: target forward over [anchor, drafts]; outputs logits/hidden/KV.
-            let vf = try await target.forward([Int32(anchor)] + drafts.map { Int32($0) })
-            let verdict = SpeculativeEngine.verify(drafts: drafts, targetRows: vf.logitsRows)
+            // VERIFY: target forward over [anchor, drafts]. The greedy accept reads the per-row
+            // greedy tokens (in-graph verify_tokens on split targets) — logits stay on device.
+            let vf = try await target.forward(
+                [Int32(anchor)] + drafts.map { Int32($0) },
+                materializeLogits: false)
+            let verdict = SpeculativeEngine.verify(
+                drafts: drafts,
+                targetGreedyTokens: vf.greedyTokens)
             let n = verdict.acceptedCount
 
             drafted += Gemma4EagleExecutionPolicy.draftTokens
@@ -1071,11 +1193,11 @@ public final class EagleEngine {
             if running { if !emit(verdict.correctionToken) { running = false } }
             if !running { break }
 
-            // Reseed from the verify forward: hidden row n produced the correction; KV up to the
-            // new committed length - 1 (drops rejected-draft positions + the correction itself).
+            // Reseed from the verify forward: hidden row n produced the correction. The staged
+            // KV (up to the new committed length - 1, dropping rejected-draft positions + the
+            // correction itself) is re-fetched at the top of the next Q5 pass.
             seedHidden = EagleND.hiddenRow(vf.hidden, row: n, dim: backbone,
                                            descriptor: target.hiddenDescriptor())
-            seedKV = try target.stagedKV()
         }
         if running && generated.count < maxTokens {
             stop = .contextLimit
