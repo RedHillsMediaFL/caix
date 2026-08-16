@@ -360,7 +360,7 @@ enum PipelinedLLM {
 
         let maxTokens = max(0, options.maxTokens)
         let stopSequences = options.stopSequences.filter { !$0.isEmpty }
-        let stream = try VanillaDecodingStrategy().decode(
+        let stream = try await VanillaDecodingStrategy().decode(
             from: input,
             tokenizer: tokenizer,
             inferenceEngine: inferenceEngine,
@@ -578,7 +578,7 @@ enum PipelinedLLM {
         let stopSequences = StopSequences(
             for: tokenizer,
             additionalSequences: customStops)
-        let stream = try inferenceEngine.generate(
+        let stream = try await inferenceEngine.generate(
             with: inputTokens,
             samplingConfiguration: samplingConfiguration,
             inferenceOptions: InferenceOptions(maxTokens: maxTokens))
