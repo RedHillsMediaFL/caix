@@ -404,13 +404,8 @@ public struct ResolvedBundle: Sendable {
                 throw CoreAIPipeline.RuntimeError.invalidBundle(
                     "Qwen3.8 native MTP requires exactly three greedy draft positions")
             }
-            let requiredFunctions = ["decode", "verify_1", "verify_2", "verify_3"]
-            guard requiredFunctions.allSatisfy({
-                manifest.language?.functionMap?.name(for: $0) != nil
-            }) else {
-                throw CoreAIPipeline.RuntimeError.invalidBundle(
-                    "Qwen3.8 MTP metadata is missing decode or verify_1/2/3 functions")
-            }
+            // The authored target's dynamic `main` handles prefill, one-token decode, and
+            // three-token verification. The sidecar owns its own `main` and K/V state.
         }
     }
 

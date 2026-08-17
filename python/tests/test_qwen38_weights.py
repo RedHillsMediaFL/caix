@@ -26,12 +26,18 @@ class Qwen38PackedWeightTests(unittest.TestCase):
         converted = convert_mlx_norm_scale(
             "language_model.model.layers.0.self_attn.q_norm.weight", effective_scale
         )
+        mtp_pre_fc = convert_mlx_norm_scale(
+            "language_model.mtp.pre_fc_norm_embedding.weight", effective_scale
+        )
         gated = convert_mlx_norm_scale(
             "language_model.model.layers.0.linear_attn.norm.weight", effective_scale
         )
 
         torch.testing.assert_close(
             converted, torch.tensor([-0.25, 0.0, 1.5], dtype=torch.float16)
+        )
+        torch.testing.assert_close(
+            mtp_pre_fc, torch.tensor([-0.25, 0.0, 1.5], dtype=torch.float16)
         )
         self.assertIs(gated, effective_scale)
 

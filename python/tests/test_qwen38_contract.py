@@ -8,7 +8,11 @@ from qwen38_coreai.contract import (
     Qwen38ContractError,
     build_metadata,
 )
-from qwen38_coreai.export import Qwen38ExportPlan, build_coreai_quantization_config
+from qwen38_coreai.export import (
+    Qwen38ExportPlan,
+    build_coreai_quantization_config,
+    build_mtp_quantization_config,
+)
 
 
 def source_config() -> dict:
@@ -144,6 +148,19 @@ class Qwen38ContractTests(unittest.TestCase):
         int8_weight = module_configs["model.embed_tokens"]["module_state_spec"]["weight"]
         self.assertEqual(int8_weight["dtype"], "int8")
         self.assertEqual(int8_weight["granularity"]["block_size"], 64)
+
+    def test_mtp_quantization_only_compresses_shared_embedding_and_head(self) -> None:
+        quantization = build_mtp_quantization_config()
+
+        self.assertIsNone(quantization["global_config"])
+        self.assertEqual(
+            set(quantization["module_name_configs"]),
+            {"embed_tokens", "lm_head"},
+        )
+        for module in quantization["module_name_configs"].values():
+            weight = module["module_state_spec"]["weight"]
+            self.assertEqual(weight["dtype"], "int8")
+            self.assertEqual(weight["granularity"]["block_size"], 64)
 
 
 if __name__ == "__main__":

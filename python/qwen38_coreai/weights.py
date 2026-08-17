@@ -19,6 +19,8 @@ PLUS_ONE_NORM_SUFFIXES = (
     ".k_norm.weight",
     ".model.norm.weight",
     ".mtp.norm.weight",
+    ".pre_fc_norm_embedding.weight",
+    ".pre_fc_norm_hidden.weight",
 )
 
 

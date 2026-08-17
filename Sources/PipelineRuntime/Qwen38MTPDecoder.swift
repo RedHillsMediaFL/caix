@@ -70,7 +70,7 @@ public struct Qwen38MTPDecoder: Sendable {
     ) throws {
         switch result.stateAction {
         case .retainVerifiedState:
-            guard result.correctionToken == nil else { throw Error.invalidReplay }
+            break
         case let .restoreFixedStateAndReplay(_, acceptedDraftTokens):
             guard result.acceptedDraftTokens.count == acceptedDraftTokens,
                 result.correctionToken != nil

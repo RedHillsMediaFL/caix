@@ -88,6 +88,33 @@ def build_coreai_quantization_config(source_config: dict[str, Any]) -> dict[str,
     }
 
 
+def build_mtp_quantization_config() -> dict[str, Any]:
+    """Compress only the target weights duplicated by the MTP sidecar.
+
+    The learned MTP projection and decoder layer stay FP16. The shared token
+    embedding and LM head dominate sidecar size, and their source checkpoint
+    representation is already affine int8 group64.
+    """
+    int8_module_config = {
+        "module_state_spec": {"weight": _coreai_weight_spec(bits=8, block_size=64)},
+        "op_input_spec": None,
+        "op_output_spec": None,
+    }
+    return {
+        "execution_mode": "eager",
+        "global_config": None,
+        "module_type_configs": {
+            "coreai_models.primitives.macos.sdpa.SDPA": None,
+            "coreai_models.primitives.macos.rope.RoPE": None,
+            "coreai_models.primitives.macos.rms_norm.RMSNormPlusOne": None,
+        },
+        "module_name_configs": {
+            "embed_tokens": int8_module_config,
+            "lm_head": int8_module_config,
+        },
+    }
+
+
 @dataclass(frozen=True)
 class Qwen38ExportPlan:
     """Validated, allocation-free recipe for a native Qwen3.8 bundle export."""

@@ -139,7 +139,10 @@ public struct Qwen38GenerationState: Sendable {
         guard (0...checkpoint.draftTokens).contains(acceptedDraftTokens) else {
             throw Qwen38StateError.invalidAcceptedDraftCount
         }
-        guard acceptedDraftTokens != checkpoint.draftTokens else {
+        // A width-N target verify consumes [anchor, proposal0, … proposal(N-2)]. If only the
+        // final proposal is rejected, every input already written into target state is still
+        // part of the committed greedy prefix, so no restore is necessary.
+        guard acceptedDraftTokens + 1 < checkpoint.draftTokens else {
             return .retainVerifiedState
         }
         position = checkpoint.position

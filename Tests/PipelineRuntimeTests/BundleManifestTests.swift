@@ -152,11 +152,10 @@ final class BundleManifestTests: XCTestCase {
         XCTAssertNil(bundle.mtpAimodelURL)
     }
 
-    func testQwen38NativeBundleRequiresItsFourStateAndMTPContract() throws {
+    func testQwen38NativeBundleAcceptsDynamicMainTargetAndMTPSidecar() throws {
         let root = try makeTempDir().appendingPathComponent("qwen3.8-27b-caix-r1", isDirectory: true)
         let fm = FileManager.default
         try fm.createDirectory(at: root.appendingPathComponent("model.aimodel"), withIntermediateDirectories: true)
-        try fm.createDirectory(at: root.appendingPathComponent("decode.aimodel"), withIntermediateDirectories: true)
         try fm.createDirectory(at: root.appendingPathComponent("mtp.aimodel"), withIntermediateDirectories: true)
         let tokenizer = root.appendingPathComponent("tokenizer", isDirectory: true)
         try fm.createDirectory(at: tokenizer, withIntermediateDirectories: true)
@@ -171,7 +170,6 @@ final class BundleManifestTests: XCTestCase {
               "name": "qwen3.8-27b-caix-r1",
               "assets": {
                 "main": "model.aimodel",
-                "decode": "decode.aimodel",
                 "mtp": "mtp.aimodel"
               },
               "language": {
@@ -180,11 +178,7 @@ final class BundleManifestTests: XCTestCase {
                 "max_context_length": 262144,
                 "embedded_tokenizer": true,
                 "function_map": {
-                  "prefill": ["prefill"],
-                  "decode": ["decode"],
-                  "verify_1": ["verify_1"],
-                  "verify_2": ["verify_2"],
-                  "verify_3": ["verify_3"]
+                  "main": ["main"]
                 }
               },
               "qwen3_8": {

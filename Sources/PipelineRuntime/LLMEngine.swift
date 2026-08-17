@@ -55,6 +55,11 @@ extension SpecializationOptions {
 /// Not `Sendable`: an instance is created and driven entirely within a single task; the
 /// `ModelManager` confines each engine to one model handle and serialises generation.
 final class LLMEngine {
+    struct Qwen38FixedStateSnapshot {
+        let conv: [Float16]
+        let recurrent: [Float]
+        let position: Int
+    }
     private let prefillFunction: InferenceFunction
     private let decodeFunction: InferenceFunction
     let tokenizer: any Tokenizer
@@ -66,6 +71,7 @@ final class LLMEngine {
     private let convStateName: String?
     private let recurrentStateName: String?
     private let logitsName: String
+    private let hiddenStatesName: String?
     private enum CacheContract {
         case stateful
         case explicitOutputs
@@ -75,6 +81,7 @@ final class LLMEngine {
     private let inputIdsDescriptor: NDArrayDescriptor
     private let positionIdsDescriptor: NDArrayDescriptor
     private let logitsDescriptor: NDArrayDescriptor
+    private let hiddenStatesDescriptor: NDArrayDescriptor?
     private let keyCacheDescriptor: NDArrayDescriptor
     private let valueCacheDescriptor: NDArrayDescriptor
     private let keyCacheOutputDescriptor: NDArrayDescriptor
@@ -84,6 +91,7 @@ final class LLMEngine {
 
     /// Actual scalar types as declared by the compiled graph (never assumed).
     private let logitsScalarType: NDArray.ScalarType
+    private let hiddenStatesScalarType: NDArray.ScalarType?
     private let keyCacheScalarType: NDArray.ScalarType
     private let valueCacheScalarType: NDArray.ScalarType
     private let convStateScalarType: NDArray.ScalarType?
@@ -409,6 +417,9 @@ final class LLMEngine {
                 generated.count, decodeSeconds,
                 decodeSeconds > 0 ? Double(generated.count) / decodeSeconds : 0,
                 stopReason.rawValue))
+        if ProcessInfo.processInfo.environment["CAIX_DEBUG_TOKEN_IDS"] != nil {
+            FileHandle.standardError.write(Data("[coreai] token_ids=\(generated)\n".utf8))
+        }
 
         return CoreAIPipeline.Result(
             text: finalText,
@@ -485,6 +496,8 @@ final class LLMEngine {
         self.convStateName = hasQwen38State ? "convState" : nil
         self.recurrentStateName = hasQwen38State ? "recurrentState" : nil
         self.logitsName = Self.pick("logits", descriptor.outputNames, index: 0)
+        self.hiddenStatesName = descriptor.outputNames.contains("hidden_states")
+            ? "hidden_states" : nil
 
         guard case .ndArray(let inDesc) = descriptor.inputDescriptor(of: inputIdsName) else {
             throw CoreAIPipeline.RuntimeError.modelContract("input '\(inputIdsName)' is not an NDArray")
@@ -495,6 +508,23 @@ final class LLMEngine {
         }
         guard case .ndArray(let logitsDesc) = descriptor.outputDescriptor(of: logitsName) else {
             throw CoreAIPipeline.RuntimeError.modelContract("output '\(logitsName)' is not an NDArray")
+        }
+        let hiddenDesc: NDArrayDescriptor?
+        if let hiddenStatesName {
+            guard case .ndArray(let descriptor) = descriptor.outputDescriptor(of: hiddenStatesName)
+            else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "output '\(hiddenStatesName)' is not an NDArray")
+            }
+            guard descriptor.scalarType == .float16,
+                descriptor.shape.last == 5_120
+            else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "Qwen3.8 hidden_states must be FP16 [..., 5120]")
+            }
+            hiddenDesc = descriptor
+        } else {
+            hiddenDesc = nil
         }
         let keyDesc: NDArrayDescriptor
         let valueDesc: NDArrayDescriptor
@@ -530,6 +560,7 @@ final class LLMEngine {
         self.inputIdsDescriptor = inDesc
         self.positionIdsDescriptor = posDesc
         self.logitsDescriptor = logitsDesc
+        self.hiddenStatesDescriptor = hiddenDesc
         self.keyCacheDescriptor = keyDesc
         self.valueCacheDescriptor = valueDesc
         self.keyCacheOutputDescriptor = keyOutDesc
@@ -559,6 +590,7 @@ final class LLMEngine {
 
         // Dtype-aware: record the graph's declared scalar types instead of assuming Float16.
         self.logitsScalarType = logitsDesc.scalarType
+        self.hiddenStatesScalarType = hiddenDesc?.scalarType
         self.keyCacheScalarType = keyDesc.scalarType
         self.valueCacheScalarType = valueDesc.scalarType
 
@@ -701,7 +733,7 @@ final class LLMEngine {
     func step(tokens: [Int32]) async throws -> [Float] {
         let prof = ProcessInfo.processInfo.environment["COREAI_PROFILE"] != nil
         let t0 = prof ? Date() : Date.distantPast
-        let logits = try await runForward(tokens: tokens)
+        let logits = try await runForward(tokens: tokens).logits
         let t1 = prof ? Date() : Date.distantPast
         let row = lastRowFloat32(logits)
         if prof {
@@ -716,8 +748,62 @@ final class LLMEngine {
     /// batched forward over `[anchor, draft₁ … draftₖ]` yields the target's greedy prediction at
     /// each draft position in a single pass.
     func forwardAllRows(tokens: [Int32]) async throws -> [[Float]] {
-        let logits = try await runForward(tokens: tokens)
+        let logits = try await runForward(tokens: tokens).logits
         return allRowsFloat32(logits)
+    }
+
+    /// Target logits and post-norm hidden rows for Qwen3.8 MTP conditioning.
+    func forwardGreedyWithHidden(tokens: [Int32]) async throws
+        -> (tokens: [Int32], hidden: [[Float16]])
+    {
+        let outputs = try await runForward(tokens: tokens)
+        guard let hidden = outputs.hidden else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "Qwen3.8 MTP requires target output 'hidden_states'")
+        }
+        return (greedyRows(outputs.logits), allRowsFloat16(hidden, width: 5_120))
+    }
+
+    func forwardWithHidden(tokens: [Int32]) async throws
+        -> (lastLogits: [Float], hidden: [[Float16]])
+    {
+        let outputs = try await runForward(tokens: tokens)
+        guard let hidden = outputs.hidden else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "Qwen3.8 MTP requires target output 'hidden_states'")
+        }
+        return (lastRowFloat32(outputs.logits), allRowsFloat16(hidden, width: 5_120))
+    }
+
+    /// Deep host snapshot of only Qwen's fixed convolution/recurrent state. K/V remains in its
+    /// resident allocation; rejected suffix positions become unreachable when the cursor moves
+    /// back and are overwritten by replay.
+    func snapshotQwen38FixedState() throws -> Qwen38FixedStateSnapshot {
+        guard let convState, let recurrentState else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "fixed-state snapshot requested for a non-Qwen3.8 target")
+        }
+        return Qwen38FixedStateSnapshot(
+            conv: Self.copyContiguous(convState, as: Float16.self),
+            recurrent: Self.copyContiguous(recurrentState, as: Float.self),
+            position: processedTokenCount)
+    }
+
+    func restoreQwen38FixedState(_ snapshot: Qwen38FixedStateSnapshot) throws {
+        guard var conv = convState, var recurrent = recurrentState,
+            conv.shape.reduce(1, *) == snapshot.conv.count,
+            recurrent.shape.reduce(1, *) == snapshot.recurrent.count
+        else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "Qwen3.8 fixed-state snapshot geometry mismatch")
+        }
+        var convView = conv.mutableView(as: Float16.self)
+        convView.copyElements(fromContentsOf: snapshot.conv)
+        var recurrentView = recurrent.mutableView(as: Float.self)
+        recurrentView.copyElements(fromContentsOf: snapshot.recurrent)
+        convState = conv
+        recurrentState = recurrent
+        processedTokenCount = snapshot.position
     }
 
     /// Roll the committed KV history back to `count` tokens (discarding the positions written by
@@ -739,7 +825,9 @@ final class LLMEngine {
 
     /// One forward pass over the `n` new `tokens`, mutating the KV cache in place and returning
     /// the raw `logits` NDArray (`[1, n, vocab]`). Shared by ``step`` / ``forwardAllRows``.
-    private func runForward(tokens: [Int32]) async throws -> NDArray {
+    private func runForward(tokens: [Int32]) async throws
+        -> (logits: NDArray, hidden: NDArray?)
+    {
         let n = tokens.count
         precondition(n > 0, "forward requires >= 1 token")
 
@@ -768,31 +856,57 @@ final class LLMEngine {
         var logits = NDArray(
             descriptor: logitsDescriptor.resolvingDynamicDimensions([1, n, vocabSize]))
 
-        var outputViews = InferenceFunction.MutableViews()
-        outputViews.insert(&logits, for: logitsName)
-
         let activeFunction = tokens.count == 1 ? decodeFunction : prefillFunction
+        var capturedHidden: NDArray?
+
         switch cacheContract {
         case .stateful:
-            var states = InferenceFunction.MutableViews()
-            states.insert(&keyCache, for: keyCacheName)
-            states.insert(&valueCache, for: valueCacheName)
-            if let convStateName, let recurrentStateName,
-                var conv = convState, var recurrent = recurrentState
-            {
-                states.insert(&conv, for: convStateName)
-                states.insert(&recurrent, for: recurrentStateName)
-                _ = try await activeFunction.run(
-                    inputs: [inputIdsName: inputIds, positionIdsName: positionIds],
-                    states: consume states,
-                    outputViews: consume outputViews)
-                convState = conv
-                recurrentState = recurrent
+            if let hiddenStatesName, let hiddenStatesDescriptor {
+                var hidden = NDArray(
+                    descriptor: hiddenStatesDescriptor.resolvingDynamicDimensions([1, n, 5_120]))
+                var outputs = InferenceFunction.MutableViews()
+                outputs.insert(&logits, for: logitsName)
+                outputs.insert(&hidden, for: hiddenStatesName)
+                var states = InferenceFunction.MutableViews()
+                states.insert(&keyCache, for: keyCacheName)
+                states.insert(&valueCache, for: valueCacheName)
+                if let convStateName, let recurrentStateName,
+                    var conv = convState, var recurrent = recurrentState
+                {
+                    states.insert(&conv, for: convStateName)
+                    states.insert(&recurrent, for: recurrentStateName)
+                    _ = try await activeFunction.run(
+                        inputs: [inputIdsName: inputIds, positionIdsName: positionIds],
+                        states: consume states, outputViews: consume outputs)
+                    convState = conv
+                    recurrentState = recurrent
+                } else {
+                    _ = try await activeFunction.run(
+                        inputs: [inputIdsName: inputIds, positionIdsName: positionIds],
+                        states: consume states, outputViews: consume outputs)
+                }
+                capturedHidden = hidden
             } else {
-                _ = try await activeFunction.run(
-                    inputs: [inputIdsName: inputIds, positionIdsName: positionIds],
-                    states: consume states,
-                    outputViews: consume outputViews)
+                var outputs = InferenceFunction.MutableViews()
+                outputs.insert(&logits, for: logitsName)
+                var states = InferenceFunction.MutableViews()
+                states.insert(&keyCache, for: keyCacheName)
+                states.insert(&valueCache, for: valueCacheName)
+                if let convStateName, let recurrentStateName,
+                    var conv = convState, var recurrent = recurrentState
+                {
+                    states.insert(&conv, for: convStateName)
+                    states.insert(&recurrent, for: recurrentStateName)
+                    _ = try await activeFunction.run(
+                        inputs: [inputIdsName: inputIds, positionIdsName: positionIds],
+                        states: consume states, outputViews: consume outputs)
+                    convState = conv
+                    recurrentState = recurrent
+                } else {
+                    _ = try await activeFunction.run(
+                        inputs: [inputIdsName: inputIds, positionIdsName: positionIds],
+                        states: consume states, outputViews: consume outputs)
+                }
             }
         case .explicitOutputs:
             let keyShape = keyCacheOutputDescriptor.shape.enumerated()
@@ -803,22 +917,37 @@ final class LLMEngine {
                 descriptor: keyCacheOutputDescriptor.resolvingDynamicDimensions(keyShape))
             var nextValueCache = NDArray(
                 descriptor: valueCacheOutputDescriptor.resolvingDynamicDimensions(valueShape))
-            outputViews.insert(&nextKeyCache, for: keyCacheName)
-            outputViews.insert(&nextValueCache, for: valueCacheName)
-            _ = try await activeFunction.run(
-                inputs: [
-                    inputIdsName: inputIds,
-                    positionIdsName: positionIds,
-                    keyCacheName: keyCache,
-                    valueCacheName: valueCache
-                ],
-                outputViews: consume outputViews)
+            if let hiddenStatesName, let hiddenStatesDescriptor {
+                var hidden = NDArray(
+                    descriptor: hiddenStatesDescriptor.resolvingDynamicDimensions([1, n, 5_120]))
+                var outputs = InferenceFunction.MutableViews()
+                outputs.insert(&logits, for: logitsName)
+                outputs.insert(&hidden, for: hiddenStatesName)
+                outputs.insert(&nextKeyCache, for: keyCacheName)
+                outputs.insert(&nextValueCache, for: valueCacheName)
+                _ = try await activeFunction.run(
+                    inputs: [
+                        inputIdsName: inputIds, positionIdsName: positionIds,
+                        keyCacheName: keyCache, valueCacheName: valueCache,
+                    ], outputViews: consume outputs)
+                capturedHidden = hidden
+            } else {
+                var outputs = InferenceFunction.MutableViews()
+                outputs.insert(&logits, for: logitsName)
+                outputs.insert(&nextKeyCache, for: keyCacheName)
+                outputs.insert(&nextValueCache, for: valueCacheName)
+                _ = try await activeFunction.run(
+                    inputs: [
+                        inputIdsName: inputIds, positionIdsName: positionIds,
+                        keyCacheName: keyCache, valueCacheName: valueCache,
+                    ], outputViews: consume outputs)
+            }
             keyCache = nextKeyCache
             valueCache = nextValueCache
         }
 
         processedTokenCount += n
-        return logits
+        return (logits, capturedHidden)
     }
 
     // MARK: - NDArray helpers (dtype-aware; row-major, stride-aware reads)
@@ -881,6 +1010,29 @@ final class LLMEngine {
         }
     }
 
+    private func greedyRows(_ array: NDArray) -> [Int32] {
+        func argmax<T: BinaryFloatingPoint & BitwiseCopyable>(
+            _ type: T.Type
+        ) -> [Int32] {
+            array.view(as: type).withUnsafePointer { pointer, shape, strides in
+                let rows = shape[shape.count - 2]
+                let rowStride = strides[strides.count - 2]
+                let columnStride = strides[strides.count - 1]
+                return (0..<rows).map { row in
+                    let base = row * rowStride
+                    var best = 0
+                    var bestValue = pointer[base]
+                    for column in 1..<vocabSize {
+                        let value = pointer[base + column * columnStride]
+                        if value > bestValue { best = column; bestValue = value }
+                    }
+                    return Int32(best)
+                }
+            }
+        }
+        return logitsScalarType == .float32 ? argmax(Float.self) : argmax(Float16.self)
+    }
+
     private static func allRows<T: BinaryFloatingPoint & BitwiseCopyable>(
         _ array: NDArray, as _: T.Type, vocab: Int
     ) -> [[Float]] {
@@ -895,6 +1047,32 @@ final class LLMEngine {
                 for v in 0..<vocab { out[r][v] = Float(ptr[base + v * colStride]) }
             }
             return out
+        }
+    }
+
+    private func allRowsFloat16(_ array: NDArray, width: Int) -> [[Float16]] {
+        guard hiddenStatesScalarType == .float16 else {
+            preconditionFailure("Qwen3.8 hidden_states must be float16")
+        }
+        return array.view(as: Float16.self).withUnsafePointer { ptr, shape, strides in
+            let rows = shape[shape.count - 2]
+            let rowStride = strides[strides.count - 2]
+            let columnStride = strides[strides.count - 1]
+            return (0..<rows).map { row in
+                let base = row * rowStride
+                return (0..<width).map { ptr[base + $0 * columnStride] }
+            }
+        }
+    }
+
+    private static func copyContiguous<T: BitwiseCopyable>(
+        _ array: NDArray, as _: T.Type
+    ) -> [T] {
+        let elementCount = array.shape.reduce(1, *)
+        let view = array.view(as: T.self)
+        precondition(view.isContiguous, "Qwen3.8 fixed state must be contiguous")
+        return view.withUnsafePointer { pointer, _, _ in
+            return Array(UnsafeBufferPointer(start: pointer, count: elementCount))
         }
     }
 
