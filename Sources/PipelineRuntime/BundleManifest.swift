@@ -132,6 +132,73 @@ public struct BundleManifest: Codable, Sendable {
         }
     }
 
+    /// Native Core AI execution contract for Qwen3.8-27B. This remains deliberately model
+    /// specific: it describes the hybrid architecture's four persistent GPU states rather than
+    /// weakening the generic two-state LLM engine ABI.
+    public struct Qwen38: Codable, Sendable {
+        public struct StateLayout: Codable, Sendable {
+            public static let nativeStateNames = [
+                "keyCache", "valueCache", "convState", "recurrentState",
+            ]
+
+            public let names: [String]
+            public let fullAttentionLayers: Int
+            public let kvHeads: Int
+            public let headDimension: Int
+            public let convDType: String
+            public let recurrentDType: String
+
+            enum CodingKeys: String, CodingKey {
+                case names
+                case fullAttentionLayers = "full_attention_layers"
+                case kvHeads = "kv_heads"
+                case headDimension = "head_dimension"
+                case convDType = "conv_dtype"
+                case recurrentDType = "recurrent_dtype"
+            }
+
+            /// True only for the compact K/V plus fixed convolution/recurrent state layout
+            /// exported for the 64-layer Qwen3.8 hybrid. Order is part of the Core AI ABI.
+            public var isNativeQwen38Layout: Bool {
+                names == Self.nativeStateNames
+                    && fullAttentionLayers == 16
+                    && kvHeads == 4
+                    && headDimension == 256
+                    && convDType.lowercased() == "float16"
+                    && recurrentDType.lowercased() == "float32"
+            }
+        }
+
+        public struct MTP: Codable, Sendable {
+            /// Key in `assets` naming the native Qwen MTP sidecar `.aimodel`.
+            public let asset: String
+            public let maxDraftTokens: Int
+            public let requiresGreedy: Bool
+            /// Same-machine evidence written only after deterministic parity and throughput
+            /// validation. Absence means the sidecar is never selected automatically.
+            public let proof: Qwen38MTPProof?
+
+            enum CodingKeys: String, CodingKey {
+                case asset
+                case maxDraftTokens = "max_draft_tokens"
+                case requiresGreedy = "requires_greedy"
+                case proof
+            }
+        }
+
+        public let stateLayout: StateLayout
+        /// Optional until a sidecar has passed exact-greedy parity and the speed gate.
+        /// The four-state target remains a native Qwen3.8 bundle without speculative decoding.
+        public let mtp: MTP?
+        public let thinkingDefault: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case stateLayout = "state_layout"
+            case mtp
+            case thinkingDefault = "thinking_default"
+        }
+    }
+
     /// `source` block of `metadata.json` (provenance). Used to map an exported bundle back to its
     /// `models/registry.json` entry (by `hf_model_id` == registry `hf_repo`).
     public struct Source: Codable, Sendable {
@@ -150,6 +217,8 @@ public struct BundleManifest: Codable, Sendable {
     /// (vocab is then read from the `diffusion` block), so it's optional.
     public let language: Language?
     public let multimodal: Multimodal?
+    /// Optional Qwen3.8-27B hybrid/Core AI capability block.
+    public let qwen38: Qwen38?
     public let source: Source?
 
     public init(from decoder: Decoder) throws {
@@ -160,6 +229,7 @@ public struct BundleManifest: Codable, Sendable {
         self.assets = try c.decodeIfPresent(Assets.self, forKey: .assets) ?? Assets(byName: ["main": "."])
         self.language = try c.decodeIfPresent(Language.self, forKey: .language)
         self.multimodal = try c.decodeIfPresent(Multimodal.self, forKey: .multimodal)
+        self.qwen38 = try c.decodeIfPresent(Qwen38.self, forKey: .qwen38)
         self.source = try c.decodeIfPresent(Source.self, forKey: .source)
     }
 
@@ -170,6 +240,7 @@ public struct BundleManifest: Codable, Sendable {
         case assets
         case language
         case multimodal
+        case qwen38 = "qwen3_8"
         case source
     }
 }
@@ -181,9 +252,13 @@ public struct ResolvedBundle: Sendable {
     public let aimodelURL: URL
     /// Optional dedicated one-token decode `.aimodel` package directory.
     public let decodeAimodelURL: URL?
+    /// Dedicated native Qwen MTP sidecar. Present only for a validated Qwen3.8 bundle.
+    public let mtpAimodelURL: URL?
     /// The HuggingFace tokenizer directory (`tokenizer/` containing `tokenizer.json`).
     public let tokenizerDir: URL
     public let manifest: BundleManifest
+    /// Typed native Qwen3.8 execution contract. `nil` preserves legacy routing unchanged.
+    public let qwen38: BundleManifest.Qwen38?
     /// Minimum KV-cache capacity (tokens) this model requires, 0 when unconstrained. Hybrid
     /// `qwen3_5` models need >= `ssm_pos` positions to hold their packed recurrent state.
     /// Resolved from the bundle metadata (`language.min_kv_capacity`) or, failing that, the
@@ -201,6 +276,8 @@ public struct ResolvedBundle: Sendable {
     public var name: String { manifest.name }
     /// True when this bundle should route to the host-side diffusion denoise loop.
     public var isDiffusion: Bool { diffusion != nil }
+    /// True only when the bundle passed the strict Qwen3.8 hybrid/MTP validation below.
+    public var isQwen38Native: Bool { qwen38 != nil }
 
     /// Parse `metadata.json` under `path` and resolve the `.aimodel` + `tokenizer/` paths.
     public static func load(at path: String) throws -> ResolvedBundle {
@@ -254,6 +331,26 @@ public struct ResolvedBundle: Sendable {
             decodeAimodelURL = nil
         }
 
+        let mtpAimodelURL: URL?
+        if let qwen38 = manifest.qwen38 {
+            try Self.validateQwen38Contract(manifest: manifest, qwen38: qwen38)
+            if let mtp = qwen38.mtp {
+                guard let mtpRel = manifest.assets.path(for: mtp.asset) else {
+                    throw CoreAIPipeline.RuntimeError.invalidBundle(
+                        "Qwen3.8 metadata names missing MTP asset '\(mtp.asset)'")
+                }
+                let url = root.appendingPathComponent(mtpRel)
+                guard fm.fileExists(atPath: url.path) else {
+                    throw CoreAIPipeline.RuntimeError.invalidBundle("missing Qwen3.8 MTP asset \(mtpRel)")
+                }
+                mtpAimodelURL = url
+            } else {
+                mtpAimodelURL = nil
+            }
+        } else {
+            mtpAimodelURL = nil
+        }
+
         let tokenizerDir = root.appendingPathComponent("tokenizer")
         guard fm.fileExists(atPath: tokenizerDir.appendingPathComponent("tokenizer.json").path)
         else {
@@ -266,12 +363,55 @@ public struct ResolvedBundle: Sendable {
             root: root,
             aimodelURL: aimodelURL,
             decodeAimodelURL: decodeAimodelURL,
+            mtpAimodelURL: mtpAimodelURL,
             tokenizerDir: tokenizerDir,
             manifest: manifest,
+            qwen38: manifest.qwen38,
             minKVCapacity: Self.resolveMinKVCapacity(root: root, manifest: manifest),
             diffusion: diffusion,
             vocabSize: vocab,
             maxContextLength: context)
+    }
+
+    /// Keeps malformed or legacy packed-state Qwen3.5 artifacts out of the native Qwen3.8
+    /// route. A failure is preferable to silently allocating a 64 GiB all-layer cache or
+    /// serving a speculative sidecar under sampling semantics it cannot preserve.
+    private static func validateQwen38Contract(
+        manifest: BundleManifest,
+        qwen38: BundleManifest.Qwen38
+    ) throws {
+        guard manifest.kind == "llm" else {
+            throw CoreAIPipeline.RuntimeError.invalidBundle("Qwen3.8 bundle kind must be 'llm'")
+        }
+        guard qwen38.stateLayout.isNativeQwen38Layout else {
+            throw CoreAIPipeline.RuntimeError.invalidBundle(
+                "Qwen3.8 requires compact K/V plus fixed conv/recurrent four-state layout")
+        }
+        guard manifest.language?.maxContextLength == 262_144,
+            manifest.language?.vocabSize == 248_320
+        else {
+            throw CoreAIPipeline.RuntimeError.invalidBundle(
+                "Qwen3.8 metadata must declare the 248320-token vocabulary and 262144-token context")
+        }
+        let main = manifest.language?.functionMap?.name(for: "prefill")
+            ?? manifest.language?.functionMap?.name(for: "main")
+        guard main != nil else {
+            throw CoreAIPipeline.RuntimeError.invalidBundle(
+                "Qwen3.8 metadata is missing a main or prefill function")
+        }
+        if let mtp = qwen38.mtp {
+            guard mtp.maxDraftTokens == 3, mtp.requiresGreedy else {
+                throw CoreAIPipeline.RuntimeError.invalidBundle(
+                    "Qwen3.8 native MTP requires exactly three greedy draft positions")
+            }
+            let requiredFunctions = ["decode", "verify_1", "verify_2", "verify_3"]
+            guard requiredFunctions.allSatisfy({
+                manifest.language?.functionMap?.name(for: $0) != nil
+            }) else {
+                throw CoreAIPipeline.RuntimeError.invalidBundle(
+                    "Qwen3.8 MTP metadata is missing decode or verify_1/2/3 functions")
+            }
+        }
     }
 
     /// Resolve `(vocabSize, maxContextLength)` from the `language` block when present (LLM

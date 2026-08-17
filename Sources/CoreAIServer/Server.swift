@@ -424,7 +424,7 @@ final class ServerRuntime: Sendable {
         let payload: [String: JSONValue] = [
             "compression": .string("none,4bit,8bit"),
             "compute_precision": .string("float16,bfloat16,float32"),
-            "generation": .string("max_tokens,temperature,top_p,top_k,seed,stop,system_prompt,kv_capacity,apply_chat_template"),
+            "generation": .string("max_tokens,temperature,top_p,top_k,seed,stop,system_prompt,kv_capacity,apply_chat_template,acceleration(auto|autoregressive|mtp)"),
             "context_default": .int(4096),
             "note": .string("Paste a HuggingFace repo; authored architectures convert + load, new architectures are flagged with the Core AI authoring work required."),
         ]
@@ -1844,6 +1844,7 @@ final class ServerRuntime: Sendable {
         CoreAIPipeline.Options(
             maxTokens: gen.maxTokens,
             temperature: gen.temperature,
+            acceleration: gen.acceleration,
             topK: gen.topK,
             topP: gen.topP,
             applyChatTemplate: gen.applyChatTemplate,

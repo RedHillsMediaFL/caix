@@ -31,7 +31,7 @@ if enableFullCoreAIRuntime {
     packageDependencies.append(
         .package(
             url: "https://github.com/apple/coreai-models.git",
-            branch: "main")
+            revision: "c21ec9e75abf1e32c49d18da1aad9a03a7630ddd")
     )
     runtimeDependencies.append(.product(name: "CoreAILM", package: "coreai-models"))
 }

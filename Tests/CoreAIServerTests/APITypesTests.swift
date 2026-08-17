@@ -126,6 +126,19 @@ final class APITypesTests: XCTestCase {
             0.7)
     }
 
+    func testOpenAIAccelerationPreferenceMapsToNativePipelineOptions() throws {
+        let request = try JSONDecoder().decode(
+            OpenAIChatRequest.self,
+            from: Data(
+                #"{"model":"local","messages":[{"role":"user","content":"Hi"}],"acceleration":"mtp"}"#.utf8))
+
+        let generation = request.toGeneration()
+        let options = ServerRuntime.options(from: generation)
+
+        XCTAssertEqual(generation.acceleration, .mtp)
+        XCTAssertEqual(options.acceleration, .mtp)
+    }
+
     func testOpenAIRichToolLoopPayloadPreservesReasoningCallsAndToolResponse() throws {
         let data = Data(
             """

@@ -61,7 +61,9 @@ enum PipelinedLLM {
             vocabSize: bundle.vocabSize,
             maxContextLength: bundle.maxContextLength,
             serializedModel: [bundle.modelAssetPath],
-            function: bundle.language.functionMap?.name(for: "main") ?? "main")
+            function: bundle.language.functionMap?.name(for: "prefill")
+                ?? bundle.language.functionMap?.name(for: "main")
+                ?? "main")
         let configData = try JSONEncoder().encode(config)
 
         async let engineResult = EngineFactory.createEngine(
@@ -238,7 +240,9 @@ enum PipelinedLLM {
             vocabSize: bundle.vocabSize,
             maxContextLength: bundle.maxContextLength,
             serializedModel: [bundle.modelAssetPath],
-            function: bundle.language.functionMap?.name(for: "main") ?? "main")
+            function: bundle.language.functionMap?.name(for: "prefill")
+                ?? bundle.language.functionMap?.name(for: "main")
+                ?? "main")
         let configData = try JSONEncoder().encode(config)
 
         // EngineFactory auto-detects normal text generation to the fast pipelined engine.

@@ -1,4 +1,5 @@
 import Foundation
+import PipelineRuntime
 
 // OpenAI- and Anthropic-compatible API schemas + mapping to an internal generation request.
 // Pure Foundation; the HTTP layer (Hummingbird) and ModelManager wiring are added once the
@@ -107,6 +108,9 @@ public struct GenerationRequest: Sendable {
     public var stream: Bool
     public var applyChatTemplate: Bool
     public var kvCapacity: Int?
+    /// Native Qwen3.8 decode preference. The runtime fails closed for forced MTP unless its
+    /// artifact contains the required parity and same-machine speed evidence.
+    public var acceleration: Qwen38AccelerationRequest
     /// Optional RNG seed for reproducible temperature sampling.
     public var seed: UInt64?
     /// Tool/function specs (already normalized to OpenAI `{type:"function", function:{…}}` form)
@@ -120,13 +124,14 @@ public struct GenerationRequest: Sendable {
                 temperatureWasExplicit: Bool = true,
                 topP: Double? = nil, topK: Int? = nil, stop: [String] = [], stream: Bool = false,
                 applyChatTemplate: Bool = true, kvCapacity: Int? = nil, seed: UInt64? = nil,
+                acceleration: Qwen38AccelerationRequest = .auto,
                 tools: [JSONAny]? = nil, responseFormat: OpenAIResponseFormat? = nil,
                 additionalContext: [String: JSONAny]? = nil) {
         self.model = model; self.messages = messages; self.maxTokens = maxTokens
         self.temperature = temperature; self.temperatureWasExplicit = temperatureWasExplicit
         self.topP = topP; self.topK = topK; self.stop = stop
         self.stream = stream; self.applyChatTemplate = applyChatTemplate; self.kvCapacity = kvCapacity
-        self.seed = seed; self.tools = tools; self.responseFormat = responseFormat
+        self.seed = seed; self.acceleration = acceleration; self.tools = tools; self.responseFormat = responseFormat
         self.additionalContext = additionalContext
     }
 
@@ -249,6 +254,8 @@ public struct OpenAIChatRequest: Codable, Sendable {
     public var top_k: Int?
     public var top_p: Double?
     public var kv_capacity: Int?
+    /// caix extension: `auto`, `autoregressive`, or `mtp`.
+    public var acceleration: Qwen38AccelerationRequest?
     public var apply_chat_template: Bool?
     public var stop: StringOrArray?
     public var stream: Bool?
@@ -267,7 +274,8 @@ public struct OpenAIChatRequest: Codable, Sendable {
                           topP: top_p, topK: top_k,
                           stop: stop?.values ?? [], stream: stream ?? false,
                           applyChatTemplate: apply_chat_template ?? true, kvCapacity: kv_capacity,
-                          seed: seed.map { UInt64(bitPattern: Int64($0)) }, tools: tools,
+                          seed: seed.map { UInt64(bitPattern: Int64($0)) }, acceleration: acceleration ?? .auto,
+                          tools: tools,
                           responseFormat: response_format,
                           additionalContext: chat_template_context)
     }
