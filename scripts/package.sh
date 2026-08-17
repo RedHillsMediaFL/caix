@@ -7,6 +7,25 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="${1:-0.2.13-beta}"
 ARCH="$(uname -m)"
 NAME="caix-${VERSION}-macos-${ARCH}"
+DEFAULT_TMPDIR="$DIR/.tmp/coreai-tmp"
+is_system_tmpdir() {
+  case "${1%/}" in
+    /tmp|/private/tmp|/var/folders/*|/private/var/folders/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+if [[ -z "${TMPDIR:-}" ]] || is_system_tmpdir "$TMPDIR"; then
+  mkdir -p "$DEFAULT_TMPDIR"
+  export TMPDIR="$DEFAULT_TMPDIR"
+fi
+mkdir -p "${TMPDIR%/}"
+STAGE_ROOT=""
+cleanup() {
+  if [[ -n "$STAGE_ROOT" ]]; then
+    rm -rf "$STAGE_ROOT"
+  fi
+}
+trap cleanup EXIT
 
 cd "$DIR"
 "$DIR/scripts/check-release-version.sh" "$VERSION"
@@ -25,7 +44,8 @@ fi
   --ready \
   --manifest "$DIR/docs/examples/cluster-stage-manifest.json"
 
-STAGE="$(mktemp -d)/$NAME"
+STAGE_ROOT="$(mktemp -d "${TMPDIR%/}/caix-package.XXXXXX")"
+STAGE="$STAGE_ROOT/$NAME"
 mkdir -p "$STAGE/bin" "$STAGE/models/exports" "$STAGE/scripts" "$STAGE/docs/examples" "$STAGE/Formula"
 cp .build/release/caix          "$STAGE/bin/caix"
 cp caix README.md LICENSE       "$STAGE/" 2>/dev/null || true
@@ -44,10 +64,14 @@ printf "%s\n" "$VERSION" > "$STAGE/VERSION"
 
 mkdir -p "$DIR/dist"
 ( cd "$(dirname "$STAGE")" && tar -czf "$DIR/dist/$NAME.tar.gz" "$NAME" )
+shasum -a 256 "$DIR/dist/$NAME.tar.gz" > "$DIR/dist/$NAME.tar.gz.sha256"
 mkdir -p "$DIR/dist/Formula"
 cp scripts/prepare-local-brew-tap.sh "$DIR/dist/"
 cp Formula/caix.rb "$DIR/dist/Formula/"
 SIZE="$(du -h "$DIR/dist/$NAME.tar.gz" | awk '{print $1}')"
+SHA256="$(awk '{print $1}' "$DIR/dist/$NAME.tar.gz.sha256")"
 echo "✓ dist/$NAME.tar.gz  ($SIZE)"
+echo "  sha256: $SHA256"
+echo "  digest: dist/$NAME.tar.gz.sha256"
 echo "  contains a prebuilt binary — recipients run ./caix serve with no build."
 echo "  local tap helper: dist/prepare-local-brew-tap.sh"

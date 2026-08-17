@@ -2414,6 +2414,14 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertEqual(shape, [1, 32, 256, 128])
     }
 
+    func testCoreAIKVCacheShapeAcceptsFixedRecurrentState() throws {
+        let shape = try DistributedCoreAIStageKVCacheShape.resolved(
+            [3, 1, 4, 512, 256],
+            capacity: 512)
+
+        XCTAssertEqual(shape, [3, 1, 4, 512, 256])
+    }
+
     func testCoreAIKVCacheShapeRejectsInvalidCapacity() {
         XCTAssertThrowsError(
             try DistributedCoreAIStageKVCacheShape.resolved([1, 32, -1, 128], capacity: 0)
@@ -2435,14 +2443,14 @@ final class DistributedRuntimeTests: XCTestCase {
         }
     }
 
-    func testCoreAIKVCacheShapeRejectsMissingDynamicCapacityDimension() {
+    func testCoreAIKVCacheShapeRejectsInvalidFixedShape() {
         XCTAssertThrowsError(
-            try DistributedCoreAIStageKVCacheShape.resolved([1, 32, 256, 128], capacity: 256)
+            try DistributedCoreAIStageKVCacheShape.resolved([1, 32, 0, 128], capacity: 256)
         ) { error in
             XCTAssertEqual(
                 error as? DistributedStageExecutionError,
                 .invalidControlFrame(
-                    "KV cache descriptor shape [1, 32, 256, 128] must have exactly one dynamic capacity dimension"))
+                    "KV cache descriptor shape [1, 32, 0, 128] resolves to invalid fixed shape"))
         }
     }
 
@@ -2850,6 +2858,61 @@ final class DistributedRuntimeTests: XCTestCase {
         ])
     }
 
+    func testStageManifestLoadsQwen35SplitStateGroups() throws {
+        let json =
+            """
+            {
+              "schema": "\(DistributedStageManifest.currentSchema)",
+              "model": "qwythos-9b-caix",
+              "total_layer_count": 32,
+              "position_mode": "full_prefix",
+              "cache_groups": {
+                "strategy": "qwen3_5_split_full_recurrent_v0",
+                "prefill_chunk": 128,
+                "groups": {
+                  "recurrent": {
+                    "state_names": ["recurrent_keyCache", "recurrent_valueCache"],
+                    "capacity": 1024
+                  },
+                  "full": {
+                    "state_names": ["full_keyCache", "full_valueCache"],
+                    "capacity": 1048576
+                  }
+                }
+              },
+              "boundary": {
+                "hidden_state": {
+                  "name": "hidden_states",
+                  "shape": [1, -1, 4096],
+                  "scalar_type": "float16"
+                }
+              },
+              "stages": [
+                {"id":"embed","role":"embeddings","layers":"embeddings","bundle":"stages/embed.aimodel","memory_gb":1.0},
+                {"id":"layers0","role":"transformer_layers","layers":[0,16],"bundle":"stages/layers0.aimodel","memory_gb":2.0},
+                {"id":"layers1","role":"transformer_layers","layers":[16,32],"bundle":"stages/layers1.aimodel","memory_gb":2.0},
+                {"id":"head","role":"final_norm_head","layers":"norm+lm_head","bundle":"stages/head.aimodel","memory_gb":1.0}
+              ]
+            }
+            """
+
+        let manifest = try DistributedStageManifest.decode(from: Data(json.utf8))
+        let cacheGroups = try XCTUnwrap(manifest.cacheGroups)
+
+        XCTAssertEqual(cacheGroups.strategy, "qwen3_5_split_full_recurrent_v0")
+        XCTAssertEqual(cacheGroups.prefillChunk, 128)
+        XCTAssertEqual(cacheGroups.capacities["recurrent"], 1024)
+        XCTAssertEqual(cacheGroups.capacities["full"], 1_048_576)
+        XCTAssertNil(cacheGroups.groups["recurrent"]?.slidingWindow)
+        XCTAssertEqual(cacheGroups.groups["recurrent"]?.stateNames, [
+            "recurrent_keyCache", "recurrent_valueCache",
+        ])
+        XCTAssertEqual(cacheGroups.groups["full"]?.stateNames, [
+            "full_keyCache", "full_valueCache",
+        ])
+        XCTAssertNoThrow(try manifest.runtimePlan.validate())
+    }
+
     func testStageManifestRejectsSplitCacheGroupTooSmallForPrefillChunk() {
         let json =
             """
@@ -2989,6 +3052,72 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertEqual(
             context.resolvedDecodeAssetURL?.path,
             "/tmp/caix-manifest/stages/00-embed-decode.aimodel")
+    }
+
+    func testStageManifestSupportsSingleAssetDecodeFunction() throws {
+        let json =
+            """
+            {
+              "schema": "\(DistributedStageManifest.currentSchema)",
+              "model": "qwen3-0.6b-coreai-single-asset",
+              "total_layer_count": 28,
+              "position_mode": "full_prefix",
+              "boundary": {
+                "hidden_state": {
+                  "name": "hidden_states",
+                  "shape": [1, -1, 1024],
+                  "scalar_type": "float16"
+                }
+              },
+              "stages": [
+                {
+                  "id": "embed",
+                  "role": "embeddings",
+                  "layers": "embeddings",
+                  "bundle": "stages/00-embed.aimodel",
+                  "function_map": {"main": ["main"], "decode": ["decode"]},
+                  "vocab_size": 151936,
+                  "memory_gb": 1.0
+                },
+                {
+                  "id": "layers-00-28",
+                  "role": "transformer_layers",
+                  "layers": [0, 28],
+                  "bundle": "stages/01-layers.aimodel",
+                  "function_map": {"main": ["main"], "decode": ["decode"]},
+                  "memory_gb": 2.0
+                },
+                {
+                  "id": "head",
+                  "role": "final_norm_head",
+                  "layers": "norm+lm_head",
+                  "bundle": "stages/02-head.aimodel",
+                  "function_map": {"main": ["main"], "decode": ["decode"]},
+                  "vocab_size": 151936,
+                  "memory_gb": 1.0
+                }
+              ]
+            }
+            """
+        let baseURL = URL(fileURLWithPath: "/tmp/caix-manifest", isDirectory: true)
+        let manifest = try DistributedStageManifest.decode(
+            from: Data(json.utf8),
+            baseURL: baseURL)
+
+        let embed = try XCTUnwrap(manifest.stages.first)
+        XCTAssertEqual(embed.functionMap?.mainFunctionName, "main")
+        XCTAssertEqual(embed.functionMap?.decodeFunctionName, "decode")
+        XCTAssertNil(embed.decodeAssetName)
+        XCTAssertNil(embed.resolvedDecodeAssetPath)
+
+        let descriptor = try XCTUnwrap(manifest.runtimePlan.stage(id: "embed"))
+        XCTAssertEqual(descriptor.functionMap?.decodeFunctionName, "decode")
+        XCTAssertNil(descriptor.decodeAssetName)
+
+        let context = try XCTUnwrap(makeContext(manifest: manifest, stage: embed))
+        XCTAssertEqual(context.mainFunctionName, "main")
+        XCTAssertEqual(context.decodeFunctionName, "decode")
+        XCTAssertNil(context.resolvedDecodeAssetURL)
     }
 
     func testStageManifestLoadsPrefillExtraInputs() throws {
@@ -3217,6 +3346,37 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertEqual(handles[1].inputs.first?.hiddenState?.metadata.sourceStageID, "embed")
         XCTAssertEqual(handles[2].inputs.first?.hiddenState?.metadata.sourceStageID, "layers-0-16")
         XCTAssertEqual(handles[3].inputs.first?.hiddenState?.metadata.sourceStageID, "layers-16-32")
+    }
+
+    func testSameMachinePipelineCanSkipFinalHeadForIntermediatePrefillChunk() async throws {
+        let plan = makePlan(
+            boundaryTensor: DistributedBoundaryTensorSpec(
+                name: "hidden_states", shape: [1, -1, 2], scalarType: .float16))
+        let handles = makeFakeHandles(for: plan)
+        let pipeline = try DistributedSameMachinePipeline(plan: plan, stages: handles)
+
+        try await pipeline.allocate(requestID: "req-prefill-skip-head", kvCapacity: 16)
+        let intermediate = try await pipeline.forward(
+            requestID: "req-prefill-skip-head",
+            stepIndex: 0,
+            positionRange: DistributedSequenceRange(lowerBound: 0, upperBound: 2),
+            tokenIDs: [1, 2],
+            emitToken: false)
+
+        XCTAssertNil(intermediate.tokenID)
+        XCTAssertEqual(intermediate.hiddenState?.metadata.sourceStageID, "layers-16-32")
+        XCTAssertEqual(intermediate.hiddenState?.metadata.destinationStageID, "final")
+        XCTAssertEqual(handles[3].inputs.count, 0)
+
+        let final = try await pipeline.forward(
+            requestID: "req-prefill-skip-head",
+            stepIndex: 1,
+            positionRange: DistributedSequenceRange(lowerBound: 2, upperBound: 3),
+            tokenIDs: [3])
+
+        XCTAssertEqual(final.tokenID, 42)
+        XCTAssertEqual(handles[3].inputs.count, 1)
+        XCTAssertEqual(handles[3].inputs.first?.positionRange, DistributedSequenceRange(lowerBound: 2, upperBound: 3))
     }
 
     func testSameMachinePipelineForwardsTokenIDsOnlyToCapableStages() async throws {
@@ -3788,6 +3948,42 @@ final class DistributedRuntimeTests: XCTestCase {
         XCTAssertEqual(handles.map(\.allocatedKVCaps), [[35], [35], [35], [35]])
     }
 
+    func testStagedEngineAppliesSplitStateCacheCapacities() async throws {
+        let plan = makePlan()
+        let handles = makeFakeHandles(for: plan)
+        let pipeline = try DistributedSameMachinePipeline(plan: plan, stages: handles)
+        let cacheGroups = DistributedStageCacheGroups(
+            strategy: "qwen3_5_split_full_recurrent_v0",
+            groups: [
+                "recurrent": DistributedStageCacheGroup(
+                    stateNames: ["recurrent_keyCache", "recurrent_valueCache"],
+                    capacity: 512),
+                "full": DistributedStageCacheGroup(
+                    stateNames: ["full_keyCache", "full_valueCache"],
+                    capacity: 1_048_576),
+            ])
+        let engine = try DistributedStagedEngine(
+            pipeline: pipeline,
+            maxContextLength: 1_048_576,
+            cacheGroups: cacheGroups)
+
+        let result = try await engine.generate(
+            promptTokens: [10, 11],
+            options: DistributedStagedGenerationOptions(maxTokens: 3, kvCapacity: 2048),
+            requestID: "req-split-state")
+
+        XCTAssertEqual(result.kvCapacity, 2048)
+        XCTAssertEqual(handles.map(\.allocatedKVCaps), [[2048], [2048], [2048], [2048]])
+        XCTAssertEqual(
+            handles.map(\.allocatedCacheCapacities),
+            [
+                [["full": 2048, "recurrent": 512]],
+                [["full": 2048, "recurrent": 512]],
+                [["full": 2048, "recurrent": 512]],
+                [["full": 2048, "recurrent": 512]],
+            ])
+    }
+
     func testStagedEngineRejectsNegativeMinimumKVCapacity() throws {
         let plan = makePlan()
         let handles = makeFakeHandles(for: plan)
@@ -4040,6 +4236,7 @@ private final class FakeDistributedStageHandle: DistributedStageHandle, @uncheck
     let acceptsTokenIDs: Bool
     var allocatedRequests: [String] = []
     var allocatedKVCaps: [Int] = []
+    var allocatedCacheCapacities: [[String: Int]?] = []
     var inputs: [DistributedStageForwardInput] = []
     var resetRequests: [String] = []
     var freeRequests: [String] = []
@@ -4058,6 +4255,7 @@ private final class FakeDistributedStageHandle: DistributedStageHandle, @uncheck
     func allocate(_ allocation: DistributedStageAllocation) async throws {
         allocatedRequests.append(allocation.requestID)
         allocatedKVCaps.append(allocation.kvCapacity)
+        allocatedCacheCapacities.append(allocation.cacheCapacities)
     }
 
     func forward(_ input: DistributedStageForwardInput) async throws -> DistributedStageForwardOutput {

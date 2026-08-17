@@ -18,4 +18,26 @@ final class MachineStatsTests: XCTestCase {
         XCTAssertGreaterThan(s.memoryUsedFraction, 0)
         XCTAssertLessThanOrEqual(s.memoryUsedFraction, 1.0)
     }
+
+    func testNativeMemorySafetySnapshotHasSaneValues() {
+        let snapshot = MachineStats.memorySafetySnapshot()
+
+        XCTAssertGreaterThan(snapshot.totalRAMBytes, 0)
+        XCTAssertLessThanOrEqual(snapshot.usedRAMBytes, snapshot.totalRAMBytes)
+        XCTAssertEqual(
+            snapshot.availableRAMBytes,
+            snapshot.totalRAMBytes - snapshot.usedRAMBytes)
+        XCTAssertGreaterThan(snapshot.allocationCapacityBytes, 0)
+        XCTAssertLessThanOrEqual(snapshot.allocationCapacityBytes, snapshot.totalRAMBytes)
+        XCTAssertGreaterThan(snapshot.processPhysicalFootprintBytes, 0)
+        XCTAssertNotEqual(snapshot.pressure, .unknown)
+    }
+
+    func testMemoryPressureLevelMapsDarwinBitValues() {
+        XCTAssertEqual(MachineMemoryPressure(rawDarwinValue: 1), .green)
+        XCTAssertEqual(MachineMemoryPressure(rawDarwinValue: 2), .yellow)
+        XCTAssertEqual(MachineMemoryPressure(rawDarwinValue: 4), .red)
+        XCTAssertEqual(MachineMemoryPressure(rawDarwinValue: nil), .unknown)
+        XCTAssertEqual(MachineMemoryPressure(rawDarwinValue: 99), .unknown)
+    }
 }

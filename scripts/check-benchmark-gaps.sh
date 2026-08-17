@@ -80,6 +80,9 @@ raw_dir_has_git_changes() {
   local raw_dir="$1"
   local rel
   rel="$(repo_relative_path "$raw_dir")" || return 1
+  if git -C "$REPO_DIR" check-ignore -q -- "$rel"; then
+    return 1
+  fi
   [[ -n "$(git -C "$REPO_DIR" status --porcelain -- "$rel")" ]]
 }
 
@@ -89,8 +92,12 @@ tracked_or_local_metadata() {
   case "$raw_abs/" in
     "$REPO_DIR"/*)
       raw_rel="${raw_abs#$REPO_DIR/}"
-      git -C "$REPO_DIR" ls-files -- "$raw_rel" \
-        | awk -v repo="$REPO_DIR" '/\/metadata[.]txt$/ { print repo "/" $0 }'
+      if git -C "$REPO_DIR" check-ignore -q -- "$raw_rel"; then
+        find "$RAW_DIR" -type f -name metadata.txt -print
+      else
+        git -C "$REPO_DIR" ls-files -- "$raw_rel" \
+          | awk -v repo="$REPO_DIR" '/\/metadata[.]txt$/ { print repo "/" $0 }'
+      fi
       ;;
     *)
       find "$RAW_DIR" -type f -name metadata.txt -print

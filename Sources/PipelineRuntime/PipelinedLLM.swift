@@ -4,7 +4,7 @@
 // (blocking `function.run()` plus host-side sampling). Apple's `EngineFactory` can select the
 // pipelined engine for compatible dynamic-shape bundles, so this path drives generation through
 // that engine while preserving caix prompt handling and result accounting.
-#if COREAI_RUNTIME
+#if COREAI_RUNTIME && !COREAI_DIRECT_RUNTIME
 
 import CoreAI
 import CoreAILanguageModels
@@ -61,7 +61,9 @@ enum PipelinedLLM {
             vocabSize: bundle.vocabSize,
             maxContextLength: bundle.maxContextLength,
             serializedModel: [bundle.modelAssetPath],
-            function: bundle.language.functionMap?.name(for: "main") ?? "main")
+            function: bundle.language.functionMap?.name(for: "prefill")
+                ?? bundle.language.functionMap?.name(for: "main")
+                ?? "main")
         let configData = try JSONEncoder().encode(config)
 
         async let engineResult = EngineFactory.createEngine(
@@ -238,7 +240,9 @@ enum PipelinedLLM {
             vocabSize: bundle.vocabSize,
             maxContextLength: bundle.maxContextLength,
             serializedModel: [bundle.modelAssetPath],
-            function: bundle.language.functionMap?.name(for: "main") ?? "main")
+            function: bundle.language.functionMap?.name(for: "prefill")
+                ?? bundle.language.functionMap?.name(for: "main")
+                ?? "main")
         let configData = try JSONEncoder().encode(config)
 
         // EngineFactory auto-detects normal text generation to the fast pipelined engine.
@@ -360,7 +364,7 @@ enum PipelinedLLM {
 
         let maxTokens = max(0, options.maxTokens)
         let stopSequences = options.stopSequences.filter { !$0.isEmpty }
-        let stream = try VanillaDecodingStrategy().decode(
+        let stream = try await VanillaDecodingStrategy().decode(
             from: input,
             tokenizer: tokenizer,
             inferenceEngine: inferenceEngine,
@@ -578,7 +582,7 @@ enum PipelinedLLM {
         let stopSequences = StopSequences(
             for: tokenizer,
             additionalSequences: customStops)
-        let stream = try inferenceEngine.generate(
+        let stream = try await inferenceEngine.generate(
             with: inputTokens,
             samplingConfiguration: samplingConfiguration,
             inferenceOptions: InferenceOptions(maxTokens: maxTokens))

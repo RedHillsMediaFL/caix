@@ -584,6 +584,18 @@ public struct DistributedStageCacheGroups: Codable, Hashable, Sendable {
         Dictionary(uniqueKeysWithValues: groups.map { ($0.key, $0.value.capacity) })
     }
 
+    public func capacities(forKVCapacity kvCapacity: Int) -> [String: Int] {
+        Dictionary(uniqueKeysWithValues: groups.map { name, group in
+            let capacity: Int
+            if group.usesFixedAllocation(groupName: name, strategy: strategy) {
+                capacity = group.capacity
+            } else {
+                capacity = min(group.capacity, kvCapacity)
+            }
+            return (name, capacity)
+        })
+    }
+
     public var validationErrorMessage: String? {
         if let strategy,
             strategy.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -665,6 +677,18 @@ public struct DistributedStageCacheGroup: Codable, Hashable, Sendable {
         }
         return nil
     }
+
+    fileprivate func usesFixedAllocation(groupName: String, strategy: String?) -> Bool {
+        if slidingWindow != nil { return true }
+        let normalizedName = groupName.lowercased()
+        if normalizedName.contains("recurrent") { return true }
+        if strategy?.lowercased().contains("recurrent") == true,
+           normalizedName != "full"
+        {
+            return true
+        }
+        return false
+    }
 }
 
 /// Scalar types allowed in declared stage function inputs and outputs.
@@ -712,6 +736,11 @@ public enum DistributedStageIOTensorName: String, Codable, CaseIterable, Sendabl
     case hiddenStates = "hidden_states"
     case blockIDsQ = "block_ids_q"
     case blockIDsKV = "block_ids_kv"
+    case kFull = "k_full"
+    case vFull = "v_full"
+    case kSliding = "k_sliding"
+    case vSliding = "v_sliding"
+    case hidden
     case logits
 }
 
@@ -779,7 +808,8 @@ public struct DistributedStageIOContract: Codable, Hashable, Sendable {
     public func validate(
         for stage: DistributedStageDescriptor,
         boundaryTensor: DistributedBoundaryTensorSpec?,
-        vocabSize: Int? = nil
+        vocabSize: Int? = nil,
+        eagleTarget: DistributedEagleTargetContract? = nil
     ) throws {
         guard !Self.trimmed(functionName).isEmpty else {
             throw Self.error(stageID: stage.id, "function_name is empty")
@@ -829,7 +859,6 @@ public struct DistributedStageIOContract: Codable, Hashable, Sendable {
                 kind: "output",
                 stageID: stage.id,
                 boundaryTensor: boundaryTensor)
-
         case .transformerLayers:
             var allowedInputs = Set([
                 DistributedStageIOTensorName.hiddenStates.rawValue,
@@ -847,8 +876,11 @@ public struct DistributedStageIOContract: Codable, Hashable, Sendable {
                 in: inputByName,
                 kind: "input",
                 stage: stage)
+            let isEagleTarget = eagleTarget?.producesArtifacts(for: stage.id) == true
             try Self.requireOnlyTensors(
-                [.hiddenStates],
+                isEagleTarget
+                    ? [.hiddenStates, .kFull, .vFull, .kSliding, .vSliding]
+                    : [.hiddenStates],
                 in: outputByName,
                 kind: "output",
                 stage: stage)
@@ -889,6 +921,12 @@ public struct DistributedStageIOContract: Codable, Hashable, Sendable {
                 kind: "output",
                 stageID: stage.id,
                 boundaryTensor: boundaryTensor)
+            if isEagleTarget {
+                try Self.validateEagleTargetOutputs(
+                    outputByName,
+                    hiddenOutput: hiddenOutput,
+                    stageID: stage.id)
+            }
             if let rope = stage.rope {
                 let cosInput = try Self.requireTensor(
                     rope.cosInputName,
@@ -910,8 +948,9 @@ public struct DistributedStageIOContract: Codable, Hashable, Sendable {
                 in: inputByName,
                 kind: "input",
                 stage: stage)
+            let producesFinalHidden = eagleTarget?.producesFinalHidden(for: stage.id) == true
             try Self.requireOnlyTensors(
-                [.logits],
+                producesFinalHidden ? [.logits, .hidden] : [.logits],
                 in: outputByName,
                 kind: "output",
                 stage: stage)
@@ -934,6 +973,23 @@ public struct DistributedStageIOContract: Codable, Hashable, Sendable {
                 stageID: stage.id,
                 boundaryTensor: boundaryTensor)
             try Self.validateLogitsTensor(logits, stageID: stage.id, vocabSize: vocabSize)
+            if producesFinalHidden {
+                let finalHidden = try Self.requireTensor(
+                    .hidden,
+                    in: outputByName,
+                    kind: "output",
+                    stageID: stage.id)
+                guard finalHidden.scalarType == .float16 else {
+                    throw Self.error(
+                        stageID: stage.id,
+                        "output hidden scalar_type must be float16 for EAGLE target")
+                }
+                try Self.validateHiddenStateTensor(
+                    finalHidden,
+                    kind: "output",
+                    stageID: stage.id,
+                    boundaryTensor: boundaryTensor)
+            }
         }
     }
 
@@ -1016,6 +1072,74 @@ public struct DistributedStageIOContract: Codable, Hashable, Sendable {
             throw error(
                 stageID: stageID,
                 "output logits shape \(tensor.shape) does not match \(expectedShape)")
+        }
+    }
+
+    private static func validateEagleTargetOutputs(
+        _ outputByName: [String: DistributedStageIOTensor],
+        hiddenOutput: DistributedStageIOTensor,
+        stageID: String
+    ) throws {
+        guard hiddenOutput.scalarType == .float16 else {
+            throw error(
+                stageID: stageID,
+                "output hidden_states scalar_type must be float16 for EAGLE target")
+        }
+        let kFull = try requireTensor(.kFull, in: outputByName, kind: "output", stageID: stageID)
+        let vFull = try requireTensor(.vFull, in: outputByName, kind: "output", stageID: stageID)
+        let kSliding = try requireTensor(
+            .kSliding, in: outputByName, kind: "output", stageID: stageID)
+        let vSliding = try requireTensor(
+            .vSliding, in: outputByName, kind: "output", stageID: stageID)
+        try validateEagleTargetKVPair(
+            key: kFull,
+            value: vFull,
+            hiddenOutput: hiddenOutput,
+            label: "full",
+            stageID: stageID)
+        try validateEagleTargetKVPair(
+            key: kSliding,
+            value: vSliding,
+            hiddenOutput: hiddenOutput,
+            label: "sliding",
+            stageID: stageID)
+    }
+
+    private static func validateEagleTargetKVPair(
+        key: DistributedStageIOTensor,
+        value: DistributedStageIOTensor,
+        hiddenOutput: DistributedStageIOTensor,
+        label: String,
+        stageID: String
+    ) throws {
+        for tensor in [key, value] {
+            guard tensor.scalarType == .float16 else {
+                throw error(
+                    stageID: stageID,
+                    "output \(tensor.name) scalar_type must be float16")
+            }
+            guard tensor.shape.count == 4,
+                tensor.shape[0] == 1,
+                tensor.shape[1] > 0,
+                tensor.shape[2] == -1 || tensor.shape[2] > 0,
+                tensor.shape[3] > 0
+            else {
+                throw error(
+                    stageID: stageID,
+                    "output \(tensor.name) shape \(tensor.shape) must match [1, heads, sequence, head_dim]")
+            }
+            let hiddenSequence = hiddenOutput.shape[1]
+            let kvSequence = tensor.shape[2]
+            if hiddenSequence > 0 && kvSequence > 0 && hiddenSequence != kvSequence {
+                throw error(
+                    stageID: stageID,
+                    "output \(tensor.name) sequence dimension must match hidden_states")
+            }
+        }
+        guard key.shape == value.shape else {
+            throw error(
+                stageID: stageID,
+                "EAGLE target \(label) key/value output shapes must match")
         }
     }
 
@@ -1181,6 +1305,8 @@ public struct DistributedStageManifest: Hashable, Sendable {
     public let boundaryTensor: DistributedBoundaryTensorSpec?
     public let positionMode: DistributedPositionMode
     public let cacheGroups: DistributedStageCacheGroups?
+    public let runtimeMemory: DistributedRuntimeMemoryContract?
+    public let eagleTarget: DistributedEagleTargetContract?
     public let runtimePlan: DistributedStagePlan
 
     public init(
@@ -1191,7 +1317,9 @@ public struct DistributedStageManifest: Hashable, Sendable {
         stages: [DistributedStageManifestStage],
         boundaryTensor: DistributedBoundaryTensorSpec? = nil,
         positionMode: DistributedPositionMode = .current,
-        cacheGroups: DistributedStageCacheGroups? = nil
+        cacheGroups: DistributedStageCacheGroups? = nil,
+        runtimeMemory: DistributedRuntimeMemoryContract? = nil,
+        eagleTarget: DistributedEagleTargetContract? = nil
     ) throws {
         self.schema = schema
         self.modelName = modelName
@@ -1201,8 +1329,12 @@ public struct DistributedStageManifest: Hashable, Sendable {
         self.boundaryTensor = boundaryTensor
         self.positionMode = positionMode
         self.cacheGroups = cacheGroups
+        self.runtimeMemory = runtimeMemory
+        self.eagleTarget = eagleTarget
         try boundaryTensor?.validate()
         try cacheGroups?.validate()
+        try runtimeMemory?.validate(stages: stages)
+        try eagleTarget?.validate(stages: stages)
         self.runtimePlan = DistributedStagePlan(
             modelName: modelName,
             totalLayerCount: totalLayerCount,
@@ -1292,6 +1424,12 @@ public struct DistributedStageManifest: Hashable, Sendable {
             totalLayerCountDerived = true
         }
 
+        let cacheGroups = body.cacheGroups ?? root.cacheGroups
+        let rawEagleTarget = body.eagleTarget ?? root.eagleTarget
+        let eagleTarget = try rawEagleTarget?.normalized(
+            stages: stages,
+            cacheGroups: cacheGroups)
+
         return try DistributedStageManifest(
             schema: schema,
             modelName: modelName,
@@ -1302,7 +1440,9 @@ public struct DistributedStageManifest: Hashable, Sendable {
                 ?? root.boundary?.hiddenState ?? root.boundaryTensor,
             positionMode: body.positionMode ?? body.positionModeCamel ?? root.positionMode
                 ?? root.positionModeCamel ?? .current,
-            cacheGroups: body.cacheGroups ?? root.cacheGroups)
+            cacheGroups: cacheGroups,
+            runtimeMemory: body.runtimeMemory ?? root.runtimeMemory,
+            eagleTarget: eagleTarget)
     }
 
     private static func normalizeStage(
@@ -1546,6 +1686,8 @@ private struct RawDistributedStageManifestRoot: Decodable {
     let positionMode: DistributedPositionMode?
     let positionModeCamel: DistributedPositionMode?
     let cacheGroups: DistributedStageCacheGroups?
+    let runtimeMemory: DistributedRuntimeMemoryContract?
+    let eagleTarget: RawDistributedEagleTargetContract?
 
     enum CodingKeys: String, CodingKey {
         case schema
@@ -1561,6 +1703,8 @@ private struct RawDistributedStageManifestRoot: Decodable {
         case positionMode = "position_mode"
         case positionModeCamel = "positionMode"
         case cacheGroups = "cache_groups"
+        case runtimeMemory = "runtime_memory"
+        case eagleTarget = "eagle_target"
     }
 
     var asBody: RawDistributedStageManifestBody {
@@ -1575,7 +1719,9 @@ private struct RawDistributedStageManifestRoot: Decodable {
             boundaryTensor: boundaryTensor,
             positionMode: positionMode,
             positionModeCamel: positionModeCamel,
-            cacheGroups: cacheGroups)
+            cacheGroups: cacheGroups,
+            runtimeMemory: runtimeMemory,
+            eagleTarget: eagleTarget)
     }
 }
 
@@ -1591,6 +1737,8 @@ private struct RawDistributedStageManifestBody: Decodable {
     let positionMode: DistributedPositionMode?
     let positionModeCamel: DistributedPositionMode?
     let cacheGroups: DistributedStageCacheGroups?
+    let runtimeMemory: DistributedRuntimeMemoryContract?
+    let eagleTarget: RawDistributedEagleTargetContract?
 
     enum CodingKeys: String, CodingKey {
         case schema
@@ -1604,6 +1752,8 @@ private struct RawDistributedStageManifestBody: Decodable {
         case positionMode = "position_mode"
         case positionModeCamel = "positionMode"
         case cacheGroups = "cache_groups"
+        case runtimeMemory = "runtime_memory"
+        case eagleTarget = "eagle_target"
     }
 }
 
@@ -3261,6 +3411,13 @@ public final class DistributedWorkerFrameExecutor {
                 throw DistributedStageExecutionError.invalidStageOutput(
                     "output step_index does not match request")
             }
+            guard output.eagleTargetArtifacts == nil,
+                output.eagleTargetKVChunk == nil,
+                output.eagleTargetFinalHidden == nil
+            else {
+                throw DistributedStageExecutionError.invalidControlFrame(
+                    "worker wire protocol does not support EAGLE target artifacts")
+            }
             let result = DistributedStageForwardResultFrame(
                 stageID: output.stageID,
                 requestID: frame.requestID,
@@ -3684,25 +3841,37 @@ public struct DistributedStageForwardOutput: Hashable, Sendable {
     public let hiddenState: DistributedHiddenStatePacket?
     public let tokenID: Int32?
     public let topLogits: [DistributedLogitScore]
+    public let eagleTargetKVChunk: DistributedEagleTargetKVChunk?
+    public let eagleTargetFinalHidden: DistributedEagleTargetTensor?
+    public let eagleTargetArtifacts: DistributedEagleTargetArtifacts?
 
     public init(
         stageID: String,
         stepIndex: Int,
         hiddenState: DistributedHiddenStatePacket? = nil,
         tokenID: Int32? = nil,
-        topLogits: [DistributedLogitScore] = []
+        topLogits: [DistributedLogitScore] = [],
+        eagleTargetKVChunk: DistributedEagleTargetKVChunk? = nil,
+        eagleTargetFinalHidden: DistributedEagleTargetTensor? = nil,
+        eagleTargetArtifacts: DistributedEagleTargetArtifacts? = nil
     ) {
         self.stageID = stageID
         self.stepIndex = stepIndex
         self.hiddenState = hiddenState
         self.tokenID = tokenID
         self.topLogits = topLogits
+        self.eagleTargetKVChunk = eagleTargetKVChunk
+        self.eagleTargetFinalHidden = eagleTargetFinalHidden
+        self.eagleTargetArtifacts = eagleTargetArtifacts
     }
 }
 
 public protocol DistributedStageHandle: AnyObject {
     var descriptor: DistributedStageDescriptor { get }
     var acceptsTokenIDs: Bool { get }
+    var supportsEagleTargetArtifacts: Bool { get }
+    var supportsEagleTargetKVChunk: Bool { get }
+    var supportsEagleTargetFinalHidden: Bool { get }
 
     func allocate(_ allocation: DistributedStageAllocation) async throws
     func forward(_ input: DistributedStageForwardInput) async throws -> DistributedStageForwardOutput
@@ -3714,6 +3883,10 @@ public extension DistributedStageHandle {
     var acceptsTokenIDs: Bool {
         descriptor.role == .embeddings
     }
+
+    var supportsEagleTargetArtifacts: Bool { false }
+    var supportsEagleTargetKVChunk: Bool { false }
+    var supportsEagleTargetFinalHidden: Bool { false }
 }
 
 public struct DistributedStageHandleFactoryContext: Hashable, Sendable {
@@ -3759,6 +3932,10 @@ public struct DistributedStageHandleFactoryContext: Hashable, Sendable {
         descriptor.vocabSize
     }
 
+    public var eagleTarget: DistributedEagleTargetContract? {
+        manifest.eagleTarget
+    }
+
     public func requireResolvedAssetURL() throws -> URL {
         guard let resolvedAssetURL else {
             throw DistributedStageExecutionError.missingStageAssetPath(stage.id)
@@ -3791,7 +3968,8 @@ public struct DistributedStageHandleFactoryContext: Hashable, Sendable {
         try contract.validate(
             for: descriptor,
             boundaryTensor: boundaryTensor,
-            vocabSize: vocabSize)
+            vocabSize: vocabSize,
+            eagleTarget: eagleTarget)
     }
 }
 
@@ -3850,9 +4028,18 @@ public enum DistributedStageExecutionError: Error, Equatable, Sendable, CustomSt
 public final class DistributedSameMachinePipeline {
     public let plan: DistributedStagePlan
     private let stages: [DistributedStageHandle]
+    private let streamedPrefillAdmission: DistributedStagedMemoryAdmission?
+    private let eagleTarget: DistributedEagleTargetContract?
+    private var activePrefillStageID: String?
     private var requestTracker = DistributedWorkerRequestTracker()
+    private var eagleTargetAccumulators: [String: DistributedEagleTargetKVAccumulator] = [:]
 
-    public init(plan: DistributedStagePlan, stages: [DistributedStageHandle]) throws {
+    public init(
+        plan: DistributedStagePlan,
+        stages: [DistributedStageHandle],
+        streamedPrefillAdmission: DistributedStagedMemoryAdmission? = nil,
+        eagleTarget: DistributedEagleTargetContract? = nil
+    ) throws {
         try plan.validate()
         guard plan.stages.count == stages.count else {
             throw DistributedStageExecutionError.stageCountMismatch(
@@ -3870,8 +4057,45 @@ public final class DistributedSameMachinePipeline {
             }
         }
 
+        if streamedPrefillAdmission != nil {
+            for stage in stages {
+                guard let resident = stage as? DistributedDecodeResidentStageHandle else {
+                    throw DistributedStageExecutionError.invalidControlFrame(
+                        "streamed prefill requires a decode-resident handle for stage \(stage.descriptor.id)")
+                }
+                guard !resident.isPrefillResident else {
+                    throw DistributedStageExecutionError.invalidControlFrame(
+                        "decode-resident stage \(stage.descriptor.id) loaded prefill before admission")
+                }
+            }
+        }
+
+        if let eagleTarget {
+            guard eagleTarget.slidingWindow > 0,
+                plan.stages.last(where: { $0.role == .transformerLayers })?.id
+                    == eagleTarget.stageID
+            else {
+                throw DistributedStageExecutionError.invalidControlFrame(
+                    "eagle_target must name the final transformer_layers stage with a positive sliding_window")
+            }
+            guard let targetHandle = stages.first(where: {
+                $0.descriptor.id == eagleTarget.stageID
+            }), targetHandle.supportsEagleTargetKVChunk else {
+                throw DistributedStageExecutionError.invalidControlFrame(
+                    "eagle_target stage \(eagleTarget.stageID) requires a local auxiliary-output handle")
+            }
+            guard let finalHiddenHandle = stages.first(where: {
+                $0.descriptor.id == eagleTarget.finalHiddenStageID
+            }), finalHiddenHandle.supportsEagleTargetFinalHidden else {
+                throw DistributedStageExecutionError.invalidControlFrame(
+                    "eagle_target final hidden stage \(eagleTarget.finalHiddenStageID) requires a local auxiliary-output handle")
+            }
+        }
+
         self.plan = plan
         self.stages = stages
+        self.streamedPrefillAdmission = streamedPrefillAdmission
+        self.eagleTarget = eagleTarget
     }
 
     public convenience init(
@@ -3884,13 +4108,28 @@ public final class DistributedSameMachinePipeline {
             }
             return handle
         }
-        try self.init(plan: manifest.runtimePlan, stages: orderedHandles)
+        try self.init(
+            plan: manifest.runtimePlan,
+            stages: orderedHandles,
+            eagleTarget: manifest.eagleTarget)
     }
 
     public static func make(
         manifest: DistributedStageManifest,
-        handleFactory: DistributedStageHandleFactory
+        handleFactory: DistributedStageHandleFactory,
+        streamedPrefillAdmission: DistributedStagedMemoryAdmission? = nil
     ) async throws -> DistributedSameMachinePipeline {
+        let effectiveAdmission: DistributedStagedMemoryAdmission?
+        if manifest.requiresStreamedPrefillResidency {
+            guard let streamedPrefillAdmission else {
+                throw DistributedStageExecutionError.invalidControlFrame(
+                    "streamed prefill manifest requires memory admission before decode assets load")
+            }
+            effectiveAdmission = streamedPrefillAdmission
+        } else {
+            effectiveAdmission = nil
+        }
+
         var handles: [DistributedStageHandle] = []
         handles.reserveCapacity(manifest.stages.count)
         for stage in manifest.stages {
@@ -3899,9 +4138,16 @@ public final class DistributedSameMachinePipeline {
             }
             let context = DistributedStageHandleFactoryContext(
                 stage: stage, manifest: manifest, descriptor: descriptor)
-            handles.append(try await handleFactory.makeStageHandle(for: context))
+            try effectiveAdmission?.checkBeforeAssetLoad()
+            let handle = try await handleFactory.makeStageHandle(for: context)
+            handles.append(handle)
+            try effectiveAdmission?.checkBeforeAssetLoad()
         }
-        return try DistributedSameMachinePipeline(plan: manifest.runtimePlan, stages: handles)
+        return try DistributedSameMachinePipeline(
+            plan: manifest.runtimePlan,
+            stages: handles,
+            streamedPrefillAdmission: effectiveAdmission,
+            eagleTarget: manifest.eagleTarget)
     }
 
     public func allocate(
@@ -3923,6 +4169,11 @@ public final class DistributedSameMachinePipeline {
         for stage in stages {
             try await stage.allocate(allocation)
         }
+        if let eagleTarget {
+            eagleTargetAccumulators[requestID] = try DistributedEagleTargetKVAccumulator(
+                kvCapacity: kvCapacity,
+                slidingWindow: eagleTarget.slidingWindow)
+        }
         requestTracker.commitAllocate(allocation)
     }
 
@@ -3934,7 +4185,8 @@ public final class DistributedSameMachinePipeline {
         transformerTokenIDs: [Int32]? = nil,
         blockIDsQ: [Int32]? = nil,
         blockIDsKV: [Int32]? = nil,
-        softTokenSplice: DistributedSoftTokenSplice? = nil
+        softTokenSplice: DistributedSoftTokenSplice? = nil,
+        emitToken: Bool = true
     ) async throws -> DistributedStageForwardOutput {
         guard !requestID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw DistributedStageExecutionError.invalidForwardInput("request_id is empty")
@@ -3996,6 +4248,9 @@ public final class DistributedSameMachinePipeline {
         var hiddenState: DistributedHiddenStatePacket?
         var tokenID: Int32?
         var topLogits: [DistributedLogitScore] = []
+        var eagleTargetArtifacts = eagleTargetAccumulators[requestID]?.snapshot
+        var eagleTargetKVChunk: DistributedEagleTargetKVChunk?
+        var eagleTargetFinalHidden: DistributedEagleTargetTensor?
         let firstFrame = DistributedStageForwardFrame(
             stageID: stages.first!.descriptor.id,
             requestID: requestID,
@@ -4008,6 +4263,9 @@ public final class DistributedSameMachinePipeline {
         try requestTracker.validateForward(firstFrame)
 
         for (index, stage) in stages.enumerated() {
+            if !emitToken && stage.descriptor.role == .finalNormHead {
+                break
+            }
             let stageTokenIDs: [Int32]
             if stage.acceptsTokenIDs {
                 stageTokenIDs = stage.descriptor.role == .transformerLayers
@@ -4026,24 +4284,87 @@ public final class DistributedSameMachinePipeline {
                 blockIDsKV: stage.descriptor.role == .transformerLayers ? blockIDsKV : nil,
                 softTokenSplice: stage.descriptor.role == .embeddings ? softTokenSplice : nil,
                 hiddenState: hiddenState)
-            let output = try await stage.forward(input)
+            let output = try await forward(stage: stage, input: input)
             try validate(output: output, from: stage, at: index, stepIndex: stepIndex)
+            eagleTargetKVChunk = output.eagleTargetKVChunk ?? eagleTargetKVChunk
+            eagleTargetFinalHidden = output.eagleTargetFinalHidden ?? eagleTargetFinalHidden
             hiddenState = output.hiddenState
             tokenID = output.tokenID
             topLogits = output.topLogits
         }
 
-        guard tokenID != nil else {
+        if eagleTarget != nil {
+            guard let eagleTargetKVChunk else {
+                throw DistributedStageExecutionError.invalidStageOutput(
+                    "EAGLE target forward did not return a representative KV chunk")
+            }
+            if emitToken, eagleTargetFinalHidden == nil {
+                throw DistributedStageExecutionError.invalidStageOutput(
+                    "EAGLE target forward did not return final post-norm hidden")
+            }
+            guard var accumulator = eagleTargetAccumulators[requestID] else {
+                throw DistributedStageExecutionError.invalidStageOutput(
+                    "request_id \(requestID) has no EAGLE target accumulator")
+            }
+            try accumulator.append(
+                eagleTargetKVChunk,
+                finalHidden: eagleTargetFinalHidden)
+            eagleTargetArtifacts = accumulator.snapshot
+            eagleTargetAccumulators[requestID] = accumulator
+        }
+
+        if emitToken && tokenID == nil {
             throw DistributedStageExecutionError.invalidStageOutput(
                 "final stage did not return a token id")
         }
         requestTracker.commitForward(firstFrame)
         return DistributedStageForwardOutput(
-            stageID: stages.last!.descriptor.id,
+            stageID: emitToken ? stages.last!.descriptor.id : (hiddenState?.metadata.sourceStageID ?? stages.last!.descriptor.id),
             stepIndex: stepIndex,
             hiddenState: hiddenState,
             tokenID: tokenID,
-            topLogits: topLogits)
+            topLogits: topLogits,
+            eagleTargetArtifacts: eagleTargetArtifacts)
+    }
+
+    private func forward(
+        stage: DistributedStageHandle,
+        input: DistributedStageForwardInput
+    ) async throws -> DistributedStageForwardOutput {
+        guard input.positionRange.count > 1, let streamedPrefillAdmission else {
+            guard activePrefillStageID == nil else {
+                throw DistributedStageExecutionError.invalidControlFrame(
+                    "decode attempted while prefill stage \(activePrefillStageID!) is resident")
+            }
+            return try await stage.forward(input)
+        }
+        guard let resident = stage as? DistributedDecodeResidentStageHandle else {
+            throw DistributedStageExecutionError.invalidControlFrame(
+                "stage \(stage.descriptor.id) does not support streamed prefill")
+        }
+        guard activePrefillStageID == nil else {
+            throw DistributedStageExecutionError.invalidControlFrame(
+                "prefill stage \(activePrefillStageID!) is already resident")
+        }
+
+        activePrefillStageID = stage.descriptor.id
+        do {
+            try streamedPrefillAdmission.checkBeforeAssetLoad()
+            try await resident.loadPrefill()
+            guard resident.isPrefillResident else {
+                throw DistributedStageExecutionError.invalidControlFrame(
+                    "stage \(stage.descriptor.id) did not retain its admitted prefill asset")
+            }
+            try streamedPrefillAdmission.checkBeforeAssetLoad()
+            let output = try await stage.forward(input)
+            resident.unloadPrefill()
+            activePrefillStageID = nil
+            return output
+        } catch {
+            resident.unloadPrefill()
+            activePrefillStageID = nil
+            throw error
+        }
     }
 
     public func reset(requestID: String) async throws {
@@ -4055,6 +4376,14 @@ public final class DistributedSameMachinePipeline {
         for stage in stages {
             try await stage.reset(requestID: requestID)
         }
+        if eagleTarget != nil {
+            guard var accumulator = eagleTargetAccumulators[requestID] else {
+                throw DistributedStageExecutionError.invalidControlFrame(
+                    "request_id \(requestID) has no EAGLE target accumulator")
+            }
+            accumulator.reset()
+            eagleTargetAccumulators[requestID] = accumulator
+        }
         requestTracker.commitReset(control)
     }
 
@@ -4064,6 +4393,7 @@ public final class DistributedSameMachinePipeline {
         for stage in stages {
             await stage.free(requestID: requestID)
         }
+        eagleTargetAccumulators.removeValue(forKey: requestID)
         requestTracker.commitFree(control)
     }
 
@@ -4080,6 +4410,32 @@ public final class DistributedSameMachinePipeline {
         guard output.stepIndex == stepIndex else {
             throw DistributedStageExecutionError.invalidStageOutput(
                 "output step_index does not match request")
+        }
+
+        let isEagleKVProducer = eagleTarget?.stageID == stage.descriptor.id
+        if isEagleKVProducer {
+            guard output.eagleTargetKVChunk != nil else {
+                throw DistributedStageExecutionError.invalidStageOutput(
+                    "eagle_target stage \(stage.descriptor.id) did not return auxiliary artifacts")
+            }
+        } else if output.eagleTargetKVChunk != nil {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "stage \(stage.descriptor.id) returned undeclared EAGLE target KV chunk")
+        }
+
+        let isEagleFinalHiddenProducer = eagleTarget?.finalHiddenStageID == stage.descriptor.id
+        if isEagleFinalHiddenProducer {
+            guard output.eagleTargetFinalHidden != nil else {
+                throw DistributedStageExecutionError.invalidStageOutput(
+                    "eagle_target final hidden stage \(stage.descriptor.id) did not return post-norm hidden")
+            }
+        } else if output.eagleTargetFinalHidden != nil {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "stage \(stage.descriptor.id) returned undeclared EAGLE target final hidden")
+        }
+        if output.eagleTargetArtifacts != nil {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "stage \(stage.descriptor.id) returned assembled EAGLE target artifacts")
         }
 
         let isFinal = index == stages.count - 1
@@ -4172,11 +4528,13 @@ public final class DistributedStagedEngine {
     public let pipeline: DistributedSameMachinePipeline
     public let maxContextLength: Int
     public let minKVCapacity: Int
+    public let cacheGroups: DistributedStageCacheGroups?
 
     public init(
         pipeline: DistributedSameMachinePipeline,
         maxContextLength: Int,
-        minKVCapacity: Int = 0
+        minKVCapacity: Int = 0,
+        cacheGroups: DistributedStageCacheGroups? = nil
     ) throws {
         guard maxContextLength > 0 else {
             throw DistributedStageExecutionError.invalidForwardInput(
@@ -4189,6 +4547,8 @@ public final class DistributedStagedEngine {
         self.pipeline = pipeline
         self.maxContextLength = maxContextLength
         self.minKVCapacity = minKVCapacity
+        self.cacheGroups = cacheGroups
+        try cacheGroups?.validate()
     }
 
     public func generate(
@@ -4217,7 +4577,10 @@ public final class DistributedStagedEngine {
                 kvCapacity: kvCapacity)
         }
 
-        try await pipeline.allocate(requestID: requestID, kvCapacity: kvCapacity)
+        try await pipeline.allocate(
+            requestID: requestID,
+            kvCapacity: kvCapacity,
+            cacheCapacities: resolvedCacheCapacities(kvCapacity: kvCapacity))
         do {
             var nextToken = try await pipelineNextToken(
                 requestID: requestID,
@@ -4299,6 +4662,10 @@ public final class DistributedStagedEngine {
                 "kv_capacity is smaller than prompt")
         }
         return capacity
+    }
+
+    private func resolvedCacheCapacities(kvCapacity: Int) -> [String: Int]? {
+        cacheGroups?.capacities(forKVCapacity: kvCapacity)
     }
 }
 

@@ -1,4 +1,5 @@
 import XCTest
+import PipelineRuntime
 
 @testable import CoreAIServer
 
@@ -100,6 +101,88 @@ final class APITypesTests: XCTestCase {
         let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
         XCTAssertEqual(request.stream, true)
         XCTAssertEqual(request.stream_options?.include_usage, true)
+    }
+
+    func testOpenAITemperatureExplicitnessSurvivesRequestMapping() throws {
+        let omitted = try JSONDecoder().decode(
+            OpenAIChatRequest.self,
+            from: Data(
+                #"{"model":"local","messages":[{"role":"user","content":"Hi"}]}"#.utf8))
+        let explicit = try JSONDecoder().decode(
+            OpenAIChatRequest.self,
+            from: Data(
+                #"{"model":"local","messages":[{"role":"user","content":"Hi"}],"temperature":0.7}"#.utf8))
+
+        let omittedGeneration = omitted.toGeneration()
+        let explicitGeneration = explicit.toGeneration()
+
+        XCTAssertFalse(omittedGeneration.temperatureWasExplicit)
+        XCTAssertTrue(explicitGeneration.temperatureWasExplicit)
+        XCTAssertEqual(
+            omittedGeneration.resolvedTemperature(defaultingToGreedy: true),
+            0)
+        XCTAssertEqual(
+            explicitGeneration.resolvedTemperature(defaultingToGreedy: true),
+            0.7)
+    }
+
+    func testOpenAIAccelerationPreferenceMapsToNativePipelineOptions() throws {
+        let request = try JSONDecoder().decode(
+            OpenAIChatRequest.self,
+            from: Data(
+                #"{"model":"local","messages":[{"role":"user","content":"Hi"}],"acceleration":"mtp"}"#.utf8))
+
+        let generation = request.toGeneration()
+        let options = ServerRuntime.options(from: generation)
+
+        XCTAssertEqual(generation.acceleration, .mtp)
+        XCTAssertEqual(options.acceleration, .mtp)
+    }
+
+    func testOpenAIRichToolLoopPayloadPreservesReasoningCallsAndToolResponse() throws {
+        let data = Data(
+            """
+            {
+              "model": "local",
+              "messages": [
+                {"role": "user", "content": "Weather?"},
+                {
+                  "role": "assistant",
+                  "reasoning_content": "I should check.",
+                  "content": "",
+                  "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                      "name": "get_weather",
+                      "arguments": {"city": "Tallahassee"}
+                    }
+                  }]
+                },
+                {
+                  "role": "tool",
+                  "tool_call_id": "call_1",
+                  "content": "sunny, 91 F"
+                }
+              ]
+            }
+            """.utf8)
+
+        let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+        let payload = ServerRuntime.messagePayload(request.toGeneration().messages)
+
+        XCTAssertEqual(payload[1]["reasoning_content"] as? String, "I should check.")
+        let calls = try XCTUnwrap(payload[1]["tool_calls"] as? [any Sendable])
+        XCTAssertEqual(calls.count, 1)
+        let call = try XCTUnwrap(calls.first as? [String: any Sendable])
+        XCTAssertEqual(call["id"] as? String, "call_1")
+        let function = try XCTUnwrap(call["function"] as? [String: any Sendable])
+        XCTAssertEqual(function["name"] as? String, "get_weather")
+        let arguments = try XCTUnwrap(
+            function["arguments"] as? [String: any Sendable])
+        XCTAssertEqual(arguments["city"] as? String, "Tallahassee")
+        XCTAssertEqual(payload[2]["tool_call_id"] as? String, "call_1")
+        XCTAssertEqual(payload[2]["content"] as? String, "sunny, 91 F")
     }
 
     func testOpenAIResponseFormatJsonObjectMapsToGeneration() throws {
@@ -237,6 +320,103 @@ final class APITypesTests: XCTestCase {
                 backendSupportsMultimodalInput: true))
     }
 
+    func testServerRejectsAudioVideoAndMultipleImagesOnMultimodalBackend() throws {
+        let audioVideo = GenerationRequest(
+            model: "local",
+            messages: [
+                ChatMessage(
+                    role: "user",
+                    content: "Describe these.",
+                    media: [
+                        MediaPart(
+                            type: "input_audio",
+                            payload: .object(["input_audio": .object(["data": .string("abc")])])),
+                        MediaPart(
+                            type: "video_url",
+                            payload: .object(["video_url": .object(["url": .string("data:video/mp4;base64,abc")])])),
+                    ])
+            ])
+        let audioVideoResponse = try XCTUnwrap(
+            ServerRuntime.rejectMultimodalIfNeeded(
+                audioVideo,
+                backendMultimodalCapabilities: .gemma4ImageText()))
+        XCTAssertEqual(audioVideoResponse.status.code, 400)
+
+        let multipleImages = GenerationRequest(
+            model: "local",
+            messages: [
+                ChatMessage(
+                    role: "user",
+                    content: "Compare.",
+                    media: [
+                        MediaPart(
+                            type: "image_url",
+                            payload: .object(["image_url": .object(["url": .string("data:image/png;base64,aGVsbG8=")])])),
+                        MediaPart(
+                            type: "image_url",
+                            payload: .object(["image_url": .object(["url": .string("data:image/png;base64,aGVsbG8=")])])),
+                    ])
+            ])
+        let multipleImageResponse = try XCTUnwrap(
+            ServerRuntime.rejectMultimodalIfNeeded(
+                multipleImages,
+                backendMultimodalCapabilities: .gemma4ImageText()))
+        XCTAssertEqual(multipleImageResponse.status.code, 400)
+    }
+
+    func testMultimodalRequestRejectsRemoteImageURLs() {
+        let generation = GenerationRequest(
+            model: "local",
+            messages: [
+                ChatMessage(
+                    role: "user",
+                    content: "Describe this.",
+                    media: [
+                        MediaPart(
+                            type: "image_url",
+                            payload: .object([
+                                "type": .string("image_url"),
+                                "image_url": .object(["url": .string("https://example.com/image.png")]),
+                            ]))
+                    ])
+            ])
+
+        let error = MultimodalRequestSupport.validateMinimalSingleImageRequest(
+            generation,
+            capabilities: .gemma4ImageText())
+        XCTAssertEqual(
+            error?.description,
+            "remote image URLs are not supported; send a base64 data URL")
+    }
+
+    func testMultimodalRequestRejectsBlockedMonolithicGemmaRoute() {
+        let generation = GenerationRequest(
+            model: "local",
+            messages: [
+                ChatMessage(
+                    role: "user",
+                    content: "Describe this.",
+                    media: [
+                        MediaPart(
+                            type: "image_url",
+                            payload: .object([
+                                "type": .string("image_url"),
+                                "image_url": .object(["url": .string("data:image/png;base64,aGVsbG8=")]),
+                            ]))
+                    ])
+            ])
+
+        let error = MultimodalRequestSupport.validateMinimalSingleImageRequest(
+            generation,
+            capabilities: .gemma4ImageText(
+                maxSoftTokensPerImage: 280,
+                backend: "monolithic",
+                routeAvailable: false))
+        XCTAssertEqual(
+            error?.description,
+            "monolithic Gemma image-text bundles are discovered, but native prefill_multimodal serving is not wired yet")
+    }
+
     func testServerRejectsStructuredResponseFormatBeforeRuntime() throws {
         let generation = GenerationRequest(
             model: "local",
@@ -247,12 +427,13 @@ final class APITypesTests: XCTestCase {
                     schema: .object(["type": .string("object")]),
                     strict: true)))
 
-        #if COREAI_RUNTIME
-        XCTAssertNil(ServerRuntime.rejectUnsupportedResponseFormatIfNeeded(generation))
-        #else
-        let response = try XCTUnwrap(ServerRuntime.rejectUnsupportedResponseFormatIfNeeded(generation))
-        XCTAssertEqual(response.status.code, 400)
-        #endif
+        if CoreAIPipeline.supportsConstrainedDecoding {
+            XCTAssertNil(ServerRuntime.rejectUnsupportedResponseFormatIfNeeded(generation))
+        } else {
+            let response = try XCTUnwrap(
+                ServerRuntime.rejectUnsupportedResponseFormatIfNeeded(generation))
+            XCTAssertEqual(response.status.code, 400)
+        }
     }
 
     func testServerRejectsStructuredResponseFormatOnUnsupportedBackend() throws {

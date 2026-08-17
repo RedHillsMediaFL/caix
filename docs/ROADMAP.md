@@ -2,6 +2,36 @@
 
 Planned work. Not a support claim.
 
+## Completion Order
+
+Ship finished model packages incrementally. Do not wait for a whole family, distributed lane, or
+diffusion lane before uploading a package whose evidence and public card gates already pass.
+
+Keep `main` clean as each feature slice finishes: group related work into reviewable commits, run
+the relevant no-load gates before each commit, and run the full local publication gate before any
+upload.
+
+Order of work:
+
+1. Single-device text model packages: close runtime parity, determinism, and practical full native
+   context gates per package. Hybrid Qwythos/qwen3_5 remains gated until the 1,048,576-token replay
+   finishes within the practical threshold; native KV allocation alone is not enough for a public
+   context label.
+2. Multi-device/staged model packages: prove package-specific staged parity first, then installed
+   two-machine caix execution. Do not use generic POC evidence for package promotion.
+3. Multimodal media blocks: keep packages moving as their exact runtime evidence closes, then add
+   audio, video, and multipart request handling behind parser/runtime tests. Public cards name only
+   the modalities with runtime serving evidence for that exact package.
+4. Distributed inference: complete the two-machine pipeline path before any transport-speed or
+   memory-scaling language. RDMA/TB5 remains design-only until hardware evidence exists.
+5. Model uploads: each finished package gets the simple card contract: small RHM logo, install/run
+   commands, base model, context, quantization/precision, download size, short status, license, and
+   the open-source support link. Build process, test-device details, and internal evidence stay out
+   of cards.
+6. Diffusion: last. Return to diffusion only after the currently achievable single-device,
+   multi-device, multimodal, and distributed beta packages have shipped or have explicit blocked
+   evidence.
+
 ## Core AI Distributed Execution
 
 Goal: run models that do not fit on one Mac by splitting Core AI execution across Macs.
@@ -56,70 +86,48 @@ Why this path:
 
 Do first:
 
-1. Prove same-machine staged execution with Qwen3-0.6B.
+1. Prove same-machine staged execution and per-stage KV handling.
 2. Verify staged output against a stable oracle before treating transport evidence as release
    evidence.
-3. Prove the tiny random Qwen3 staged POC over two machines through Brew when the MacBook is
-   available again.
-4. Move one real Qwen stage to the 32 GB MacBook over Thunderbolt Bridge.
-5. Add the 16 GB Mac mini as a third shard.
+3. Prove Brew-installed two-machine transport on the MacBook.
+4. Add Thunderbolt Bridge or other direct-link measurements before making link-speed claims.
+5. Add the 16 GB Mac mini as a third shard after the two-machine path remains repeatable.
 
-Temporary Studio-only overlay, 2026-07-03: the MacBook is unavailable, so steps 3-5 are deferred.
-P0 same-machine staged parity is now closed for Qwen3-0.6B noopt-first3 against the teacher-forced
-HF-fp16 oracle. The local-only monolithic default-chunk validation and labeling/docs cleanup pass is
-complete in the worktree and ready for review; multimodal S2, heavy exports, uploads, and public
-speed/card updates stay held until explicit sign-off. This is a reviewed-ready local patch, not a
-published release or HF card update.
-No two-machine ready-to-test wording follows from this overlay. The canonical P0 gate must use an
-admissible oracle: `scripts/run-staged-parity-p0.sh` proves
-monolithic Core AI determinism across fresh processes before running staged-vs-monolithic parity,
-and deterministic HF/PyTorch token sequences are the fallback staged-correctness oracle when that
-monolithic pre-check fails. For fp16 staged assets, that fallback is teacher-forced so tie flips do
-not cascade. The current 128-token Qwen3-0.6B staged-vs-HF-fp16 gate validates prefill, decode, and
-per-stage KV: 1020/1024 steps matched exactly and 4/1024 were genuine fp16 ties inside the 0.02 logit
-tolerance, with zero real divergences; the repo-local evidence record is
-`docs/distributed-evidence/qwen3-0.6b-teacher-forced-fp16-128.txt`. Production qwen3-4b monolithic
-determinism is a separate bug track: the production-config bundle is stable at 8/16-token prefills
-and nondeterministic starting at 17 through both `LLMEngine` and the serving-compatible
-`CoreAIPipelinedEngine` path. The caix-side
-determinism mitigation is review-ready and locally validated in the worktree: stateful monolithic
-prefill defaults to the traced query width 16, while explicit env overrides remain available.
-Evidence under
-`.tmp/benchmark-window/20260703T163939Z-qwen3-4b-prefill-mitigation/` shows baseline nondeterminism
-at lengths 17/19/24, deterministic byte-identical chunk16 and token-mode outputs, and below-onset
-len8/len16 divergence from HF-fp16, which proves the remaining HF split is 4-bit quantization rather
-than a chunking bug. Tier-1 vendored export changes are shelved as unnecessary for this shipping fix.
-The serving-path label is settled for review: `<model>-monolithic` is the single-device fast path,
-deterministic by default under `MonolithicPrefillPolicy`, but 4-bit bundles must not claim fp16 1:1;
-`<model>-staged` is the distributed/multi-device path, with Qwen3-0.6B fp16 verified 1:1 against HF
-under the teacher-forced gate and per-model parity required before any other 1:1 claim. Same-machine
-staged is allowed for correctness/debug placement, but it is not a single-device fast path. No
-qwen3-4b staged artifact is present locally, and the held qwen3-4b staged export is shelved as
-unnecessary for the serving-path decision unless BOSS explicitly reopens it. Existing Qwen3-0.6B
-artifacts provide only internal directional local evidence: monolithic `171.3` tok/s median vs
-same-machine staged `38.2` tok/s median over the captured 256-token probe (`R=0.223`). Do not publish
-that as a model-card benchmark.
-Current source-read root cause: vendored `coreai-models` traces the monolithic stateful export at
-the 16-token prefill shape. `_constants.py:15` sets `TRACE_KV_CACHE_SEQ_LEN = 2048`, but that only
-sizes the traced/reference state capacity. The 17-token onset lines up with `_constants.py:18`
-`QUANT_TRACE_QUERY_LEN = 16`, which `export/macos.py:86-97` uses for `[1,16]` `input_ids` plus a
-2048-token reference cache before exporting `keyCache`/`valueCache` as mutable Core AI state at
-`export/macos.py:234-245`. The Python model-def itself remains runtime-shaped:
-`models/macos/qwen3.py:83-100` derives `seq_len`, `query_len`, and `offset` from runtime
-`position_ids`, and `primitives/macos/cache.py:115-164` writes/fetches KV with `mutable_slice_update`
-plus `narrow(..., 0, seq_len)`. A no-load `torch.export` probe keeps the KV update end and fetch
-length dynamic, so the fault surface is not Qwen3 model-def and not the 2048 cache bound; it is the
-post-FX Core AI stateful export/lowering/runtime specializing the mutable-state write extent to the
-16-token trace while attention/fetch follows runtime `position_ids`. The upstream/exporter fix would
-make monolithic prefill/decode entrypoints or stateful prefill tracing genuinely dynamic, but the local
-caix mitigation keeps the production query width within the traced boundary by default. Monolithic
-labels must still distinguish deterministic 4-bit greedy output from fp16 1:1 HF claims.
-Multimodal S2 now has deterministic media fixture generation plus a
-no-load structural preflight in the exporter
-workspace (`models/gemma4-unified-mm/run_s2_parity.py fixtures`,
-`models/gemma4-unified-mm/run_s2_parity.py preflight`, `models/gemma4-unified-mm/run_s2_parity.py plan`).
-The verified fixture set is 25 image, 10 audio, and 5 video prompts; preflight and plan artifacts are
-not logit/token evidence.
+Current program state: the temporary Studio-only/MacBook-unavailable overlay is superseded. The
+Brew-installed `0.2.13-beta` release completed an on-device Gemma 4 image+text validation on the
+32 GB MacBook, and a Studio-to-MacBook staged run produced a coherent real prompt answer. That closes
+a functional two-machine transport POC, but it is not a throughput, memory-pooling, Thunderbolt
+Bridge, or TB5/RDMA claim.
+
+The canonical staged correctness gate still uses an admissible oracle. For fp16 staged assets, the
+fallback HF/PyTorch oracle is teacher-forced so tie flips do not cascade. The Qwen3-0.6B
+staged-vs-HF-fp16 gate validates prefill, decode, and per-stage KV over the 128-token prompt set:
+1020/1024 steps matched exactly and 4/1024 were genuine fp16 ties inside the 0.02 logit tolerance,
+with zero real divergences; the repo-local evidence record is
+`docs/distributed-evidence/qwen3-0.6b-teacher-forced-fp16-128.txt`. Other staged artifacts still need
+per-model gates before any 1:1 claim.
+
+Stateful monolithic prefill remains a Core AI runtime/export limitation above the 16-token traced
+query width. The shipping caix mitigation keeps stateful monolithic prefill chunked to 16 by default
+under `MonolithicPrefillPolicy`, while explicit env overrides remain available. Apple issue #84 tracks
+the upstream stateful-prefill nondeterminism; fast unsafe batch prefill is not a release path.
+Monolithic labels must distinguish deterministic 4-bit greedy output from fp16 1:1 HF claims.
+
+Gemma 4 image+text is now a staged runtime path with verified runtime bundle and serving evidence,
+not an S2-only plan. The production fix is the PLE image-token PAD mask plus
+split-cache/single-asset staged execution; Apple issue #83 tracks the upstream PLE exporter gap.
+Published Gemma 4 multimodal staged packages cover E2B, E4B, 12B, 26B-A4B, and 31B at full native
+context with production-style cards. Do not market these as monolithic fast-path packages; current
+Core AI image+text handling depends on staged splice and attention-mask contracts.
+
+Hybrid `qwen3_5` support is in bring-up. Qwythos split-state staging has passed the tiny mixed-state
+Core AI proof, short HF-token parity, native 1,048,576 KV-capacity allocation, and contiguous replay
+through 16,384 tokens. It is still not a public full-1M context claim because the measured replay
+slope projects to about 13.1 h for the whole context; public sequential context is capped at 16,384
+tokens until replay performance improves.
+`Qwen3.6-40B-Deckard-Heretic-GGUF` is in the registry as a requested GGUF-only image-text candidate:
+the first feasible gate is a text-only GGUF dequant smoke, while real image-text conversion needs a
+matching safetensors/base checkpoint or a dedicated `mmproj` importer.
 
 API surface side quest, 2026-07-03: OpenAI `response_format` now decodes `text`, `json_object`, and
 `json_schema` and carries the request into the internal generation contract. Runtime builds route

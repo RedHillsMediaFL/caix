@@ -67,6 +67,47 @@ final class BundleManifestTests: XCTestCase {
         XCTAssertEqual(bundle.decodeAimodelURL?.lastPathComponent, "decode.aimodel")
     }
 
+    func testMonolithicGemmaMultimodalMetadataDecodes() throws {
+        let data = """
+            {
+              "metadata_version": "0.2",
+              "kind": "llm",
+              "name": "gemma4-e2b-it-mm-monolithic",
+              "assets": {"main": "model.aimodel"},
+              "language": {
+                "tokenizer": "google/gemma-4-e2b-it",
+                "vocab_size": 258944,
+                "max_context_length": 131072,
+                "embedded_tokenizer": true,
+                "function_map": {
+                  "main": ["main"],
+                  "multimodal_prefill": ["prefill_multimodal"]
+                }
+              },
+              "multimodal": {
+                "kind": "gemma4_monolithic",
+                "modalities": ["text", "image"],
+                "max_images": 1,
+                "soft_tokens_per_image": 280,
+                "prefill_function": "prefill_multimodal",
+                "vision_function": "embed_vision",
+                "block_ids_required": true
+              }
+            }
+            """.data(using: .utf8)!
+
+        let manifest = try JSONDecoder().decode(BundleManifest.self, from: data)
+
+        XCTAssertEqual(manifest.multimodal?.kind, "gemma4_monolithic")
+        XCTAssertEqual(manifest.multimodal?.isGemma4Monolithic, true)
+        XCTAssertEqual(manifest.multimodal?.modalities, ["text", "image"])
+        XCTAssertEqual(manifest.multimodal?.maxImages, 1)
+        XCTAssertEqual(manifest.multimodal?.softTokensPerImage, 280)
+        XCTAssertEqual(manifest.multimodal?.prefillFunction, "prefill_multimodal")
+        XCTAssertEqual(manifest.multimodal?.visionFunction, "embed_vision")
+        XCTAssertEqual(manifest.multimodal?.blockIDsRequired, true)
+    }
+
     func testStandardQwenKeepsZeroFloorWithoutRegistry() throws {
         let root = try makeBundle(
             name: "qwen3-4b-coreai",
@@ -75,6 +116,112 @@ final class BundleManifestTests: XCTestCase {
 
         let bundle = try ResolvedBundle.load(at: root.path)
         XCTAssertEqual(bundle.minKVCapacity, 0)
+    }
+
+    func testQwen38NativeTargetLoadsBeforeAnMTPProofExists() throws {
+        let root = try makeTempDir().appendingPathComponent("qwen3.8-27b-caix-base", isDirectory: true)
+        let fm = FileManager.default
+        try fm.createDirectory(at: root.appendingPathComponent("model.aimodel"), withIntermediateDirectories: true)
+        let tokenizer = root.appendingPathComponent("tokenizer", isDirectory: true)
+        try fm.createDirectory(at: tokenizer, withIntermediateDirectories: true)
+        try "{}".write(to: tokenizer.appendingPathComponent("tokenizer.json"), atomically: true, encoding: .utf8)
+        try """
+            {
+              "metadata_version": "0.2", "kind": "llm", "name": "qwen3.8-27b-caix-base",
+              "assets": {"main": "model.aimodel"},
+              "language": {
+                "tokenizer": "Youssofal/Qwen3.8-27B-MTPLX-Optimized-Speed-FP16",
+                "vocab_size": 248320, "max_context_length": 262144,
+                "embedded_tokenizer": true, "function_map": {"main": ["main"]}
+              },
+              "qwen3_8": {
+                "state_layout": {
+                  "names": ["keyCache", "valueCache", "convState", "recurrentState"],
+                  "full_attention_layers": 16, "kv_heads": 4, "head_dimension": 256,
+                  "conv_dtype": "float16", "recurrent_dtype": "float32"
+                },
+                "thinking_default": true
+              }
+            }
+            """.write(to: root.appendingPathComponent("metadata.json"), atomically: true, encoding: .utf8)
+
+        let bundle = try ResolvedBundle.load(at: root.path)
+
+        XCTAssertTrue(bundle.isQwen38Native)
+        XCTAssertNil(bundle.qwen38?.mtp)
+        XCTAssertNil(bundle.mtpAimodelURL)
+    }
+
+    func testQwen38NativeBundleRequiresItsFourStateAndMTPContract() throws {
+        let root = try makeTempDir().appendingPathComponent("qwen3.8-27b-caix-r1", isDirectory: true)
+        let fm = FileManager.default
+        try fm.createDirectory(at: root.appendingPathComponent("model.aimodel"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: root.appendingPathComponent("decode.aimodel"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: root.appendingPathComponent("mtp.aimodel"), withIntermediateDirectories: true)
+        let tokenizer = root.appendingPathComponent("tokenizer", isDirectory: true)
+        try fm.createDirectory(at: tokenizer, withIntermediateDirectories: true)
+        try "{}".write(
+            to: tokenizer.appendingPathComponent("tokenizer.json"),
+            atomically: true,
+            encoding: .utf8)
+        try """
+            {
+              "metadata_version": "0.2",
+              "kind": "llm",
+              "name": "qwen3.8-27b-caix-r1",
+              "assets": {
+                "main": "model.aimodel",
+                "decode": "decode.aimodel",
+                "mtp": "mtp.aimodel"
+              },
+              "language": {
+                "tokenizer": "Qwen/Qwen3.8-27B",
+                "vocab_size": 248320,
+                "max_context_length": 262144,
+                "embedded_tokenizer": true,
+                "function_map": {
+                  "prefill": ["prefill"],
+                  "decode": ["decode"],
+                  "verify_1": ["verify_1"],
+                  "verify_2": ["verify_2"],
+                  "verify_3": ["verify_3"]
+                }
+              },
+              "qwen3_8": {
+                "state_layout": {
+                  "names": ["keyCache", "valueCache", "convState", "recurrentState"],
+                  "full_attention_layers": 16,
+                  "kv_heads": 4,
+                  "head_dimension": 256,
+                  "conv_dtype": "float16",
+                  "recurrent_dtype": "float32"
+                },
+                "mtp": {
+                  "asset": "mtp",
+                  "max_draft_tokens": 3,
+                  "requires_greedy": true,
+                  "proof": {
+                    "exact_greedy": true,
+                    "autoregressive_tokens_per_second": 20.0,
+                    "mtp_tokens_per_second": 23.0
+                  }
+                },
+                "thinking_default": true
+              }
+            }
+            """.write(to: root.appendingPathComponent("metadata.json"), atomically: true, encoding: .utf8)
+
+        let bundle = try ResolvedBundle.load(at: root.path)
+
+        XCTAssertTrue(bundle.isQwen38Native)
+        XCTAssertEqual(bundle.qwen38?.stateLayout.names, ["keyCache", "valueCache", "convState", "recurrentState"])
+        XCTAssertEqual(bundle.qwen38?.stateLayout.fullAttentionLayers, 16)
+        XCTAssertEqual(bundle.qwen38?.mtp?.maxDraftTokens, 3)
+        XCTAssertEqual(bundle.qwen38?.mtp?.proof?.exactGreedy, true)
+        XCTAssertEqual(bundle.qwen38?.mtp?.proof?.autoregressiveTokensPerSecond, 20.0)
+        XCTAssertEqual(bundle.qwen38?.mtp?.proof?.mtpTokensPerSecond, 23.0)
+        XCTAssertTrue(bundle.qwen38?.thinkingDefault == true)
+        XCTAssertEqual(bundle.mtpAimodelURL?.lastPathComponent, "mtp.aimodel")
     }
 
     @discardableResult

@@ -66,6 +66,20 @@ def _download_config_stdlib(hf_id: str) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
+def _list_repo_files_stdlib(hf_id: str) -> list[str]:
+    endpoint = os.environ.get("HF_ENDPOINT", "https://huggingface.co").rstrip("/")
+    encoded = quote(hf_id.strip("/"), safe="/")
+    url = f"{endpoint}/api/models/{encoded}/tree/main?recursive=1"
+    headers = {"user-agent": "caix-support-check"}
+    with urlopen(Request(url, headers=headers), timeout=20) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    if isinstance(payload, dict) and isinstance(payload.get("siblings"), list):
+        return [item.get("rfilename", "") for item in payload["siblings"] if item.get("rfilename")]
+    if isinstance(payload, list):
+        return [item.get("path", "") for item in payload if isinstance(item, dict) and item.get("path")]
+    raise ValueError("unexpected Hugging Face tree response")
+
+
 def _load_config(hf_id: str) -> tuple[dict | None, str | None]:
     if os.path.isdir(hf_id) and os.path.exists(os.path.join(hf_id, "config.json")):
         with open(os.path.join(hf_id, "config.json")) as f:
@@ -144,18 +158,52 @@ def main() -> int:
     # 1) fetch config.json — local dir (e.g. a dequantized GGUF) or HF repo (public/gated).
     cfg, config_error = _load_config(hf_id)
     if config_error:
-        # No config.json — most often a GGUF-only (llama.cpp) repo, which caix can't convert
-        # (it needs the original HF safetensors). Detect that and say so plainly.
+        # No config.json is most often a GGUF-only repo. The converter can try a
+        # dequantized text path, but architecture support is only known after that
+        # dequant step and quality is lower than converting original safetensors.
         try:
-            from huggingface_hub import HfApi
-            files = list(HfApi(token=_hf_token()).list_repo_files(hf_id))
-            ggufs = [f for f in files if f.endswith(".gguf")]
-            has_st = any(f.endswith(".safetensors") for f in files)
+            try:
+                from huggingface_hub import HfApi
+                files = list(HfApi().list_repo_files(hf_id))
+            except Exception:
+                files = _list_repo_files_stdlib(hf_id)
+            ggufs = [f for f in files if f.lower().endswith(".gguf")]
+            mmprojs = [f for f in ggufs if Path(f).name.lower().startswith("mmproj")]
+            model_ggufs = [f for f in ggufs if f not in mmprojs]
+            has_st = any(f.lower().endswith(".safetensors") for f in files)
             if ggufs and not has_st:
-                return emit({"ok": False, "supported": False, "hf_id": hf_id, "gguf_only": True,
-                             "reason": f"GGUF-only repo ({len(ggufs)} .gguf files). caix can dequantize + convert "
-                                       "it (quality is reduced vs the original safetensors); the "
-                                       "architecture is verified after dequant. Click Convert to try."})
+                model_label = "file" if len(model_ggufs) == 1 else "files"
+                counts = f"{len(model_ggufs)} model .gguf {model_label}"
+                if mmprojs:
+                    mmproj_label = "file" if len(mmprojs) == 1 else "files"
+                    counts += f", {len(mmprojs)} mmproj sidecar {mmproj_label}"
+                reason = (
+                    f"GGUF-only repo ({counts}). caix can dequantize + convert the text model "
+                    "(quality is reduced vs the original safetensors); the architecture is "
+                    "verified after dequant."
+                )
+                next_step = "Click Convert to try a text-only GGUF dequant smoke."
+                if mmprojs:
+                    reason += (
+                        " mmproj sidecar files are present, but the current GGUF path does not "
+                        "consume them; use the matching safetensors/base checkpoint or add a "
+                        "dedicated GGUF+mmproj importer for image-text conversion."
+                    )
+                    next_step = (
+                        "Run text-only GGUF dequant first; image-text conversion needs a "
+                        "safetensors source or verified GGUF+mmproj importer."
+                    )
+                return emit({
+                    "ok": False,
+                    "supported": False,
+                    "hf_id": hf_id,
+                    "gguf_only": True,
+                    "gguf_model_file_count": len(model_ggufs),
+                    "gguf_mmproj": bool(mmprojs),
+                    "gguf_mmproj_file_count": len(mmprojs),
+                    "reason": reason,
+                    "next_step": next_step,
+                })
         except Exception:
             pass
         return emit({"ok": False, "supported": False, "hf_id": hf_id, "reason": config_error})

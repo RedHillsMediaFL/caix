@@ -26,7 +26,7 @@ public enum CoreAIPipeline {
     /// pipelined language engine. Individual model backends can still reject it if they are not
     /// backed by that engine.
     public static var supportsConstrainedDecoding: Bool {
-        #if COREAI_RUNTIME
+        #if COREAI_RUNTIME && !COREAI_DIRECT_RUNTIME
         true
         #else
         false
@@ -41,6 +41,9 @@ public enum CoreAIPipeline {
         public var maxTokens: Int
         /// Sampling temperature. `0` selects deterministic greedy/argmax sampling.
         public var temperature: Double
+        /// Qwen3.8 execution preference. `auto` uses native MTP only after exact-greedy parity
+        /// and the artifact's same-machine 15%-speed proof; all sampling remains AR.
+        public var acceleration: Qwen38AccelerationRequest
         /// Top-K filter (optional, only used when `temperature > 0`).
         public var topK: Int?
         /// Top-P / nucleus filter (optional, only used when `temperature > 0`).
@@ -64,6 +67,7 @@ public enum CoreAIPipeline {
         public init(
             maxTokens: Int = 64,
             temperature: Double = 0,
+            acceleration: Qwen38AccelerationRequest = .auto,
             topK: Int? = nil,
             topP: Double? = nil,
             applyChatTemplate: Bool = true,
@@ -75,6 +79,7 @@ public enum CoreAIPipeline {
         ) {
             self.maxTokens = maxTokens
             self.temperature = temperature
+            self.acceleration = acceleration
             self.topK = topK
             self.topP = topP
             self.applyChatTemplate = applyChatTemplate
@@ -107,6 +112,8 @@ public enum CoreAIPipeline {
         public let decodeSeconds: Double
         /// Tokens reused from a warm engine prefix cache for this request, when the backend reports it.
         public let prefixHitCount: Int?
+        /// Raw staged Gemma 4 MTP accounting, present only when that path was configured.
+        public let mtpTelemetry: Gemma4MTPDecodeTelemetry?
         /// Internal diagnostics for parity/determinism tests; not part of the public API surface.
         let generatedTokenIDs: [Int32]
 
@@ -122,7 +129,8 @@ public enum CoreAIPipeline {
             modelLoadSeconds: Double,
             prefillSeconds: Double,
             decodeSeconds: Double,
-            prefixHitCount: Int? = nil
+            prefixHitCount: Int? = nil,
+            mtpTelemetry: Gemma4MTPDecodeTelemetry? = nil
         ) {
             self.init(
                 text: text,
@@ -133,6 +141,7 @@ public enum CoreAIPipeline {
                 prefillSeconds: prefillSeconds,
                 decodeSeconds: decodeSeconds,
                 prefixHitCount: prefixHitCount,
+                mtpTelemetry: mtpTelemetry,
                 generatedTokenIDs: [])
         }
 
@@ -145,6 +154,7 @@ public enum CoreAIPipeline {
             prefillSeconds: Double,
             decodeSeconds: Double,
             prefixHitCount: Int? = nil,
+            mtpTelemetry: Gemma4MTPDecodeTelemetry? = nil,
             generatedTokenIDs: [Int32]
         ) {
             self.text = text
@@ -155,6 +165,7 @@ public enum CoreAIPipeline {
             self.prefillSeconds = prefillSeconds
             self.decodeSeconds = decodeSeconds
             self.prefixHitCount = prefixHitCount
+            self.mtpTelemetry = mtpTelemetry
             self.generatedTokenIDs = generatedTokenIDs
         }
     }
@@ -335,7 +346,37 @@ public enum CoreAIPipeline {
 
     // MARK: - Entry point
 
-    #if COREAI_RUNTIME
+    #if COREAI_RUNTIME && !COREAI_DIRECT_RUNTIME
+    /// Native Qwen3.8 MTP needs a four-state Core AI sidecar runner. Keep the availability bit
+    /// false until the exported sidecar is loaded and driven through its verify functions; the
+    /// policy still parses proof metadata now so callers cannot accidentally opt into AR while
+    /// believing they selected MTP.
+    private static let nativeQwen38MTPRunnerAvailable = false
+
+    private static func resolveQwen38Acceleration(
+        modelPath: String,
+        options: Options
+    ) throws -> Qwen38AccelerationDecision {
+        let bundle = try ResolvedBundle.load(at: modelPath)
+        guard let qwen38 = bundle.qwen38 else {
+            guard options.acceleration != .mtp else {
+                throw RuntimeError.unsupportedFeature(
+                    "acceleration=mtp is available only for a native Qwen3.8-27B Core AI bundle")
+            }
+            return .autoregressive
+        }
+        do {
+            return try Qwen38ExecutionPolicy.resolve(
+                requested: options.acceleration,
+                temperature: options.temperature,
+                proof: qwen38.mtp?.proof,
+                nativeMTPAvailable: nativeQwen38MTPRunnerAvailable)
+        } catch {
+            throw RuntimeError.unsupportedFeature(
+                "native Qwen3.8 MTP is unavailable: \(error)")
+        }
+    }
+
     /// Apple's CoreAILanguageModels fast engine currently warms language bundles with a fixed
     /// cache shape that is too small for qwen3_5-style recurrent-state packing. Keep those bundles
     /// on the explicit sequential engine unless the caller opts into the experimental fast path.
@@ -368,6 +409,10 @@ public enum CoreAIPipeline {
         onToken: ((String) -> Void)? = nil
     ) async throws -> Result {
         #if COREAI_RUNTIME
+        #if !COREAI_DIRECT_RUNTIME
+        _ = try resolveQwen38Acceleration(modelPath: modelPath, options: options)
+        #endif
+        #if !COREAI_DIRECT_RUNTIME
         // Fast path: drive LLM generation through Apple's pipelined engine. Returns nil for
         // diffusion / non-language bundles, which fall through to `LLMEngine` (diffusion denoise +
         // the legacy sequential decode). `COREAI_LEGACY_ENGINE=1` forces the old path.
@@ -377,6 +422,7 @@ public enum CoreAIPipeline {
                 return fast
             }
         }
+        #endif
         if options.constrainedJSONSchema != nil {
             throw RuntimeError.unsupportedFeature(
                 "JSON-schema constrained decoding requires the CoreAILM pipelined language engine")
@@ -584,7 +630,7 @@ public enum CoreAIPipeline {
         }
 
         let functionMap = bundle.manifest.language?.functionMap
-        let mainName = functionMap?.name(for: "main") ?? "main"
+        let mainName = functionMap?.name(for: "prefill") ?? functionMap?.name(for: "main") ?? "main"
         let decodeName = functionMap?.name(for: "decode")
         var lines = [
             "bundle=\(bundle.root.path)",
@@ -638,13 +684,9 @@ public enum CoreAIPipeline {
             draftTokens: draftTokens, vocabSize: vocabSize, backbone: backbone,
             slidingWindow: slidingWindow, maxContext: maxContext, verbose: options.verbose,
             unrolledURL: draftUnrolledAimodel.map { URL(fileURLWithPath: $0) })
-        let promptTokens: [Int]
-        if options.applyChatTemplate {
-            promptTokens = try engine.tokenizer.applyChatTemplate(
-                messages: [["role": "user", "content": prompt]])
-        } else {
-            promptTokens = engine.tokenizer.encode(text: prompt)
-        }
+        let promptTokens = try engine.encodePrompt(
+            messages: [["role": "user", "content": prompt]],
+            applyChatTemplate: options.applyChatTemplate)
         if targetOnly {
             return try await engine.generateTargetOnly(
                 promptTokens: promptTokens, options: options, onToken: onToken)

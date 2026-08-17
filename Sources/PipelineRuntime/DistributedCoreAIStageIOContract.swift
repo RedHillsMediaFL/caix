@@ -167,50 +167,20 @@ struct DistributedCoreAIStageCacheIO {
         -> DistributedCoreAIStageCacheIO
     {
         let stateGroups = try stateCacheGroups(from: descriptor)
-        let hasExplicitKV =
-            descriptor.stateNames.isEmpty
-            && descriptor.inputNames.contains("keyCache")
-            && descriptor.inputNames.contains("valueCache")
-            && descriptor.outputNames.contains("keyCache")
-            && descriptor.outputNames.contains("valueCache")
+        let explicitGroups = try explicitCacheGroups(from: descriptor)
         if !stateGroups.isEmpty {
             return DistributedCoreAIStageCacheIO(
                 contract: .stateful,
                 groups: stateGroups)
         }
-        if hasExplicitKV {
-            let keyName = pick("keyCache", descriptor.inputNames, index: 2)
-            let valueName = pick("valueCache", descriptor.inputNames, index: 3)
-            guard case .ndArray(let inputKeyDesc) = descriptor.inputDescriptor(of: keyName),
-                case .ndArray(let inputValueDesc) = descriptor.inputDescriptor(of: valueName)
-            else {
-                throw CoreAIPipeline.RuntimeError.modelContract(
-                    "distributed stage KV cache inputs are not NDArrays")
-            }
-            guard case .ndArray(let outputKeyDesc) = descriptor.outputDescriptor(of: keyName),
-                case .ndArray(let outputValueDesc) = descriptor.outputDescriptor(of: valueName)
-            else {
-                throw CoreAIPipeline.RuntimeError.modelContract(
-                    "distributed stage KV cache outputs are not NDArrays")
-            }
+        if !explicitGroups.isEmpty {
             return DistributedCoreAIStageCacheIO(
                 contract: .explicitOutputs,
-                groups: [
-                    DistributedCoreAIStageCacheGroupIO(
-                        groupName: "default",
-                        keyCacheName: keyName,
-                        valueCacheName: valueName,
-                        keyCacheDescriptor: inputKeyDesc,
-                        valueCacheDescriptor: inputValueDesc,
-                        keyCacheOutputDescriptor: outputKeyDesc,
-                        valueCacheOutputDescriptor: outputValueDesc)
-                ])
+                groups: explicitGroups)
         }
         if descriptor.stateNames.isEmpty
-            && !descriptor.inputNames.contains("keyCache")
-            && !descriptor.inputNames.contains("valueCache")
-            && !descriptor.outputNames.contains("keyCache")
-            && !descriptor.outputNames.contains("valueCache")
+            && !containsCacheTensorName(descriptor.inputNames)
+            && !containsCacheTensorName(descriptor.outputNames)
         {
             return DistributedCoreAIStageCacheIO(
                 contract: .none,
@@ -223,6 +193,85 @@ struct DistributedCoreAIStageCacheIO {
 
     private static func pick(_ wanted: String, _ names: [String], index: Int) -> String {
         names.contains(wanted) ? wanted : names[index]
+    }
+
+    private static func explicitCacheGroups(
+        from descriptor: InferenceFunctionDescriptor
+    ) throws -> [DistributedCoreAIStageCacheGroupIO] {
+        guard descriptor.stateNames.isEmpty else { return [] }
+
+        var keyByGroup: [String: String] = [:]
+        var valueByGroup: [String: String] = [:]
+        var groupOrder: [String] = []
+        let outputNames = Set(descriptor.outputNames)
+
+        for inputName in descriptor.inputNames {
+            if let groupName = cacheGroupName(for: inputName, suffix: "keyCache") {
+                guard outputNames.contains(inputName) else {
+                    throw CoreAIPipeline.RuntimeError.modelContract(
+                        "distributed stage explicit KV cache key input '\(inputName)' is missing a matching output")
+                }
+                if keyByGroup[groupName] != nil {
+                    throw CoreAIPipeline.RuntimeError.modelContract(
+                        "distributed stage explicit KV cache group '\(groupName)' has duplicate key input")
+                }
+                keyByGroup[groupName] = inputName
+                groupOrder.append(groupName)
+            } else if let groupName = cacheGroupName(for: inputName, suffix: "valueCache") {
+                guard outputNames.contains(inputName) else {
+                    throw CoreAIPipeline.RuntimeError.modelContract(
+                        "distributed stage explicit KV cache value input '\(inputName)' is missing a matching output")
+                }
+                if valueByGroup[groupName] != nil {
+                    throw CoreAIPipeline.RuntimeError.modelContract(
+                        "distributed stage explicit KV cache group '\(groupName)' has duplicate value input")
+                }
+                valueByGroup[groupName] = inputName
+                if !groupOrder.contains(groupName) {
+                    groupOrder.append(groupName)
+                }
+            }
+        }
+
+        guard !keyByGroup.isEmpty || !valueByGroup.isEmpty else { return [] }
+
+        var groups: [DistributedCoreAIStageCacheGroupIO] = []
+        for groupName in groupOrder {
+            guard let keyName = keyByGroup[groupName],
+                let valueName = valueByGroup[groupName]
+            else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "distributed stage explicit KV cache group '\(groupName)' is missing a key/value pair")
+            }
+            guard case .ndArray(let inputKeyDesc) = descriptor.inputDescriptor(of: keyName),
+                case .ndArray(let inputValueDesc) = descriptor.inputDescriptor(of: valueName)
+            else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "distributed stage explicit KV cache inputs are not NDArrays")
+            }
+            guard case .ndArray(let outputKeyDesc) = descriptor.outputDescriptor(of: keyName),
+                case .ndArray(let outputValueDesc) = descriptor.outputDescriptor(of: valueName)
+            else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "distributed stage explicit KV cache outputs are not NDArrays")
+            }
+            groups.append(DistributedCoreAIStageCacheGroupIO(
+                groupName: groupName,
+                keyCacheName: keyName,
+                valueCacheName: valueName,
+                keyCacheDescriptor: inputKeyDesc,
+                valueCacheDescriptor: inputValueDesc,
+                keyCacheOutputDescriptor: outputKeyDesc,
+                valueCacheOutputDescriptor: outputValueDesc))
+        }
+        return groups
+    }
+
+    private static func containsCacheTensorName(_ names: [String]) -> Bool {
+        names.contains { name in
+            cacheGroupName(for: name, suffix: "keyCache") != nil
+                || cacheGroupName(for: name, suffix: "valueCache") != nil
+        }
     }
 
     private static func stateCacheGroups(
@@ -324,6 +373,13 @@ private struct DistributedCoreAIStageNDArrayBinding {
     let descriptor: NDArrayDescriptor
 }
 
+private struct DistributedCoreAIEagleTargetOutputBindings {
+    let fullKey: DistributedCoreAIStageNDArrayBinding
+    let fullValue: DistributedCoreAIStageNDArrayBinding
+    let slidingKey: DistributedCoreAIStageNDArrayBinding
+    let slidingValue: DistributedCoreAIStageNDArrayBinding
+}
+
 private struct DistributedCoreAIStageExecutionIO {
     let inputIDs: DistributedCoreAIStageNDArrayBinding?
     let positionIDs: DistributedCoreAIStageNDArrayBinding
@@ -334,11 +390,14 @@ private struct DistributedCoreAIStageExecutionIO {
     let ropeSinInput: DistributedCoreAIStageNDArrayBinding?
     let blockIDsQInput: DistributedCoreAIStageNDArrayBinding?
     let blockIDsKVInput: DistributedCoreAIStageNDArrayBinding?
+    let eagleTargetOutputs: DistributedCoreAIEagleTargetOutputBindings?
+    let eagleTargetFinalHiddenOutput: DistributedCoreAIStageNDArrayBinding?
 
     static func bound(
         for stage: DistributedStageDescriptor,
         descriptor: InferenceFunctionDescriptor,
-        vocabSize: Int?
+        vocabSize: Int?,
+        eagleTarget: DistributedEagleTargetContract?
     ) throws -> DistributedCoreAIStageExecutionIO {
         let positionIDs = try input(.positionIDs, descriptor: descriptor)
         switch stage.role {
@@ -352,8 +411,20 @@ private struct DistributedCoreAIStageExecutionIO {
                 ropeCosInput: nil,
                 ropeSinInput: nil,
                 blockIDsQInput: nil,
-                blockIDsKVInput: nil)
+                blockIDsKVInput: nil,
+                eagleTargetOutputs: nil,
+                eagleTargetFinalHiddenOutput: nil)
         case .transformerLayers:
+            let eagleOutputs: DistributedCoreAIEagleTargetOutputBindings?
+            if eagleTarget?.producesArtifacts(for: stage.id) == true {
+                eagleOutputs = DistributedCoreAIEagleTargetOutputBindings(
+                    fullKey: try output(.kFull, descriptor: descriptor),
+                    fullValue: try output(.vFull, descriptor: descriptor),
+                    slidingKey: try output(.kSliding, descriptor: descriptor),
+                    slidingValue: try output(.vSliding, descriptor: descriptor))
+            } else {
+                eagleOutputs = nil
+            }
             return DistributedCoreAIStageExecutionIO(
                 inputIDs: try optionalInput(.inputIDs, descriptor: descriptor),
                 positionIDs: positionIDs,
@@ -367,7 +438,9 @@ private struct DistributedCoreAIStageExecutionIO {
                     try input(named: $0.sinInputName, descriptor: descriptor)
                 },
                 blockIDsQInput: try optionalInput(.blockIDsQ, descriptor: descriptor),
-                blockIDsKVInput: try optionalInput(.blockIDsKV, descriptor: descriptor))
+                blockIDsKVInput: try optionalInput(.blockIDsKV, descriptor: descriptor),
+                eagleTargetOutputs: eagleOutputs,
+                eagleTargetFinalHiddenOutput: nil)
         case .finalNormHead:
             guard vocabSize != nil else {
                 throw CoreAIPipeline.RuntimeError.modelContract(
@@ -382,7 +455,11 @@ private struct DistributedCoreAIStageExecutionIO {
                 ropeCosInput: nil,
                 ropeSinInput: nil,
                 blockIDsQInput: nil,
-                blockIDsKVInput: nil)
+                blockIDsKVInput: nil,
+                eagleTargetOutputs: nil,
+                eagleTargetFinalHiddenOutput: eagleTarget?.producesFinalHidden(for: stage.id) == true
+                    ? try output(.hidden, descriptor: descriptor)
+                    : nil)
         }
     }
 
@@ -456,26 +533,74 @@ public final class DistributedCoreAIStageHandleFactory: DistributedStageHandleFa
     }
 }
 
-public final class DistributedCoreAIStageHandle: DistributedStageHandle {
+/// Factory used by the streamed-prefill residency contract. It specializes only the small decode
+/// asset at startup; the corresponding prefill asset remains cold until the coordinator admits it.
+public final class DistributedCoreAIDecodeResidentStageHandleFactory:
+    DistributedStageHandleFactory
+{
+    private let functionName: String?
+    private let vocabSize: Int?
+
+    public init(functionName: String? = nil, vocabSize: Int? = nil) {
+        self.functionName = functionName
+        self.vocabSize = vocabSize
+    }
+
+    public func makeStageHandle(
+        for context: DistributedStageHandleFactoryContext
+    ) async throws -> DistributedStageHandle {
+        try await DistributedCoreAIStageHandle.loadDecodeResident(
+            for: context,
+            functionName: functionName,
+            vocabSize: vocabSize)
+    }
+}
+
+private struct DistributedCoreAIStageExecutionContext {
+    let model: AIModel
+    let assetURL: URL
+    let function: InferenceFunction
+    let functionName: String
+    let functionDescriptor: InferenceFunctionDescriptor
+    let ioContract: DistributedStageIOContract
+    let executionIO: DistributedCoreAIStageExecutionIO
+    let cacheIO: DistributedCoreAIStageCacheIO
+}
+
+public final class DistributedCoreAIStageHandle:
+    DistributedStageHandle,
+    DistributedDecodeResidentStageHandle
+{
     public let descriptor: DistributedStageDescriptor
     public let assetURL: URL
     public let functionName: String
-    public let ioContract: DistributedStageIOContract
+    public private(set) var ioContract: DistributedStageIOContract
 
     public var acceptsTokenIDs: Bool {
-        executionIO.inputIDs != nil
+        decodeContext.executionIO.inputIDs != nil
     }
 
-    private let model: AIModel
-    private let prefillFunction: InferenceFunction
-    private let decodeFunction: InferenceFunction
-    private let decodeFunctionName: String?
-    private let functionDescriptor: InferenceFunctionDescriptor
-    private let executionIO: DistributedCoreAIStageExecutionIO
-    private let cacheIO: DistributedCoreAIStageCacheIO
+    public var supportsEagleTargetArtifacts: Bool {
+        decodeContext.executionIO.eagleTargetOutputs != nil
+    }
+
+    public var supportsEagleTargetKVChunk: Bool {
+        decodeContext.executionIO.eagleTargetOutputs != nil
+    }
+
+    public var supportsEagleTargetFinalHidden: Bool {
+        decodeContext.executionIO.eagleTargetFinalHiddenOutput != nil
+    }
+
+    public var isPrefillResident: Bool { prefillContext != nil }
+
+    private var prefillContext: DistributedCoreAIStageExecutionContext?
+    private let decodeContext: DistributedCoreAIStageExecutionContext
+    private let streamsPrefill: Bool
     private let boundaryTensor: DistributedBoundaryTensorSpec?
     private let nextStageID: String?
     private let vocabSize: Int?
+    private let eagleTargetContract: DistributedEagleTargetContract?
     private var requestStates: [String: DistributedCoreAIStageRequestState] = [:]
 
     private init(
@@ -483,31 +608,25 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
         assetURL: URL,
         functionName: String,
         ioContract: DistributedStageIOContract,
-        model: AIModel,
-        prefillFunction: InferenceFunction,
-        decodeFunction: InferenceFunction,
-        decodeFunctionName: String?,
-        functionDescriptor: InferenceFunctionDescriptor,
-        executionIO: DistributedCoreAIStageExecutionIO,
-        cacheIO: DistributedCoreAIStageCacheIO,
+        prefillContext: DistributedCoreAIStageExecutionContext?,
+        decodeContext: DistributedCoreAIStageExecutionContext,
+        streamsPrefill: Bool,
         boundaryTensor: DistributedBoundaryTensorSpec?,
         nextStageID: String?,
-        vocabSize: Int?
+        vocabSize: Int?,
+        eagleTargetContract: DistributedEagleTargetContract?
     ) {
         self.descriptor = descriptor
         self.assetURL = assetURL
         self.functionName = functionName
         self.ioContract = ioContract
-        self.model = model
-        self.prefillFunction = prefillFunction
-        self.decodeFunction = decodeFunction
-        self.decodeFunctionName = decodeFunctionName
-        self.functionDescriptor = functionDescriptor
-        self.executionIO = executionIO
-        self.cacheIO = cacheIO
+        self.prefillContext = prefillContext
+        self.decodeContext = decodeContext
+        self.streamsPrefill = streamsPrefill
         self.boundaryTensor = boundaryTensor
         self.nextStageID = nextStageID
         self.vocabSize = vocabSize
+        self.eagleTargetContract = eagleTargetContract
     }
 
     public static func load(
@@ -518,55 +637,102 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
         let assetURL = try context.requireExistingAssetURL()
         let resolvedFunctionName = functionName ?? context.mainFunctionName
         let resolvedVocabSize = vocabSize ?? context.vocabSize
-        var specialization = SpecializationOptions(
-            preferredComputeUnitKind: LLMEngine.preferredComputeUnit())
-        specialization.expectFrequentReshapes = true
-        let model = try await AIModel.specialize(
-            contentsOf: assetURL,
-            options: specialization,
-            cache: .default,
-            cachePolicy: .persistent)
-        guard let functionDescriptor = model.functionDescriptor(for: resolvedFunctionName) else {
-            throw CoreAIPipeline.RuntimeError.modelContract(
-                "distributed stage function '\(resolvedFunctionName)' not found in \(assetURL.lastPathComponent); have \(model.functionNames)")
-        }
-        let ioContract = try context.validateCoreAIStageIOContract(
+        let specialization = Self.specializationOptions()
+        let prefillContext = try await Self.loadExecutionContext(
+            assetURL: assetURL,
             functionName: resolvedFunctionName,
-            descriptor: functionDescriptor,
-            vocabSize: resolvedVocabSize)
-        let cacheIO = try DistributedCoreAIStageCacheIO.extracted(from: functionDescriptor)
-        let executionIO = try DistributedCoreAIStageExecutionIO.bound(
-            for: context.descriptor,
-            descriptor: functionDescriptor,
-            vocabSize: resolvedVocabSize)
-        let prefillFunction = try Self.loadFunction(
-            named: resolvedFunctionName,
-            from: model,
-            assetURL: assetURL)
-        let resolvedDecodeFunctionName = context.decodeFunctionName
-        let decodeFunction = try await Self.loadDecodeFunction(
-            named: resolvedDecodeFunctionName,
-            mainFunctionName: resolvedFunctionName,
-            mainFunction: prefillFunction,
-            mainModel: model,
-            mainAssetURL: assetURL,
-            decodeAssetURL: context.resolvedDecodeAssetURL,
+            descriptor: context.descriptor,
+            boundaryTensor: context.boundaryTensor,
+            vocabSize: resolvedVocabSize,
+            eagleTarget: context.eagleTarget,
             specialization: specialization)
+        let decodeContext = try await Self.loadDecodeExecutionContext(
+            for: context,
+            mainContext: prefillContext,
+            specialization: specialization,
+            vocabSize: resolvedVocabSize)
+        try Self.validateCacheCompatibility(
+            prefill: prefillContext.cacheIO,
+            decode: decodeContext.cacheIO,
+            stageID: context.descriptor.id)
         return DistributedCoreAIStageHandle(
             descriptor: context.descriptor,
             assetURL: assetURL,
             functionName: resolvedFunctionName,
-            ioContract: ioContract,
-            model: model,
-            prefillFunction: prefillFunction,
-            decodeFunction: decodeFunction,
-            decodeFunctionName: resolvedDecodeFunctionName,
-            functionDescriptor: functionDescriptor,
-            executionIO: executionIO,
-            cacheIO: cacheIO,
+            ioContract: prefillContext.ioContract,
+            prefillContext: prefillContext,
+            decodeContext: decodeContext,
+            streamsPrefill: false,
             boundaryTensor: context.boundaryTensor,
             nextStageID: context.nextStage?.id,
-            vocabSize: resolvedVocabSize)
+            vocabSize: resolvedVocabSize,
+            eagleTargetContract: context.eagleTarget)
+    }
+
+    public static func loadDecodeResident(
+        for context: DistributedStageHandleFactoryContext,
+        functionName: String? = nil,
+        vocabSize: Int? = nil
+    ) async throws -> DistributedCoreAIStageHandle {
+        let assetURL = try context.requireExistingAssetURL()
+        guard let decodeAssetURL = try context.requireExistingDecodeAssetURL() else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "streamed-prefill stage '\(context.descriptor.id)' is missing decode_asset")
+        }
+        guard let decodeFunctionName = context.decodeFunctionName else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "streamed-prefill stage '\(context.descriptor.id)' is missing a decode function")
+        }
+        let resolvedFunctionName = functionName ?? context.mainFunctionName
+        let resolvedVocabSize = vocabSize ?? context.vocabSize
+        let decodeDescriptor = Self.decodeDescriptor(from: context.descriptor)
+        let decodeContext = try await Self.loadExecutionContext(
+            assetURL: decodeAssetURL,
+            functionName: decodeFunctionName,
+            descriptor: decodeDescriptor,
+            boundaryTensor: context.boundaryTensor,
+            vocabSize: resolvedVocabSize,
+            eagleTarget: context.eagleTarget,
+            specialization: Self.specializationOptions())
+        return DistributedCoreAIStageHandle(
+            descriptor: context.descriptor,
+            assetURL: assetURL,
+            functionName: resolvedFunctionName,
+            ioContract: decodeContext.ioContract,
+            prefillContext: nil,
+            decodeContext: decodeContext,
+            streamsPrefill: true,
+            boundaryTensor: context.boundaryTensor,
+            nextStageID: context.nextStage?.id,
+            vocabSize: resolvedVocabSize,
+            eagleTargetContract: context.eagleTarget)
+    }
+
+    public func loadPrefill() async throws {
+        guard streamsPrefill else { return }
+        guard prefillContext == nil else {
+            throw DistributedStageExecutionError.invalidControlFrame(
+                "prefill stage \(descriptor.id) is already resident")
+        }
+        let loaded = try await Self.loadExecutionContext(
+            assetURL: assetURL,
+            functionName: functionName,
+            descriptor: descriptor,
+            boundaryTensor: boundaryTensor,
+            vocabSize: vocabSize,
+            eagleTarget: eagleTargetContract,
+            specialization: Self.specializationOptions())
+        try Self.validateCacheCompatibility(
+            prefill: loaded.cacheIO,
+            decode: decodeContext.cacheIO,
+            stageID: descriptor.id)
+        ioContract = loaded.ioContract
+        prefillContext = loaded
+    }
+
+    public func unloadPrefill() {
+        guard streamsPrefill else { return }
+        prefillContext = nil
     }
 
     public func allocate(_ allocation: DistributedStageAllocation) async throws {
@@ -585,13 +751,18 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
             throw DistributedStageExecutionError.invalidForwardInput(
                 "request_id \(input.requestID) is not allocated")
         }
-        try validateForwardInput(input, requestState: requestState)
-
         let positionCount = input.positionRange.count
+        let activeContext = try activeExecutionContext(positionCount: positionCount)
+        let executionIO = activeContext.executionIO
+        try validateForwardInput(
+            input,
+            requestState: requestState,
+            executionIO: executionIO)
+
         let positionIDs = try DistributedCoreAIStageNDArrayIO.makePositionIDs(
             positionIDs: input.positionIDs,
             descriptor: executionIO.positionIDs.descriptor)
-        let activeFunction = activeFunction(positionCount: positionCount)
+        let activeFunction = activeContext.function
         tracePositionsIfRequested(input)
 
         let output: DistributedStageForwardOutput
@@ -618,6 +789,7 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
             outputViews.insert(&hiddenStates, for: hiddenOutputBinding.name)
             try await run(
                 activeFunction,
+                cacheIO: activeContext.cacheIO,
                 inputs: [
                     inputIDsBinding.name: inputIDs,
                     executionIO.positionIDs.name: positionIDs,
@@ -679,8 +851,6 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
                 positionCount: positionCount,
                 descriptor: hiddenOutputBinding.descriptor,
                 boundaryTensor: boundaryTensor)
-            var outputViews = InferenceFunction.MutableViews()
-            outputViews.insert(&hiddenOutput, for: hiddenOutputBinding.name)
             var inputs = [
                 hiddenInputBinding.name: hiddenInput,
                 executionIO.positionIDs.name: positionIDs,
@@ -694,7 +864,8 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
                 try addBlockIDInputsIfNeeded(
                     to: &inputs,
                     input: input,
-                    positionCount: positionCount)
+                    positionCount: positionCount,
+                    executionIO: executionIO)
             } else if input.blockIDsQ != nil || input.blockIDsKV != nil {
                 throw DistributedStageExecutionError.invalidForwardInput(
                     "decode stage must not receive block_ids")
@@ -716,11 +887,53 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
                     rope: rope,
                     component: .sin)
             }
-            try await run(
-                activeFunction,
-                inputs: inputs,
-                outputViews: consume outputViews,
-                requestState: &requestState)
+            let eagleKVChunk: DistributedEagleTargetKVChunk?
+            if let eagleOutputs = executionIO.eagleTargetOutputs {
+                var eagleFullKey = try DistributedCoreAIStageNDArrayIO.makeEagleTargetKVOutput(
+                    positionCount: positionCount,
+                    descriptor: eagleOutputs.fullKey.descriptor,
+                    tensorName: eagleOutputs.fullKey.name)
+                var eagleFullValue = try DistributedCoreAIStageNDArrayIO.makeEagleTargetKVOutput(
+                    positionCount: positionCount,
+                    descriptor: eagleOutputs.fullValue.descriptor,
+                    tensorName: eagleOutputs.fullValue.name)
+                var eagleSlidingKey = try DistributedCoreAIStageNDArrayIO.makeEagleTargetKVOutput(
+                    positionCount: positionCount,
+                    descriptor: eagleOutputs.slidingKey.descriptor,
+                    tensorName: eagleOutputs.slidingKey.name)
+                var eagleSlidingValue = try DistributedCoreAIStageNDArrayIO.makeEagleTargetKVOutput(
+                    positionCount: positionCount,
+                    descriptor: eagleOutputs.slidingValue.descriptor,
+                    tensorName: eagleOutputs.slidingValue.name)
+                var outputViews = InferenceFunction.MutableViews()
+                outputViews.insert(&hiddenOutput, for: hiddenOutputBinding.name)
+                outputViews.insert(&eagleFullKey, for: eagleOutputs.fullKey.name)
+                outputViews.insert(&eagleFullValue, for: eagleOutputs.fullValue.name)
+                outputViews.insert(&eagleSlidingKey, for: eagleOutputs.slidingKey.name)
+                outputViews.insert(&eagleSlidingValue, for: eagleOutputs.slidingValue.name)
+                try await run(
+                    activeFunction,
+                    cacheIO: activeContext.cacheIO,
+                    inputs: inputs,
+                    outputViews: consume outputViews,
+                    requestState: &requestState)
+                eagleKVChunk = try DistributedCoreAIStageNDArrayIO.makeEagleTargetKVChunk(
+                    fullKey: eagleFullKey,
+                    fullValue: eagleFullValue,
+                    slidingKey: eagleSlidingKey,
+                    slidingValue: eagleSlidingValue,
+                    positionRange: input.positionRange)
+            } else {
+                var outputViews = InferenceFunction.MutableViews()
+                outputViews.insert(&hiddenOutput, for: hiddenOutputBinding.name)
+                try await run(
+                    activeFunction,
+                    cacheIO: activeContext.cacheIO,
+                    inputs: inputs,
+                    outputViews: consume outputViews,
+                    requestState: &requestState)
+                eagleKVChunk = nil
+            }
             try traceHiddenArrayIfRequested(
                 hiddenOutput,
                 point: "hidden_output_ndarray",
@@ -739,7 +952,8 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
             output = DistributedStageForwardOutput(
                 stageID: descriptor.id,
                 stepIndex: input.stepIndex,
-                hiddenState: hiddenPacket)
+                hiddenState: hiddenPacket,
+                eagleTargetKVChunk: eagleKVChunk)
 
         case .finalNormHead:
             guard let hiddenInputBinding = executionIO.hiddenStatesInput,
@@ -771,8 +985,6 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
                 positionCount: positionCount,
                 vocabSize: vocabSize,
                 descriptor: logitsOutputBinding.descriptor)
-            var outputViews = InferenceFunction.MutableViews()
-            outputViews.insert(&logits, for: logitsOutputBinding.name)
             var inputs = [
                 hiddenInputBinding.name: hiddenInput,
                 executionIO.positionIDs.name: positionIDs,
@@ -782,11 +994,36 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
                     tokenIDs: input.tokenIDs,
                     descriptor: inputIDsBinding.descriptor)
             }
-            try await run(
-                activeFunction,
-                inputs: inputs,
-                outputViews: consume outputViews,
-                requestState: &requestState)
+            let eagleFinalHidden: DistributedEagleTargetTensor?
+            if let finalHiddenBinding = executionIO.eagleTargetFinalHiddenOutput {
+                var finalHiddenOutput = try DistributedCoreAIStageNDArrayIO.makeHiddenStatesOutput(
+                    positionCount: positionCount,
+                    descriptor: finalHiddenBinding.descriptor,
+                    boundaryTensor: boundaryTensor)
+                var outputViews = InferenceFunction.MutableViews()
+                outputViews.insert(&logits, for: logitsOutputBinding.name)
+                outputViews.insert(&finalHiddenOutput, for: finalHiddenBinding.name)
+                try await run(
+                    activeFunction,
+                    cacheIO: activeContext.cacheIO,
+                    inputs: inputs,
+                    outputViews: consume outputViews,
+                    requestState: &requestState)
+                eagleFinalHidden = try DistributedCoreAIStageNDArrayIO.makeEagleTargetFinalHidden(
+                    finalHiddenOutput,
+                    positionRange: input.positionRange,
+                    tensorName: finalHiddenBinding.name)
+            } else {
+                var outputViews = InferenceFunction.MutableViews()
+                outputViews.insert(&logits, for: logitsOutputBinding.name)
+                try await run(
+                    activeFunction,
+                    cacheIO: activeContext.cacheIO,
+                    inputs: inputs,
+                    outputViews: consume outputViews,
+                    requestState: &requestState)
+                eagleFinalHidden = nil
+            }
             let logitsRow = try DistributedCoreAIStageNDArrayIO.readLastLogitsRow(
                 logits,
                 vocabSize: vocabSize)
@@ -806,10 +1043,15 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
                 stageID: descriptor.id,
                 stepIndex: input.stepIndex,
                 tokenID: Int32(tokenID),
-                topLogits: Self.captureTopLogitsIfRequested(logitsRow))
+                topLogits: Self.captureTopLogitsIfRequested(logitsRow),
+                eagleTargetFinalHidden: eagleFinalHidden)
         }
 
-        requestState.processedTokenCount += positionCount
+        if descriptor.role == .finalNormHead {
+            requestState.processedTokenCount = input.positionRange.upperBound
+        } else {
+            requestState.processedTokenCount += positionCount
+        }
         requestStates[input.requestID] = requestState
         return output
     }
@@ -827,17 +1069,15 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
         requestStates.removeValue(forKey: requestID)
     }
 
-    private func unimplemented(_ operation: String) -> CoreAIPipeline.RuntimeError {
-        _ = (
-            model, prefillFunction, decodeFunction, decodeFunctionName, functionDescriptor,
-            executionIO, boundaryTensor, nextStageID, vocabSize
-        )
-        return .modelContract(
-            "distributed Core AI stage \(operation) is not implemented yet")
-    }
-
-    private func activeFunction(positionCount: Int) -> InferenceFunction {
-        positionCount == 1 ? decodeFunction : prefillFunction
+    private func activeExecutionContext(
+        positionCount: Int
+    ) throws -> DistributedCoreAIStageExecutionContext {
+        if positionCount == 1 { return decodeContext }
+        guard let prefillContext else {
+            throw DistributedStageExecutionError.invalidControlFrame(
+                "prefill stage \(descriptor.id) is not resident")
+        }
+        return prefillContext
     }
 
     private static var stageSummaryTraceEnabled: Bool {
@@ -942,7 +1182,8 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
 
     private func validateForwardInput(
         _ input: DistributedStageForwardInput,
-        requestState: DistributedCoreAIStageRequestState
+        requestState: DistributedCoreAIStageRequestState,
+        executionIO: DistributedCoreAIStageExecutionIO
     ) throws {
         guard input.stepIndex >= 0 else {
             throw DistributedStageExecutionError.invalidForwardInput(
@@ -952,9 +1193,16 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
             throw DistributedStageExecutionError.invalidForwardInput(
                 "position_range is invalid")
         }
-        guard input.positionRange.lowerBound == requestState.processedTokenCount else {
-            throw DistributedStageExecutionError.invalidForwardInput(
-                "position_range lower_bound \(input.positionRange.lowerBound) does not match processed_token_count \(requestState.processedTokenCount)")
+        if descriptor.role == .finalNormHead {
+            guard input.positionRange.lowerBound >= requestState.processedTokenCount else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "position_range lower_bound \(input.positionRange.lowerBound) is behind processed_token_count \(requestState.processedTokenCount)")
+            }
+        } else {
+            guard input.positionRange.lowerBound == requestState.processedTokenCount else {
+                throw DistributedStageExecutionError.invalidForwardInput(
+                    "position_range lower_bound \(input.positionRange.lowerBound) does not match processed_token_count \(requestState.processedTokenCount)")
+            }
         }
         guard input.positionRange.upperBound <= requestState.kvCapacity else {
             throw DistributedStageExecutionError.invalidForwardInput(
@@ -1069,7 +1317,8 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
     private func addBlockIDInputsIfNeeded(
         to inputs: inout [String: NDArray],
         input: DistributedStageForwardInput,
-        positionCount: Int
+        positionCount: Int,
+        executionIO: DistributedCoreAIStageExecutionIO
     ) throws {
         let hasAnyBinding = executionIO.blockIDsQInput != nil || executionIO.blockIDsKVInput != nil
         guard hasAnyBinding else {
@@ -1100,6 +1349,7 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
 
     private func run(
         _ function: InferenceFunction,
+        cacheIO: DistributedCoreAIStageCacheIO,
         inputs: [String: NDArray],
         outputViews: consuming InferenceFunction.MutableViews,
         requestState: inout DistributedCoreAIStageRequestState
@@ -1146,31 +1396,77 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
                     "distributed stage stateful KV cache supports at most two cache groups")
             }
         case .explicitOutputs:
-            guard cacheIO.groups.count == 1 else {
-                throw CoreAIPipeline.RuntimeError.modelContract(
-                    "distributed stage explicit KV cache requires one key/value group")
-            }
-            let group = cacheIO.groups[0]
-            let cacheGroup = try requestState.cacheGroup(named: group.groupName)
-            var nextKeyCache = try Self.makeExplicitKVCacheOutput(
-                descriptor: group.keyCacheOutputDescriptor,
-                currentCache: cacheGroup.keyCache,
-                tensorName: group.keyCacheName)
-            var nextValueCache = try Self.makeExplicitKVCacheOutput(
-                descriptor: group.valueCacheOutputDescriptor,
-                currentCache: cacheGroup.valueCache,
-                tensorName: group.valueCacheName)
-            outputViews.insert(&nextKeyCache, for: group.keyCacheName)
-            outputViews.insert(&nextValueCache, for: group.valueCacheName)
             var explicitInputs = inputs
-            explicitInputs[group.keyCacheName] = cacheGroup.keyCache
-            explicitInputs[group.valueCacheName] = cacheGroup.valueCache
-            _ = try await function.run(
-                inputs: explicitInputs,
-                outputViews: consume outputViews)
-            requestState.cacheGroups[group.groupName] = DistributedCoreAIStageRequestCacheGroup(
-                keyCache: nextKeyCache,
-                valueCache: nextValueCache)
+            guard !cacheIO.groups.isEmpty else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "distributed stage explicit KV cache is missing")
+            }
+            if cacheIO.groups.count == 1 {
+                let group = cacheIO.groups[0]
+                let cacheGroup = try requestState.cacheGroup(named: group.groupName)
+                explicitInputs[group.keyCacheName] = cacheGroup.keyCache
+                explicitInputs[group.valueCacheName] = cacheGroup.valueCache
+                var nextKeyCache = try Self.makeExplicitKVCacheOutput(
+                    descriptor: group.keyCacheOutputDescriptor,
+                    currentCache: cacheGroup.keyCache,
+                    tensorName: group.keyCacheName)
+                var nextValueCache = try Self.makeExplicitKVCacheOutput(
+                    descriptor: group.valueCacheOutputDescriptor,
+                    currentCache: cacheGroup.valueCache,
+                    tensorName: group.valueCacheName)
+                outputViews.insert(&nextKeyCache, for: group.keyCacheName)
+                outputViews.insert(&nextValueCache, for: group.valueCacheName)
+                _ = try await function.run(
+                    inputs: explicitInputs,
+                    outputViews: consume outputViews)
+                requestState.cacheGroups[group.groupName] =
+                    DistributedCoreAIStageRequestCacheGroup(
+                        keyCache: nextKeyCache,
+                        valueCache: nextValueCache)
+            } else if cacheIO.groups.count == 2 {
+                let firstGroupIO = cacheIO.groups[0]
+                let secondGroupIO = cacheIO.groups[1]
+                let firstGroup = try requestState.cacheGroup(named: firstGroupIO.groupName)
+                let secondGroup = try requestState.cacheGroup(named: secondGroupIO.groupName)
+                explicitInputs[firstGroupIO.keyCacheName] = firstGroup.keyCache
+                explicitInputs[firstGroupIO.valueCacheName] = firstGroup.valueCache
+                explicitInputs[secondGroupIO.keyCacheName] = secondGroup.keyCache
+                explicitInputs[secondGroupIO.valueCacheName] = secondGroup.valueCache
+                var nextFirstKeyCache = try Self.makeExplicitKVCacheOutput(
+                    descriptor: firstGroupIO.keyCacheOutputDescriptor,
+                    currentCache: firstGroup.keyCache,
+                    tensorName: firstGroupIO.keyCacheName)
+                var nextFirstValueCache = try Self.makeExplicitKVCacheOutput(
+                    descriptor: firstGroupIO.valueCacheOutputDescriptor,
+                    currentCache: firstGroup.valueCache,
+                    tensorName: firstGroupIO.valueCacheName)
+                var nextSecondKeyCache = try Self.makeExplicitKVCacheOutput(
+                    descriptor: secondGroupIO.keyCacheOutputDescriptor,
+                    currentCache: secondGroup.keyCache,
+                    tensorName: secondGroupIO.keyCacheName)
+                var nextSecondValueCache = try Self.makeExplicitKVCacheOutput(
+                    descriptor: secondGroupIO.valueCacheOutputDescriptor,
+                    currentCache: secondGroup.valueCache,
+                    tensorName: secondGroupIO.valueCacheName)
+                outputViews.insert(&nextFirstKeyCache, for: firstGroupIO.keyCacheName)
+                outputViews.insert(&nextFirstValueCache, for: firstGroupIO.valueCacheName)
+                outputViews.insert(&nextSecondKeyCache, for: secondGroupIO.keyCacheName)
+                outputViews.insert(&nextSecondValueCache, for: secondGroupIO.valueCacheName)
+                _ = try await function.run(
+                    inputs: explicitInputs,
+                    outputViews: consume outputViews)
+                requestState.cacheGroups[firstGroupIO.groupName] =
+                    DistributedCoreAIStageRequestCacheGroup(
+                        keyCache: nextFirstKeyCache,
+                        valueCache: nextFirstValueCache)
+                requestState.cacheGroups[secondGroupIO.groupName] =
+                    DistributedCoreAIStageRequestCacheGroup(
+                        keyCache: nextSecondKeyCache,
+                        valueCache: nextSecondValueCache)
+            } else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "distributed stage explicit KV cache supports at most two cache groups")
+            }
         }
     }
 
@@ -1186,38 +1482,173 @@ public final class DistributedCoreAIStageHandle: DistributedStageHandle {
         return function
     }
 
-    private static func loadDecodeFunction(
-        named decodeFunctionName: String?,
-        mainFunctionName: String,
-        mainFunction: InferenceFunction,
-        mainModel: AIModel,
-        mainAssetURL: URL,
-        decodeAssetURL: URL?,
+    private static func specializationOptions() -> SpecializationOptions {
+        var specialization = SpecializationOptions(
+            preferredComputeUnitKind: LLMEngine.preferredComputeUnit())
+        specialization.expectFrequentReshapes = true
+        return specialization
+    }
+
+    private static func loadExecutionContext(
+        assetURL: URL,
+        functionName: String,
+        descriptor: DistributedStageDescriptor,
+        boundaryTensor: DistributedBoundaryTensorSpec?,
+        vocabSize: Int?,
+        eagleTarget: DistributedEagleTargetContract?,
         specialization: SpecializationOptions
-    ) async throws -> InferenceFunction {
-        guard let decodeFunctionName, decodeFunctionName != mainFunctionName else {
-            return mainFunction
+    ) async throws -> DistributedCoreAIStageExecutionContext {
+        let model = try await AIModel.specialize(
+            contentsOf: assetURL,
+            options: specialization,
+            cache: .default,
+            cachePolicy: .persistent)
+        return try makeExecutionContext(
+            model: model,
+            assetURL: assetURL,
+            functionName: functionName,
+            descriptor: descriptor,
+            boundaryTensor: boundaryTensor,
+            vocabSize: vocabSize,
+            eagleTarget: eagleTarget)
+    }
+
+    private static func makeExecutionContext(
+        model: AIModel,
+        assetURL: URL,
+        functionName: String,
+        descriptor: DistributedStageDescriptor,
+        boundaryTensor: DistributedBoundaryTensorSpec?,
+        vocabSize: Int?,
+        eagleTarget: DistributedEagleTargetContract?
+    ) throws -> DistributedCoreAIStageExecutionContext {
+        guard let functionDescriptor = model.functionDescriptor(for: functionName) else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "distributed stage function '\(functionName)' not found in \(assetURL.lastPathComponent); have \(model.functionNames)")
         }
-        if let decodeAssetURL {
-            let decodeModel = try await AIModel.specialize(
-                contentsOf: decodeAssetURL,
-                options: specialization,
-                cache: .default,
-                cachePolicy: .persistent)
-            return try loadFunction(
-                named: decodeFunctionName,
-                from: decodeModel,
-                assetURL: decodeAssetURL)
+        let ioContract = try DistributedStageIOContract.extractedFromCoreAI(
+            functionName: functionName,
+            descriptor: functionDescriptor)
+        try ioContract.validate(
+            for: descriptor,
+            boundaryTensor: boundaryTensor,
+            vocabSize: vocabSize,
+            eagleTarget: eagleTarget)
+        let cacheIO = try DistributedCoreAIStageCacheIO.extracted(from: functionDescriptor)
+        let executionIO = try DistributedCoreAIStageExecutionIO.bound(
+            for: descriptor,
+            descriptor: functionDescriptor,
+            vocabSize: vocabSize,
+            eagleTarget: eagleTarget)
+        let function = try loadFunction(
+            named: functionName,
+            from: model,
+            assetURL: assetURL)
+        return DistributedCoreAIStageExecutionContext(
+            model: model,
+            assetURL: assetURL,
+            function: function,
+            functionName: functionName,
+            functionDescriptor: functionDescriptor,
+            ioContract: ioContract,
+            executionIO: executionIO,
+            cacheIO: cacheIO)
+    }
+
+    private static func loadDecodeExecutionContext(
+        for context: DistributedStageHandleFactoryContext,
+        mainContext: DistributedCoreAIStageExecutionContext,
+        specialization: SpecializationOptions,
+        vocabSize: Int?
+    ) async throws -> DistributedCoreAIStageExecutionContext {
+        guard let decodeFunctionName = context.decodeFunctionName,
+              decodeFunctionName != mainContext.functionName
+        else {
+            return mainContext
         }
-        return try loadFunction(
-            named: decodeFunctionName,
-            from: mainModel,
-            assetURL: mainAssetURL)
+        let descriptor = decodeDescriptor(from: context.descriptor)
+        if let decodeAssetURL = try context.requireExistingDecodeAssetURL() {
+            return try await loadExecutionContext(
+                assetURL: decodeAssetURL,
+                functionName: decodeFunctionName,
+                descriptor: descriptor,
+                boundaryTensor: context.boundaryTensor,
+                vocabSize: vocabSize,
+                eagleTarget: context.eagleTarget,
+                specialization: specialization)
+        }
+        return try makeExecutionContext(
+            model: mainContext.model,
+            assetURL: mainContext.assetURL,
+            functionName: decodeFunctionName,
+            descriptor: descriptor,
+            boundaryTensor: context.boundaryTensor,
+            vocabSize: vocabSize,
+            eagleTarget: context.eagleTarget)
+    }
+
+    private static func decodeDescriptor(
+        from descriptor: DistributedStageDescriptor
+    ) -> DistributedStageDescriptor {
+        DistributedStageDescriptor(
+            id: descriptor.id,
+            role: descriptor.role,
+            layerRange: descriptor.layerRange,
+            assetName: descriptor.assetName,
+            decodeAssetName: descriptor.decodeAssetName,
+            functionMap: descriptor.functionMap,
+            vocabSize: descriptor.vocabSize,
+            prefillExtraInputs: [],
+            workerID: descriptor.workerID,
+            rope: descriptor.rope)
+    }
+
+    private static func validateCacheCompatibility(
+        prefill: DistributedCoreAIStageCacheIO,
+        decode: DistributedCoreAIStageCacheIO,
+        stageID: String
+    ) throws {
+        let contractsMatch: Bool
+        switch (prefill.contract, decode.contract) {
+        case (.none, .none), (.stateful, .stateful), (.explicitOutputs, .explicitOutputs):
+            contractsMatch = true
+        default:
+            contractsMatch = false
+        }
+        guard contractsMatch, prefill.groups.count == decode.groups.count else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "streamed-prefill stage '\(stageID)' prefill/decode KV contracts differ")
+        }
+        for (prefillGroup, decodeGroup) in zip(prefill.groups, decode.groups) {
+            guard prefillGroup.groupName == decodeGroup.groupName,
+                  prefillGroup.keyCacheName == decodeGroup.keyCacheName,
+                  prefillGroup.valueCacheName == decodeGroup.valueCacheName,
+                  cacheDescriptor(prefillGroup.keyCacheDescriptor,
+                                  matches: decodeGroup.keyCacheDescriptor),
+                  cacheDescriptor(prefillGroup.valueCacheDescriptor,
+                                  matches: decodeGroup.valueCacheDescriptor),
+                  cacheDescriptor(prefillGroup.keyCacheOutputDescriptor,
+                                  matches: decodeGroup.keyCacheOutputDescriptor),
+                  cacheDescriptor(prefillGroup.valueCacheOutputDescriptor,
+                                  matches: decodeGroup.valueCacheOutputDescriptor)
+            else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "streamed-prefill stage '\(stageID)' prefill/decode KV group '\(prefillGroup.groupName)' differs")
+            }
+        }
+    }
+
+    private static func cacheDescriptor(
+        _ lhs: NDArrayDescriptor,
+        matches rhs: NDArrayDescriptor
+    ) -> Bool {
+        lhs.scalarType == rhs.scalarType && lhs.shape == rhs.shape
     }
 
     private func makeRequestState(
         for allocation: DistributedStageAllocation
     ) throws -> DistributedCoreAIStageRequestState {
+        let cacheIO = decodeContext.cacheIO
         switch cacheIO.contract {
         case .none:
             return DistributedCoreAIStageRequestState(
@@ -1522,6 +1953,84 @@ enum DistributedCoreAIStageNDArrayIO {
             descriptor: descriptor.resolvingDynamicDimensions(shape))
     }
 
+    static func makeEagleTargetKVOutput(
+        positionCount: Int,
+        descriptor: NDArrayDescriptor,
+        tensorName: String
+    ) throws -> NDArray {
+        guard descriptor.scalarType == .float16 else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "EAGLE target output \(tensorName) scalar type must be float16")
+        }
+        let shape = descriptor.shape
+        guard shape.count == 4,
+            shape[0] == 1,
+            shape[1] > 0,
+            shape[2] == -1 || shape[2] == positionCount,
+            shape[3] > 0
+        else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "EAGLE target output \(tensorName) shape \(shape) cannot resolve to [1, heads, \(positionCount), head_dim]")
+        }
+        return NDArray(descriptor: descriptor.resolvingDynamicDimensions(
+            [1, shape[1], positionCount, shape[3]]))
+    }
+
+    static func makeEagleTargetKVChunk(
+        fullKey: NDArray,
+        fullValue: NDArray,
+        slidingKey: NDArray,
+        slidingValue: NDArray,
+        positionRange: DistributedSequenceRange
+    ) throws -> DistributedEagleTargetKVChunk {
+        func kvTensor(_ array: NDArray, name: String) throws -> DistributedEagleTargetTensor {
+            guard array.scalarType == .float16 else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "EAGLE target output \(name) scalar type must be float16")
+            }
+            let readback = try readRank4(array, as: Float16.self, tensorName: name)
+            return try DistributedEagleTargetTensor(
+                shape: readback.shape,
+                scalarType: .float16,
+                float16BitPatterns: readback.values.map(\.bitPattern))
+        }
+
+        return try DistributedEagleTargetKVChunk(
+            fullKey: kvTensor(fullKey, name: "k_full"),
+            fullValue: kvTensor(fullValue, name: "v_full"),
+            slidingKey: kvTensor(slidingKey, name: "k_sliding"),
+            slidingValue: kvTensor(slidingValue, name: "v_sliding"),
+            fullPositionRange: positionRange,
+            slidingPositionRange: positionRange)
+    }
+
+    static func makeEagleTargetFinalHidden(
+        _ hiddenOutput: NDArray,
+        positionRange: DistributedSequenceRange,
+        tensorName: String
+    ) throws -> DistributedEagleTargetTensor {
+        guard hiddenOutput.scalarType == .float16 else {
+            throw CoreAIPipeline.RuntimeError.modelContract(
+                "EAGLE target \(tensorName) output scalar type must be float16")
+        }
+        let hidden = try readRank3(
+            hiddenOutput,
+            as: Float16.self,
+            tensorName: tensorName)
+        guard hidden.shape[0] == 1, hidden.shape[1] == positionRange.count else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "EAGLE target \(tensorName) output sequence does not match position_range")
+        }
+        let hiddenWidth = hidden.shape[2]
+        let hiddenStart = (hidden.shape[1] - 1) * hiddenWidth
+        return try DistributedEagleTargetTensor(
+            shape: [1, 1, hiddenWidth],
+            scalarType: .float16,
+            float16BitPatterns: hidden.values[
+                hiddenStart..<(hiddenStart + hiddenWidth)
+            ].map(\.bitPattern))
+    }
+
     static func applySoftTokenSpliceIfPresent(
         _ splice: DistributedSoftTokenSplice?,
         to output: inout NDArray,
@@ -1772,6 +2281,22 @@ enum DistributedCoreAIStageNDArrayIO {
         }
     }
 
+    private static func readRank4<T: BitwiseCopyable>(
+        _ array: NDArray,
+        as _: T.Type,
+        tensorName: String
+    ) throws -> (shape: [Int], values: [T]) {
+        try array.view(as: T.self).withUnsafePointer { pointer, shape, strides in
+            let viewShape = copySpan(shape)
+            let viewStrides = copySpan(strides)
+            let offsets = try DistributedCoreAIStageTensorReadbackLayout.rank4Offsets(
+                shape: viewShape,
+                strides: viewStrides,
+                tensorName: tensorName)
+            return (viewShape, offsets.map { pointer[$0] })
+        }
+    }
+
     private static func rank3Summary<T: BinaryFloatingPoint & BitwiseCopyable>(
         _ array: NDArray,
         as _: T.Type,
@@ -1979,6 +2504,13 @@ enum DistributedCoreAIStageKVCacheShape {
                 "KV cache descriptor shape is empty")
         }
         let dynamicIndexes = descriptorShape.indices.filter { descriptorShape[$0] < 0 }
+        if dynamicIndexes.isEmpty {
+            guard descriptorShape.allSatisfy({ $0 > 0 }) else {
+                throw DistributedStageExecutionError.invalidControlFrame(
+                    "KV cache descriptor shape \(descriptorShape) resolves to invalid fixed shape")
+            }
+            return descriptorShape
+        }
         guard dynamicIndexes.count == 1, let dynamicIndex = dynamicIndexes.first else {
             throw DistributedStageExecutionError.invalidControlFrame(
                 "KV cache descriptor shape \(descriptorShape) must have exactly one dynamic capacity dimension")
@@ -2009,6 +2541,45 @@ enum DistributedCoreAIStageTensorReadbackLayout {
                         batch * strides[0]
                             + row * strides[1]
                             + column * strides[2])
+                }
+            }
+        }
+        return offsets
+    }
+
+    static func rank4Offsets(
+        shape: [Int],
+        strides: [Int],
+        tensorName: String
+    ) throws -> [Int] {
+        guard shape.count == 4 else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "\(tensorName) shape \(shape) must be rank 4")
+        }
+        guard strides.count == 4 else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "\(tensorName) strides \(strides) must be rank 4")
+        }
+        guard shape.allSatisfy({ $0 > 0 }) else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "\(tensorName) shape \(shape) must be positive")
+        }
+        guard strides.allSatisfy({ $0 > 0 }) else {
+            throw DistributedStageExecutionError.invalidStageOutput(
+                "\(tensorName) strides \(strides) must be positive")
+        }
+        var offsets: [Int] = []
+        offsets.reserveCapacity(shape.reduce(1, *))
+        for batch in 0..<shape[0] {
+            for head in 0..<shape[1] {
+                for sequence in 0..<shape[2] {
+                    for dimension in 0..<shape[3] {
+                        offsets.append(
+                            batch * strides[0]
+                                + head * strides[1]
+                                + sequence * strides[2]
+                                + dimension * strides[3])
+                    }
                 }
             }
         }

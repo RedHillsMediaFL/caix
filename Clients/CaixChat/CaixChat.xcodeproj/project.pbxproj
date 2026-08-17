@@ -10,6 +10,7 @@
 		15549D9F863D0D8AC200EA4E /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81CE6931863084727350AC41 /* ContentView.swift */; };
 		1879F7750F71BDFB908A7F4F /* ChatStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 140C846ECEF750C18B035DA5 /* ChatStore.swift */; };
 		1BB1C4A7AA57870EFA37D067 /* CaixChatApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69D6DF835DEB40D9794D0F6F /* CaixChatApp.swift */; };
+		7D239A2133CD6B92E9862DDB /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 2308A2B721D9C41F93B7B2D9 /* Assets.xcassets */; };
 		956B8DD0C294EFFBD6436E0B /* CaixClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8ED0D2744809E58D9A37F698 /* CaixClient.swift */; };
 		9C87A8111E1F7D05B834F541 /* ImageAttachment.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABF16C84414538A49C482197 /* ImageAttachment.swift */; };
 		A7EBA2651FF3EE9886954C78 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 4113C6634519372188262D73 /* LaunchScreen.storyboard */; };
@@ -31,6 +32,7 @@
 /* Begin PBXFileReference section */
 		06162C6311F6A2B8C65C7B98 /* CaixChatTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = CaixChatTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		140C846ECEF750C18B035DA5 /* ChatStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatStore.swift; sourceTree = "<group>"; };
+		2308A2B721D9C41F93B7B2D9 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		38071B6EDADFC3752C6B7B99 /* DiscoveryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiscoveryService.swift; sourceTree = "<group>"; };
 		4113C6634519372188262D73 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 		694902B241002337240E988D /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
@@ -64,6 +66,7 @@
 		7B5EABA30DD1A1FFAC80FFD8 /* CaixChat */ = {
 			isa = PBXGroup;
 			children = (
+				2308A2B721D9C41F93B7B2D9 /* Assets.xcassets */,
 				69D6DF835DEB40D9794D0F6F /* CaixChatApp.swift */,
 				8ED0D2744809E58D9A37F698 /* CaixClient.swift */,
 				140C846ECEF750C18B035DA5 /* ChatStore.swift */,
@@ -135,6 +138,7 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					0D54ED4B7E5B787CE6E2D39B = {
+						DevelopmentTeam = 34UZ7Y2KSW;
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -164,6 +168,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				7D239A2133CD6B92E9862DDB /* Assets.xcassets in Resources */,
 				A7EBA2651FF3EE9886954C78 /* LaunchScreen.storyboard in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -210,6 +215,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 34UZ7Y2KSW;
 				INFOPLIST_FILE = CaixChat/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -230,6 +236,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 34UZ7Y2KSW;
 				INFOPLIST_FILE = CaixChat/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -266,6 +273,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
@@ -330,6 +338,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;

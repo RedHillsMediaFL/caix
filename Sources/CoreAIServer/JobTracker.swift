@@ -28,15 +28,24 @@ actor JobTracker {
         .appendingPathComponent(".caix", isDirectory: true)
     static let convertLogDir = logRoot.appendingPathComponent("logs", isDirectory: true)
     static let supportLogDir = logRoot.appendingPathComponent("support-logs", isDirectory: true)
+    private static let defaultConversionTmpDir = "/Volumes/SSD/caix/.tmp/coreai-tmp"
 
     private static func subprocessEnvironment(
         pythonUnbuffered: Bool = false,
         disableHFProgressBars: Bool = false,
-        disableHFXet: Bool = false
+        disableHFXet: Bool = false,
+        conversionTmpDir: Bool = false
     ) -> [String: String] {
         var env = ProcessInfo.processInfo.environment
         if pythonUnbuffered {
             env["PYTHONUNBUFFERED"] = "1"
+        }
+        if conversionTmpDir {
+            let explicitTmp = env["caix_tmpdir"]?.isEmpty == false || env["CAIX_TMPDIR"]?.isEmpty == false
+            if !explicitTmp {
+                env["caix_tmpdir"] = defaultConversionTmpDir
+                env["TMPDIR"] = defaultConversionTmpDir
+            }
         }
         if disableHFProgressBars {
             env["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
@@ -67,7 +76,7 @@ actor JobTracker {
         process.currentDirectoryURL = workingDir
         process.executableURL = URL(fileURLWithPath: pythonExecutable)
         process.arguments = [script, model]
-        process.environment = Self.subprocessEnvironment(pythonUnbuffered: true)
+        process.environment = Self.subprocessEnvironment(pythonUnbuffered: true, conversionTmpDir: true)
         process.standardOutput = logHandle ?? FileHandle.nullDevice
         process.standardError = logHandle ?? FileHandle.nullDevice
         process.terminationHandler = { proc in
@@ -106,7 +115,7 @@ actor JobTracker {
         process.currentDirectoryURL = workingDir
         process.executableURL = URL(fileURLWithPath: pythonExecutable)
         process.arguments = [script, "--check", "--hf-id", hfRepo]
-        process.environment = Self.subprocessEnvironment(pythonUnbuffered: true)
+        process.environment = Self.subprocessEnvironment(pythonUnbuffered: true, conversionTmpDir: true)
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe
@@ -185,7 +194,7 @@ actor JobTracker {
         process.currentDirectoryURL = workingDir
         process.executableURL = URL(fileURLWithPath: pythonExecutable)
         process.arguments = argv
-        process.environment = Self.subprocessEnvironment(pythonUnbuffered: true)
+        process.environment = Self.subprocessEnvironment(pythonUnbuffered: true, conversionTmpDir: true)
         process.standardOutput = logHandle ?? FileHandle.nullDevice
         process.standardError = logHandle ?? FileHandle.nullDevice
         process.terminationHandler = { proc in
@@ -235,7 +244,7 @@ actor JobTracker {
         process.currentDirectoryURL = workingDir
         process.executableURL = URL(fileURLWithPath: pythonExecutable)
         process.arguments = argv
-        process.environment = Self.subprocessEnvironment(pythonUnbuffered: true)
+        process.environment = Self.subprocessEnvironment(pythonUnbuffered: true, conversionTmpDir: true)
         process.standardOutput = logHandle ?? FileHandle.nullDevice
         process.standardError = logHandle ?? FileHandle.nullDevice
         process.terminationHandler = { proc in

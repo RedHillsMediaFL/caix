@@ -1509,7 +1509,7 @@ final class DistributedCoreAIStageAssetIntegrationTests: XCTestCase {
             throw XCTSkip("set CAIX_BASELINE_MODEL to a monolithic caix bundle")
         }
 
-        #if COREAI_RUNTIME
+        #if COREAI_RUNTIME && !COREAI_DIRECT_RUNTIME
         let promptFile = ProcessInfo.processInfo.environment["CAIX_TOKEN_MATCH_PROMPTS"]
         let prompts = try loadPrompts(path: promptFile)
         let maxTokens = max(
@@ -1564,7 +1564,7 @@ final class DistributedCoreAIStageAssetIntegrationTests: XCTestCase {
             try writeGreedyTokenSequencesIfRequested(reference)
         }
         #else
-        throw XCTSkip("requires COREAI_RUNTIME=1")
+        throw XCTSkip("requires the full COREAI_RUNTIME=1 build")
         #endif
     }
 

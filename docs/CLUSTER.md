@@ -37,18 +37,19 @@ cache estimate and `--headroom-gb` to reserve OS/runtime memory on every worker.
 
 ## Thunderbolt Test Gate
 
-Temporary Studio-only overlay, 2026-07-03: the MacBook is unavailable, so this section is a later
-hardware runbook, not tonight's action list. Current work stays on same-machine parity and oracle
-quality until the second machine is reachable again.
+The earlier Studio-only overlay is superseded. A Brew-installed Studio-to-MacBook staged run has
+validated the basic two-machine socket path with a real prompt, but that remains a functional POC:
+it does not prove Thunderbolt Bridge throughput, TB5/RDMA, or memory pooling.
 
-Before asking for MacBook Thunderbolt testing, the gate is:
+Before claiming Thunderbolt or direct-link readiness for a new model, the gate is:
 
 1. Same-machine Qwen3-0.6B staged parity passes the 128-token teacher-forced HF-fp16 prompt-set
    gate through `scripts/run-staged-parity-p0.sh`.
 2. Same-machine staged POC works over loopback.
 3. `caix deploy verify` sees both machines and reports acceptable link speed.
 4. Tiny staged smoke runs through Brew-installed `caix` with explicit timeouts.
-5. Real Qwen3-0.6B stays unpublished until parity/load gates pass.
+5. Any model-specific staged release has its own parity/load gate; transport evidence alone is not
+   upload readiness.
 
 Install caix through Brew on the test machine and run the installed check scripts, not checkout
 binaries.

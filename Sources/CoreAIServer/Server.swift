@@ -26,14 +26,17 @@ public enum CoreAIServer {
         caixVersion: String = "unknown",
         verbose: Bool = false,
         eagleConfig: EagleConfig? = nil,
+        primaryStagedBundle: PrimaryStagedBundleConfiguration? = nil,
+        stagedMTPConfiguration: StagedMTPStartupConfiguration? = nil,
         statsFile: String? = nil,
         prewarm: String = "smallest",
-        conversionGuardEnabled: Bool = true
+        conversionGuardEnabled: Bool = true,
+        whisperTranscriber: (any WhisperTranscribing)? = nil
     ) async throws {
         // Persist usage stats (totals + per-model) across restarts, ollama/omlx-style.
         let statsPath = statsFile ?? (NSHomeDirectory() + "/.caix/usage.json")
         Usage.configure(path: statsPath)
-        let runtime = ServerRuntime(
+        let runtime = try ServerRuntime(
             host: host,
             port: port,
             exportsDir: URL(fileURLWithPath: exportsDir, isDirectory: true),
@@ -44,9 +47,19 @@ public enum CoreAIServer {
             caixVersion: caixVersion,
             verbose: verbose,
             eagleConfig: eagleConfig,
-            conversionGuardEnabled: conversionGuardEnabled)
+            primaryStagedBundle: primaryStagedBundle,
+            stagedMTPConfiguration: stagedMTPConfiguration,
+            conversionGuardEnabled: conversionGuardEnabled,
+            audioTranscriptionService: whisperTranscriber.map {
+                OpenAIAudioTranscriptionService(transcriber: $0)
+            })
 
+        _ = await runtime.memorySupervisor.refresh()
         await runtime.prewarm(selection: prewarm)
+        // Keep required-MTP proof as the final model-mutating startup phase. Generic prewarm is
+        // allowed to offload a model after a recoverable failure, so proving first could discard
+        // the exact resident handle that was validated before the listener opens.
+        try await runtime.requireStagedMTPProofIfNeeded()
 
         let router = Router()
         router.addMiddleware {
@@ -69,6 +82,7 @@ public enum CoreAIServer {
                   dashboard   http://\(host):\(port)/
                   shell       http://\(host):\(port)/shell
                   openai      POST /v1/chat/completions   GET /v1/models
+                              POST /v1/responses          POST /v1/audio/transcriptions
                   anthropic   POST /v1/messages
                   dashboard   GET /api/stats  GET /api/models  GET /api/jobs
                               POST /api/convert  POST /api/load  POST /api/offload
@@ -80,6 +94,9 @@ public enum CoreAIServer {
         let bonjour = BonjourAdvertiser(host: host, port: port, caixVersion: caixVersion, verbose: verbose)
         bonjour.start()
         defer { bonjour.stop() }
+
+        let memoryMonitor = Task { await runtime.monitorResidentMemory() }
+        defer { memoryMonitor.cancel() }
 
         try await app.runService()
     }
@@ -103,20 +120,27 @@ final class ServerRuntime: Sendable {
     let chatHTML: String
     let shellHTML: String
     let verbose: Bool
+    let stagedMTPConfiguration: StagedMTPStartupConfiguration?
     let conversionGuard: ConversionGuard
+    let memorySupervisor: ResidentMemorySupervisor
+    let audioTranscriptionService: OpenAIAudioTranscriptionService?
     var userAgent: String { "caix/\(caixVersion)" }
 
     init(
         host: String, port: Int, exportsDir: URL, registryPath: URL, webDir: URL, convertScript: String,
         pythonExecutable: String, caixVersion: String, verbose: Bool, eagleConfig: EagleConfig? = nil,
-        conversionGuardEnabled: Bool = true
-    ) {
+        primaryStagedBundle: PrimaryStagedBundleConfiguration? = nil,
+        stagedMTPConfiguration: StagedMTPStartupConfiguration? = nil,
+        conversionGuardEnabled: Bool = true,
+        audioTranscriptionService: OpenAIAudioTranscriptionService? = nil
+    ) throws {
         self.host = host
         self.port = port
         self.exportsDir = exportsDir
-        self.manager = ModelManager(
+        self.manager = try ModelManager(
             exportsDir: exportsDir, registryPath: registryPath, verbose: verbose,
-            eagleConfig: eagleConfig)
+            eagleConfig: eagleConfig, primaryStagedBundle: primaryStagedBundle,
+            stagedMTPConfiguration: stagedMTPConfiguration)
         self.jobs = JobTracker()
         self.activity = ActivityLog()
         self.webDir = webDir
@@ -125,9 +149,12 @@ final class ServerRuntime: Sendable {
         self.pythonExecutable = pythonExecutable
         self.caixVersion = caixVersion
         self.verbose = verbose
+        self.stagedMTPConfiguration = stagedMTPConfiguration
         self.conversionGuard = ConversionGuard(
             enabled: conversionGuardEnabled,
             lockPaths: ConversionGuard.defaultLockPaths(exportsDir: exportsDir))
+        self.memorySupervisor = ResidentMemorySupervisor()
+        self.audioTranscriptionService = audioTranscriptionService
         let indexURL = webDir.appendingPathComponent("index.html")
         self.indexHTML =
             (try? String(contentsOf: indexURL, encoding: .utf8))
@@ -142,10 +169,30 @@ final class ServerRuntime: Sendable {
             ?? "<!doctype html><title>caix shell</title><p>web/shell.html not found at \(shellURL.path)</p>"
     }
 
+    func requireStagedMTPProofIfNeeded() async throws {
+        guard let stagedMTPConfiguration, stagedMTPConfiguration.requireMTP else { return }
+        let proof = try await manager.requireStagedMTPProof()
+        try await stagedMTPConfiguration.requireProof { _ in proof }
+        if verbose {
+            let message = "[server] staged MTP startup proof: drafted_tokens=\(proof.draftedTokens) "
+                + "execution_mode=\(proof.executionMode.rawValue) fast=\(proof.fast)\n"
+            FileHandle.standardError.write(Data(message.utf8))
+        }
+    }
+
     func prewarm(selection rawSelection: String) async {
         let selection = rawSelection.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard selection != "off", selection != "none", selection != "false", selection != "no" else {
             FileHandle.standardError.write(Data("[serve] prewarm skipped\n".utf8))
+            return
+        }
+        let memoryStatus = await memorySupervisor.refresh()
+        guard memoryStatus.permitsInference else {
+            FileHandle.standardError.write(
+                Data(
+                    "[serve] prewarm skipped: resident memory gate is \(memoryStatus.disposition.rawValue)"
+                        .appending(memoryStatus.reason.map { " (\($0))" } ?? "")
+                        .appending("\n").utf8))
             return
         }
         if let decision = conversionGuard.decision() {
@@ -206,7 +253,8 @@ final class ServerRuntime: Sendable {
 
     static func prewarmSkipReason(for target: ModelEntry) -> String? {
         let lower = target.name.lowercased()
-        if lower.contains("gemma"),
+        if target.mode != "staged",
+           lower.contains("gemma"),
            let billions = ModelSuitability.inferredBillions(from: target.name),
            billions >= 20 {
             return "large Gemma bundles can hit CoreAI/MPS prewarm threadgroup limits; first real request will load normally"
@@ -225,6 +273,13 @@ final class ServerRuntime: Sendable {
 
         // Dashboard API
         router.get("/api/stats") { _, _ in JSONResponder.encode(MachineStats.snapshot()) }
+        router.get("/healthz") { _, _ in
+            JSONResponder.encode(["status": "ok"])
+        }
+        router.get("/readyz") { _, _ in await self.readinessHandler() }
+        router.get("/api/memory") { _, _ in
+            JSONResponder.encode(await self.memorySupervisor.refresh())
+        }
         router.get("/api/models") { _, _ in JSONResponder.encode(await self.manager.listModels()) }
         router.get("/api/jobs") { _, _ in JSONResponder.encode(await self.jobs.snapshot()) }
         router.get("/api/server") { _, _ in await self.serverInfoHandler() }
@@ -251,6 +306,10 @@ final class ServerRuntime: Sendable {
         // OpenAI-compatible
         router.get("/v1/models") { _, _ in await self.openAIModelsHandler() }
         router.post("/v1/chat/completions") { req, ctx in try await self.openAIChatHandler(req, ctx) }
+        router.post("/v1/responses") { req, ctx in try await self.openAIResponsesHandler(req, ctx) }
+        router.post("/v1/audio/transcriptions") { req, ctx in
+            try await self.openAIAudioTranscriptionHandler(req, ctx)
+        }
 
         // Anthropic-compatible
         router.post("/v1/messages") { req, ctx in try await self.anthropicMessagesHandler(req, ctx) }
@@ -260,6 +319,11 @@ final class ServerRuntime: Sendable {
 
     private func loadHandler(_ request: Request, _ context: BasicRequestContext) async throws -> Response {
         let started = Date()
+        if let response = await residentMemoryGuardResponse(
+            method: "POST", path: "/api/load", startedAt: started)
+        {
+            return response
+        }
         guard let body = try? await Self.decode(ModelActionRequest.self, request) else {
             await activity.record(
                 method: "POST", path: "/api/load", status: 400, startedAt: started,
@@ -360,7 +424,7 @@ final class ServerRuntime: Sendable {
         let payload: [String: JSONValue] = [
             "compression": .string("none,4bit,8bit"),
             "compute_precision": .string("float16,bfloat16,float32"),
-            "generation": .string("max_tokens,temperature,top_p,top_k,seed,stop,system_prompt,kv_capacity,apply_chat_template"),
+            "generation": .string("max_tokens,temperature,top_p,top_k,seed,stop,system_prompt,kv_capacity,apply_chat_template,acceleration(auto|autoregressive|mtp)"),
             "context_default": .int(4096),
             "note": .string("Paste a HuggingFace repo; authored architectures convert + load, new architectures are flagged with the Core AI authoring work required."),
         ]
@@ -1150,13 +1214,157 @@ final class ServerRuntime: Sendable {
     private func openAIModelsHandler() async -> Response {
         let created = Int(Date().timeIntervalSince1970)
         let models = await manager.servedModelsPreferredForChat()
+        var data = models.map { OpenAIModelList.Model(id: $0.name, created: created) }
+        if audioTranscriptionService != nil,
+           !data.contains(where: { $0.id == OpenAIAudioAPI.modelID })
+        {
+            data.append(OpenAIModelList.Model(id: OpenAIAudioAPI.modelID, created: created))
+        }
         let list = OpenAIModelList(
-            data: models.map { .init(id: $0.name, created: created) })
+            data: data)
         return JSONResponder.encode(list)
+    }
+
+    private func openAIAudioTranscriptionHandler(
+        _ originalRequest: Request,
+        _ context: BasicRequestContext
+    ) async throws -> Response {
+        let started = Date()
+        let path = "/v1/audio/transcriptions"
+        if let response = await residentMemoryGuardResponse(
+            method: "POST", path: path, startedAt: started)
+        {
+            return response
+        }
+        if let response = await conversionGuardResponse(
+            method: "POST", path: path, startedAt: started)
+        {
+            return response
+        }
+        guard let audioTranscriptionService else {
+            await activity.record(
+                method: "POST", path: path, status: 503, startedAt: started,
+                model: OpenAIAudioAPI.modelID,
+                summary: "native Whisper service unavailable")
+            return JSONResponder.error(
+                "native Whisper service is unavailable; start caix with an authenticated Whisper asset",
+                status: .serviceUnavailable)
+        }
+
+        var request = originalRequest
+        let contentType = request.headers[.contentType] ?? ""
+        let body: Data
+        do {
+            let buffer = try await request.collectBody(upTo: OpenAIAudioAPI.maximumRequestBytes)
+            body = Data(buffer.readableBytesView)
+        } catch {
+            await activity.record(
+                method: "POST", path: path, status: 413, startedAt: started,
+                model: OpenAIAudioAPI.modelID,
+                summary: "audio request body exceeded bounded upload limit")
+            return JSONResponder.error(
+                "multipart request exceeds the 26 MiB request limit",
+                status: .contentTooLarge)
+        }
+
+        let transcriptionRequest: OpenAIAudioTranscriptionRequest
+        do {
+            let form = try MultipartFormData.parse(body, contentType: contentType)
+            transcriptionRequest = try OpenAIAudioTranscriptionRequest(form: form)
+        } catch {
+            await activity.record(
+                method: "POST", path: path, status: 400, startedAt: started,
+                model: OpenAIAudioAPI.modelID,
+                summary: "invalid OpenAI audio request: \(error)")
+            return JSONResponder.error(
+                "invalid OpenAI audio transcription request: \(error)",
+                status: .badRequest)
+        }
+
+        guard !transcriptionRequest.stream else {
+            await activity.record(
+                method: "POST", path: path, status: 400, startedAt: started,
+                model: OpenAIAudioAPI.modelID,
+                summary: "streaming requested before stable-delta transport is enabled")
+            return JSONResponder.error(
+                "stream=true requires the realtime transcription transport, which is not enabled in this build",
+                status: .badRequest)
+        }
+
+        do {
+            let output = try await audioTranscriptionService.transcribe(transcriptionRequest)
+            await activity.record(
+                method: "POST", path: path, status: 200, startedAt: started,
+                model: OpenAIAudioAPI.modelID,
+                summary: "transcribed \(String(format: "%.3f", output.durationSeconds)) seconds",
+                firstTokenSeconds: output.native.timings.queueSeconds
+                    + output.native.timings.encodeSeconds
+                    + output.native.timings.crossKVLoadSeconds,
+                prefillSeconds: output.native.timings.encodeSeconds
+                    + output.native.timings.crossKVLoadSeconds,
+                decodeSeconds: output.native.timings.decodeSeconds)
+            switch transcriptionRequest.responseFormat {
+            case .json:
+                return JSONResponder.encode(
+                    OpenAIAudioTranscriptionJSONResponse(text: output.text))
+            case .verboseJSON:
+                return JSONResponder.encode(
+                    OpenAIAudioVerboseTranscriptionResponse(
+                        language: output.language,
+                        duration: output.durationSeconds,
+                        text: output.text))
+            case .text:
+                var headers = HTTPFields()
+                headers[.contentType] = "text/plain; charset=utf-8"
+                return Response(
+                    status: .ok,
+                    headers: headers,
+                    body: ResponseBody(byteBuffer: ByteBuffer(string: output.text)))
+            case .srt, .vtt:
+                preconditionFailure("unsupported aligned format passed service validation")
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as OpenAIAudioTranscriptionService.ServiceError {
+            await activity.record(
+                method: "POST", path: path, status: 400, startedAt: started,
+                model: OpenAIAudioAPI.modelID, summary: "audio semantics rejected: \(error)")
+            return JSONResponder.error(error.description, status: .badRequest)
+        } catch let error as InMemoryAudioDecoder.DecodingError {
+            await activity.record(
+                method: "POST", path: path, status: 400, startedAt: started,
+                model: OpenAIAudioAPI.modelID, summary: "audio decode rejected: \(error)")
+            return JSONResponder.error(error.description, status: .badRequest)
+        } catch let error as WhisperDecodingPolicy.PolicyError {
+            await activity.record(
+                method: "POST", path: path, status: 400, startedAt: started,
+                model: OpenAIAudioAPI.modelID, summary: "Whisper policy rejected: \(error)")
+            return JSONResponder.error("Whisper request rejected: \(error)", status: .badRequest)
+        } catch let error as WhisperResidentEngine.EngineError {
+            let overloaded: Bool
+            if case .queueFull = error { overloaded = true } else { overloaded = false }
+            let status: HTTPResponse.Status = overloaded ? .tooManyRequests : .internalServerError
+            await activity.record(
+                method: "POST", path: path, status: status.code, startedAt: started,
+                model: OpenAIAudioAPI.modelID, summary: "native Whisper failed: \(error)")
+            return JSONResponder.error(error.description, status: status)
+        } catch {
+            await activity.record(
+                method: "POST", path: path, status: 500, startedAt: started,
+                model: OpenAIAudioAPI.modelID, summary: "transcription failed: \(error)")
+            return JSONResponder.error(
+                "native Whisper transcription failed: \(error)",
+                status: .internalServerError)
+        }
     }
 
     private func openAIChatHandler(_ request: Request, _ context: BasicRequestContext) async throws -> Response {
         let started = Date()
+        if let response = await residentMemoryGuardResponse(
+            method: "POST", path: "/v1/chat/completions", startedAt: started)
+        {
+            return response
+        }
         if let response = await conversionGuardResponse(
             method: "POST", path: "/v1/chat/completions", startedAt: started) {
             return response
@@ -1176,12 +1384,6 @@ final class ServerRuntime: Sendable {
             return JSONResponder.error("invalid OpenAI chat request: \(error)", status: .badRequest)
         }
         let gen = req.toGeneration()
-        if let response = Self.rejectUnsupportedResponseFormatIfNeeded(gen) {
-            await activity.record(
-                method: "POST", path: "/v1/chat/completions", status: 400, startedAt: started,
-                model: gen.model, summary: "response_format request rejected")
-            return response
-        }
         let modelName = await resolveModelName(gen.model)
         log("request model=\(gen.model) resolved=\(modelName) messages=\(gen.messages.count) maxTokens=\(gen.maxTokens)")
         let handle: ModelHandle
@@ -1200,17 +1402,34 @@ final class ServerRuntime: Sendable {
                 model: modelName, summary: "multimodal request rejected")
             return response
         }
-        if let response = Self.rejectUnsupportedResponseFormatIfNeeded(gen, handle: handle) {
+        // Honor `response_format`: true constrained decoding when the backend supports it, otherwise
+        // best-effort server-side JSON coercion (inject a JSON-only instruction + post-extract) so a
+        // structured-output request is no longer rejected on non-constrained backends (e.g. EAGLE).
+        let plan = Self.constraintPlan(
+            for: gen,
+            backendSupportsConstrainedDecoding:
+                CoreAIPipeline.supportsConstrainedDecoding && handle.supportsConstrainedDecoding)
+        if case .reject(let response) = plan {
             await activity.record(
                 method: "POST", path: "/v1/chat/completions", status: 400, startedAt: started,
                 model: modelName, summary: "response_format unsupported by backend")
             return response
         }
 
-        let messages = Self.messagePayload(gen.messages)
+        var messages = Self.messagePayload(gen.messages)
         var options = Self.options(from: gen)
+        if case .coerce(let responseFormat) = plan {
+            if let instruction = JSONCoercion.systemInstruction(for: responseFormat) {
+                JSONCoercion.inject(instruction: instruction, into: &messages)
+            }
+            // Let the engine decode normally; coercion happens on the produced text.
+            options.constrainedJSONSchema = nil
+        }
+        options.temperature = gen.resolvedTemperature(
+            defaultingToGreedy: handle.defaultsToGreedyWhenTemperatureOmitted)
         options.verbose = verbose
         let tools = gen.toolSpecs
+        let additionalContext = gen.chatTemplateContext
         let format = await manager.outputFormat(for: modelName)
         log("output format \(format.family.rawValue) for \(modelName)")
         let id = "chatcmpl-" + Self.shortID()
@@ -1219,6 +1438,7 @@ final class ServerRuntime: Sendable {
         if gen.stream {
             return Self.openAIStream(
                 handle: handle, messages: messages, options: options, tools: tools, format: format,
+                additionalContext: additionalContext,
                 generationRequest: gen.hasMultimodalContent ? gen : nil,
                 model: modelName, id: id, created: created,
                 includeUsage: req.stream_options?.include_usage == true,
@@ -1230,13 +1450,25 @@ final class ServerRuntime: Sendable {
             let result = gen.hasMultimodalContent
                 ? try await handle.generateMultimodal(
                     request: gen, options: options, tools: tools)
-                : try await handle.generate(messages: messages, options: options, tools: tools)
+                : try await handle.generate(
+                    messages: messages,
+                    options: options,
+                    tools: tools,
+                    additionalContext: additionalContext)
+
             let completedAt = Date()
             log("generation done for \(modelName): \(result.generatedTokenCount) tokens")
             // Normalize the raw base-format output into reasoning_content + content + tool_calls.
             let norm = StreamingNormalizer.normalizeComplete(result.text, format: format)
+            var finalText = norm.text
+            if case .coerce(let responseFormat) = plan {
+                finalText = await coerceJSON(
+                    normalizedText: norm.text, responseFormat: responseFormat, handle: handle,
+                    messages: messages, options: options, tools: tools,
+                    additionalContext: additionalContext, format: format, model: modelName)
+            }
             let message = OpenAIResponseMessage(
-                content: norm.text.isEmpty && norm.hasToolCalls ? nil : norm.text,
+                content: finalText.isEmpty && norm.hasToolCalls ? nil : finalText,
                 reasoning_content: norm.reasoning.isEmpty ? nil : norm.reasoning,
                 tool_calls: norm.hasToolCalls
                     ? norm.toolCalls.map { OpenAIToolCall(id: $0.id, name: $0.name, arguments: $0.arguments) }
@@ -1262,10 +1494,52 @@ final class ServerRuntime: Sendable {
         }
     }
 
+    /// Best-effort coercion of a generated answer into a conforming JSON object for backends that
+    /// cannot truly constrain-decode. Extracts the first balanced top-level JSON object from
+    /// `normalizedText`; on failure, regenerates once with a stricter reminder appended and extracts
+    /// again. Returns the extracted JSON when found, otherwise the original normalized text unchanged
+    /// (so a downstream strict validator rejects it and falls back, exactly as before coercion).
+    func coerceJSON(
+        normalizedText: String,
+        responseFormat: OpenAIResponseFormat,
+        handle: ModelHandle,
+        messages: [[String: any Sendable]],
+        options: CoreAIPipeline.Options,
+        tools: [[String: any Sendable]]?,
+        additionalContext: [String: any Sendable]?,
+        format: OutputFormat,
+        model: String
+    ) async -> String {
+        let requiredKeys = JSONCoercion.requiredKeys(for: responseFormat)
+        var extracted = JSONCoercion.extractJSONObject(from: normalizedText, requiredKeys: requiredKeys)
+        if extracted == nil {
+            var retryMessages = messages
+            retryMessages.append(["role": "user", "content": JSONCoercion.retryReminder()])
+            if let retryResult = try? await handle.generate(
+                messages: retryMessages, options: options, tools: tools,
+                additionalContext: additionalContext)
+            {
+                let retryNorm = StreamingNormalizer.normalizeComplete(retryResult.text, format: format)
+                extracted = JSONCoercion.extractJSONObject(
+                    from: retryNorm.text, requiredKeys: requiredKeys)
+            }
+        }
+        FileHandle.standardError.write(
+            Data(
+                "[openai] json coercion applied for \(model) (schema \(responseFormat.diagnosticName)) valid=\(extracted != nil)\n"
+                    .utf8))
+        return extracted ?? normalizedText
+    }
+
     // MARK: - Anthropic handler
 
     private func anthropicMessagesHandler(_ request: Request, _ context: BasicRequestContext) async throws -> Response {
         let started = Date()
+        if let response = await residentMemoryGuardResponse(
+            method: "POST", path: "/v1/messages", startedAt: started)
+        {
+            return response
+        }
         if let response = await conversionGuardResponse(
             method: "POST", path: "/v1/messages", startedAt: started) {
             return response
@@ -1298,14 +1572,18 @@ final class ServerRuntime: Sendable {
         }
 
         let messages = Self.messagePayload(gen.messages)
-        let options = Self.options(from: gen)
+        var options = Self.options(from: gen)
+        options.temperature = gen.resolvedTemperature(
+            defaultingToGreedy: handle.defaultsToGreedyWhenTemperatureOmitted)
         let tools = gen.toolSpecs
+        let additionalContext = gen.chatTemplateContext
         let format = await manager.outputFormat(for: modelName)
         let id = "msg_" + Self.shortID()
 
         if gen.stream {
             return Self.anthropicStream(
                 handle: handle, messages: messages, options: options, tools: tools, format: format,
+                additionalContext: additionalContext,
                 generationRequest: gen.hasMultimodalContent ? gen : nil,
                 model: modelName, id: id, activity: activity, startedAt: started)
         }
@@ -1314,7 +1592,11 @@ final class ServerRuntime: Sendable {
             let result = gen.hasMultimodalContent
                 ? try await handle.generateMultimodal(
                     request: gen, options: options, tools: tools)
-                : try await handle.generate(messages: messages, options: options, tools: tools)
+                : try await handle.generate(
+                    messages: messages,
+                    options: options,
+                    tools: tools,
+                    additionalContext: additionalContext)
             let completedAt = Date()
             // Normalize into thinking + text + tool_use content blocks (in that order).
             let norm = StreamingNormalizer.normalizeComplete(result.text, format: format)
@@ -1346,7 +1628,7 @@ final class ServerRuntime: Sendable {
         }
     }
 
-    private func conversionGuardResponse(method: String, path: String, startedAt: Date) async -> Response? {
+    func conversionGuardResponse(method: String, path: String, startedAt: Date) async -> Response? {
         guard let decision = conversionGuard.decision() else { return nil }
         await activity.record(
             method: method,
@@ -1357,7 +1639,68 @@ final class ServerRuntime: Sendable {
         return JSONResponder.conversionActive(decision)
     }
 
-    private static func nonStreamingFirstTokenSeconds(
+    func residentMemoryGuardResponse(
+        method: String,
+        path: String,
+        startedAt: Date
+    ) async -> Response? {
+        let status = await memorySupervisor.refresh()
+        guard !status.permitsInference else { return nil }
+        let reason = status.reason ?? "unspecified"
+        await activity.record(
+            method: method,
+            path: path,
+            status: 503,
+            startedAt: startedAt,
+            summary: "resident memory gate \(status.disposition.rawValue): \(reason)")
+        var headers = HTTPFields()
+        headers[.retryAfter] = status.disposition == .restart ? "30" : "2"
+        return JSONResponder.encode(
+            [
+                "error": [
+                    "message": JSONValue.string(
+                        "resident model service is \(status.disposition.rawValue); retry after memory recovers"),
+                    "type": JSONValue.string("resident_memory_gate"),
+                    "reason": JSONValue.string(reason),
+                ]
+            ] as [String: [String: JSONValue]],
+            status: .serviceUnavailable,
+            headers: headers)
+    }
+
+    private func readinessHandler() async -> Response {
+        let status = await memorySupervisor.refresh()
+        return JSONResponder.encode(
+            status,
+            status: status.permitsInference ? .ok : .serviceUnavailable)
+    }
+
+    func monitorResidentMemory() async {
+        var lastState = ""
+        while !Task.isCancelled {
+            let status = await memorySupervisor.refresh()
+            let state = status.disposition.rawValue + ":" + (status.reason ?? "")
+            if state != lastState {
+                FileHandle.standardError.write(
+                    Data(
+                        "[memory] \(state) resident=\(status.workerResidentBytes) available=\(status.availableBytes) swap_growth=\(status.swapGrowthBytes)\n"
+                            .utf8))
+                lastState = state
+            }
+            if status.disposition == .restart {
+                FileHandle.standardError.write(
+                    Data("[memory] hard resident limit reached; terminating for supervised restart\n".utf8))
+                exit(75)
+            }
+            do {
+                try await Task.sleep(for: .seconds(2))
+            } catch {
+                return
+            }
+        }
+    }
+
+    static func nonStreamingFirstTokenSeconds(
         startedAt: Date,
         completedAt: Date,
         result: CoreAIPipeline.Result
@@ -1372,7 +1715,7 @@ final class ServerRuntime: Sendable {
 
     /// Map a requested model name to an available bundle, falling back to the first bundle so
     /// generic client model ids (e.g. "gpt-4") still resolve to the local model.
-    private func resolveModelName(_ requested: String) async -> String {
+    func resolveModelName(_ requested: String) async -> String {
         if let resolved = await manager.resolveServedModelName(requested) { return resolved }
         let bundles = await manager.servedModelsPreferredForChat()
         if bundles.contains(where: { $0.name == requested }) { return requested }
@@ -1381,8 +1724,8 @@ final class ServerRuntime: Sendable {
 
     // MARK: - Mapping helpers
 
-    static func messagePayload(_ messages: [ChatMessage]) -> [[String: String]] {
-        messages.map { ["role": $0.role, "content": $0.content] }
+    static func messagePayload(_ messages: [ChatMessage]) -> [[String: any Sendable]] {
+        messages.map(\.richPayload)
     }
 
     static func rejectMultimodalIfNeeded(
@@ -1391,21 +1734,33 @@ final class ServerRuntime: Sendable {
     ) -> Response? {
         rejectMultimodalIfNeeded(
             gen,
-            backendSupportsMultimodalInput: handle.supportsMultimodalInput)
+            backendMultimodalCapabilities: handle.multimodalCapabilities)
     }
 
     static func rejectMultimodalIfNeeded(
         _ gen: GenerationRequest,
         backendSupportsMultimodalInput: Bool
     ) -> Response? {
+        rejectMultimodalIfNeeded(
+            gen,
+            backendMultimodalCapabilities: backendSupportsMultimodalInput ? .gemma4ImageText() : nil)
+    }
+
+    static func rejectMultimodalIfNeeded(
+        _ gen: GenerationRequest,
+        backendMultimodalCapabilities: MultimodalCapabilities?
+    ) -> Response? {
         guard gen.hasMultimodalContent else { return nil }
-        if let error = MultimodalRequestSupport.validateMinimalSingleImageRequest(gen) {
-            return JSONResponder.error(error.description, status: .badRequest)
-        }
-        guard backendSupportsMultimodalInput else {
+        guard let capabilities = backendMultimodalCapabilities else {
             return JSONResponder.error(
-                "multimodal input requires a loaded multimodal staged Gemma backend; resolved backend is text-only",
+                "multimodal input requires a loaded multimodal Gemma backend; resolved backend is text-only",
                 status: .badRequest)
+        }
+        if let error = MultimodalRequestSupport.validateMinimalSingleImageRequest(
+            gen,
+            capabilities: capabilities)
+        {
+            return JSONResponder.error(error.description, status: .badRequest)
         }
         return nil
     }
@@ -1451,10 +1806,45 @@ final class ServerRuntime: Sendable {
         return nil
     }
 
+    /// How a request's `response_format` should be honored, given what the resolved backend can do.
+    enum ConstraintPlan {
+        /// No structured-output request (or `.text`); generate normally.
+        case none
+        /// Backend supports real constrained decoding; keep the schema in `options` and decode under it.
+        case trueConstrained
+        /// Backend cannot constrain-decode; inject a JSON-only instruction and post-process the text.
+        case coerce(OpenAIResponseFormat)
+        /// A structured-output request that cannot be served at all; return this 400.
+        case reject(Response)
+    }
+
+    /// Decide how to honor `gen.responseFormat`. `.coerce` is chosen whenever a structured-output
+    /// request is made but the backend cannot do true constrained decoding — the server then
+    /// best-effort coerces the model's text into JSON instead of rejecting it (no regression: an
+    /// unconformable answer is returned as-is and rejected downstream, exactly as today).
+    static func constraintPlan(
+        for gen: GenerationRequest,
+        backendSupportsConstrainedDecoding: Bool
+    ) -> ConstraintPlan {
+        guard let responseFormat = gen.responseFormat, responseFormat.requiresConstrainedDecoding else {
+            return .none
+        }
+        guard backendSupportsConstrainedDecoding else {
+            return .coerce(responseFormat)
+        }
+        guard responseFormat.constrainedJSONSchema != nil else {
+            return .reject(JSONResponder.error(
+                "response_format \(responseFormat.diagnosticName) did not produce a JSON schema for constrained decoding",
+                status: .badRequest))
+        }
+        return .trueConstrained
+    }
+
     static func options(from gen: GenerationRequest) -> CoreAIPipeline.Options {
         CoreAIPipeline.Options(
             maxTokens: gen.maxTokens,
             temperature: gen.temperature,
+            acceleration: gen.acceleration,
             topK: gen.topK,
             topP: gen.topP,
             applyChatTemplate: gen.applyChatTemplate,

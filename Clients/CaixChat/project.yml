@@ -8,6 +8,7 @@ settings:
     SWIFT_VERSION: 5.0
     IPHONEOS_DEPLOYMENT_TARGET: 27.0
     ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: NO
+    ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
 targets:
   CaixChat:
     type: application
@@ -21,6 +22,7 @@ targets:
         CFBundleDisplayName: CAIX Chat
         CFBundleShortVersionString: "0.1"
         CFBundleVersion: "1"
+        ITSAppUsesNonExemptEncryption: false
         LSRequiresIPhoneOS: true
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
@@ -48,6 +50,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.redhillsmediafl.CaixChat
         PRODUCT_NAME: CaixChat
         TARGETED_DEVICE_FAMILY: "1,2"
+        DEVELOPMENT_TEAM: 34UZ7Y2KSW
         CODE_SIGN_STYLE: Automatic
         SDKROOT: iphoneos
         SUPPORTED_PLATFORMS: iphoneos iphonesimulator

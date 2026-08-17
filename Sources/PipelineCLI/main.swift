@@ -101,6 +101,20 @@ func printUsage() {
                                   Warm model before listening (default: smallest)
           --no-prewarm            Start serving without first-request compile warmup
           --no-conversion-guard   Allow generation while conversion is active
+          --primary-staged-bundle <dir>
+                                  Exact text staged bundle to advertise as the primary model
+          --primary-model-id <id> Canonical public model ID for --primary-staged-bundle
+          --staged-mtp-assistant <.aimodel>
+                                  Local FP16 assistant for staged MTP startup validation
+          --mtp-draft-tokens <N>  Staged MTP draft-token bound (1...8; default: 4)
+          --require-mtp           Refuse startup unless staged MTP proves a positive draft
+          --whisper-asset <dir>   Authenticated Whisper large-v2 .aimodel directory
+          --whisper-tokenizer <dir>
+                                  Pinned Whisper tokenizer snapshot directory
+          --resident-model-lock <path>
+                                  Gemma/Whisper source provenance lock JSON
+          --whisper-max-queued <N>
+                                  Requests allowed to wait behind native Whisper (default: 8)
           --cluster <manifest>    Stage manifest for distributed coordinator mode
           --remote-stage <id>     Remote stage id; repeatable (default: all transformer stages)
           --prompt-tokens <list>  Comma-separated token ids for a staged POC request
@@ -113,7 +127,7 @@ func printUsage() {
           --eagle-name <name>     Served name for the EAGLE/MTP model
           --eagle-target <dir>    EAGLE target .aimodel bundle
           --eagle-draft <dir>     EAGLE draft .aimodel bundle
-          --eagle-unrolled <dir>  Optional unrolled EAGLE draft .aimodel bundle
+          --eagle-unrolled <dir>  Explicit unrolled EAGLE draft .aimodel bundle (no default)
           --eagle-tokenizer <dir> Tokenizer directory for the EAGLE/MTP model
           --eagle-vocab <N>      EAGLE/MTP vocabulary size (default: 262144)
           --eagle-backbone <N>   EAGLE/MTP hidden size (default: 2816)
@@ -712,15 +726,24 @@ func serveCommand(_ argv: [String]) {
     var statsFile: String? = nil   // usage-stats persistence (default ~/.caix/usage.json)
     var prewarm = "smallest"
     var conversionGuardEnabled = true
+    var primaryStagedBundle: String? = nil
+    var primaryModelID: String? = nil
+    var stagedMTPAssistant: String? = nil
+    var mtpDraftTokens: Int? = nil
+    var requireMTP = false
+    var whisperAsset: String? = nil
+    var whisperTokenizer: String? = nil
+    var residentModelLock: String? = nil
+    var whisperMaximumQueuedRequests: Int? = nil
     var clusterManifest: String? = nil
     var clusterOptions = ClusterRuntimeOptions()
-    // EAGLE MTP model. Enabled by default with the known bundle paths; disable with --no-eagle,
-    // or override paths individually.
+    // EAGLE MTP model. Target and single-step draft retain their known defaults; an unrolled
+    // draft is enabled only by an explicit --eagle-unrolled path. Disable all EAGLE with --no-eagle.
     var eagleEnabled = true
     var eagleName = "gemma-4-26b-a4b-mtp"
     var eagleTarget = cwd + "/exports/gemma-4-26b-a4b-eagle-target/eagle_target.aimodel"
     var eagleDraft = "/Volumes/SSD/ai-dev/eagle-resume/eagle_draft.aimodel"
-    var eagleUnrolled: String? = "/Volumes/SSD/ai-dev/eagle-resume/eagle_draft_unrolled_k4.aimodel"
+    var eagleUnrolled: String? = nil
     var eagleTokenizer = cwd + "/exports/gemma-4-26b-a4b-coreai/tokenizer"
     var eagleVocab = 262144
     var eagleBackbone = 2816
@@ -757,6 +780,15 @@ func serveCommand(_ argv: [String]) {
         case "--prewarm": prewarm = value(arg)
         case "--no-prewarm": prewarm = "off"
         case "--no-conversion-guard": conversionGuardEnabled = false
+        case "--primary-staged-bundle": primaryStagedBundle = value(arg)
+        case "--primary-model-id": primaryModelID = value(arg)
+        case "--staged-mtp-assistant": stagedMTPAssistant = value(arg)
+        case "--mtp-draft-tokens": mtpDraftTokens = intValue(arg)
+        case "--require-mtp": requireMTP = true
+        case "--whisper-asset": whisperAsset = value(arg)
+        case "--whisper-tokenizer": whisperTokenizer = value(arg)
+        case "--resident-model-lock": residentModelLock = value(arg)
+        case "--whisper-max-queued": whisperMaximumQueuedRequests = intValue(arg)
         case "--cluster": clusterManifest = value(arg)
         case "--remote-stage": clusterOptions.remoteStageIDs.append(value(arg))
         case "--prompt-tokens":
@@ -792,6 +824,51 @@ func serveCommand(_ argv: [String]) {
         default: fail("unknown option: \(arg)")
         }
         i += 1
+    }
+
+    let whisperConfiguration: WhisperStartupConfiguration?
+    do {
+        whisperConfiguration = try WhisperStartupConfiguration.resolve(
+            assetPath: whisperAsset,
+            tokenizerPath: whisperTokenizer,
+            modelLockPath: residentModelLock,
+            maximumQueuedRequests: whisperMaximumQueuedRequests)
+    } catch {
+        fail("\(error)")
+    }
+
+    let primaryStagedConfiguration: PrimaryStagedBundleConfiguration?
+    do {
+        primaryStagedConfiguration = try PrimaryStagedBundleConfiguration.resolve(
+            bundlePath: primaryStagedBundle,
+            modelID: primaryModelID)
+    } catch {
+        fail("\(error)")
+    }
+
+    let stagedMTPConfiguration: StagedMTPStartupConfiguration?
+    do {
+        stagedMTPConfiguration = try StagedMTPStartupConfiguration.resolve(
+            assistantPath: stagedMTPAssistant,
+            draftTokens: mtpDraftTokens,
+            requireMTP: requireMTP,
+            primaryBundleURL: primaryStagedConfiguration?.bundleURL,
+            clusterMode: clusterManifest != nil,
+            prewarm: prewarm)
+    } catch {
+        fail("\(error)")
+    }
+
+    if clusterManifest != nil, whisperConfiguration != nil {
+        fail("resident Whisper options cannot be combined with --cluster")
+    }
+
+    if clusterManifest != nil, primaryStagedConfiguration != nil {
+        fail("primary staged serving options cannot be combined with --cluster")
+    }
+
+    if whisperConfiguration != nil, !CoreAIPipeline.isLinked {
+        fail("\(WhisperStartupConfiguration.ConfigurationError.runtimeUnavailable)")
     }
 
     if let clusterManifest {
@@ -848,6 +925,17 @@ func serveCommand(_ argv: [String]) {
     Task {
         defer { semaphore.signal() }
         do {
+            let whisperTranscriber: (any WhisperTranscribing)?
+            if let whisperConfiguration {
+                try WhisperStartupMemoryGate.validate(MachineStats.memorySafetySnapshot())
+                FileHandle.standardError.write(
+                    Data("authenticating and loading resident Whisper large-v2...\n".utf8))
+                whisperTranscriber = try await whisperConfiguration.loadResidentEngine()
+                FileHandle.standardError.write(
+                    Data("resident Whisper large-v2 loaded and ready\n".utf8))
+            } else {
+                whisperTranscriber = nil
+            }
             try await CoreAIServer.serve(
                 host: host,
                 port: port,
@@ -859,9 +947,12 @@ func serveCommand(_ argv: [String]) {
                 caixVersion: CaixBuildInfo.version,
                 verbose: verbose,
                 eagleConfig: eagleConfig,
+                primaryStagedBundle: primaryStagedConfiguration,
+                stagedMTPConfiguration: stagedMTPConfiguration,
                 statsFile: statsFile,
                 prewarm: prewarm,
-                conversionGuardEnabled: conversionGuardEnabled)
+                conversionGuardEnabled: conversionGuardEnabled,
+                whisperTranscriber: whisperTranscriber)
         } catch {
             FileHandle.standardError.write(Data("serve error: \(error)\n".utf8))
             exitCode = 1

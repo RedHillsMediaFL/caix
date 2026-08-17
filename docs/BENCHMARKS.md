@@ -83,8 +83,7 @@ The default usable-bandwidth assumption is 550 GiB/s, matching the current plann
 M1 Ultra. Rows without reviewed active-weight bytes remain `missing_estimate`; do not quote
 percent-of-ceiling for those rows. The checker rejects stale generated output, assumption rows that
 drift from the manifest's repo/local-dir/kind/mode tuple, duplicate assumptions, invalid evidence
-labels, non-positive active-weight values, and missing priority estimates for Qwen3-4B and
-Gemma-26B-A4B.
+labels, and non-positive active-weight values.
 
 To join a completed benchmark report and see utilization against the ceiling:
 
@@ -122,13 +121,12 @@ publication gates run it so stale collection-note wording such as `pending` cann
 release inputs without using the Hub.
 
 Run `scripts/check-hf-model-cards.sh` before uploading card edits. It fetches only live
-`README.md` files for manifest repos, requires the plain support link, applies the
-public-copy guard, and enforces the card-v2 contract: `library_name: caix`, `## Download`,
-`## License`, evidence rows for Base model, Format, Quant, Context, Runtime, and License, plus
-clear `caix-status-label` blocks for component, staged, MTP/speculative, blocked, or
-instability-gated rows. MTP/speculative cards must identify the target+draft package and matching
-standalone target context. Any ready-to-run or verified-in-caix claim must also cite parity evidence
-and speed/benchmark evidence.
+`README.md` files for manifest repos, requires the plain support link, applies the public-copy
+guard, and enforces the production card contract: `library_name: caix`, `base_model`, a small RHM
+logo, `Install & run`, `At a glance` specs, short status, `## License`, and the open-source footer.
+Internal evidence numbers, build details, and test-device notes stay in `benchmarks/MANIFEST.tsv`,
+revision tables, and `docs/CONVERSION_LEDGER.tsv`, not public cards. MTP/speculative cards must
+identify the target+draft package and matching standalone target context in user-facing language.
 The public-copy guard rejects positive structured-output support claims until release-reviewed model
 smoke evidence deliberately lifts that copy gate, and the publication gate runs local fixtures that
 prove the positive-claim and raw-speed copy checks still fail closed. Structured-output smoke
@@ -141,9 +139,9 @@ publication-gate failure, and now rejects release evidence that only succeeds by
 The same public-copy contract also fixture-tests prefix-cache wording. Exact continuation reuse may
 apply in loaded CoreAILM fast handles, but general prompt caching is unsupported in public copy, and
 partial or semantic prefix reuse is blocked until a release gate proves it.
-It also blocks positive multimodal serving claims. The admissible wording is that multimodal requests
-are parsed but unsupported and return HTTP 400 until a verified runtime bundle plus serving evidence
-exists.
+It also rejects broad media-capability copy. Gemma 4 image+text wording must be tied to a verified
+runtime bundle plus serving evidence; audio, video, multipart, and unsupported backends must remain
+framed as clean 400/503 errors.
 Serving-path label drift is blocked in the same fixture: staged artifacts are distributed artifacts,
 not the single-device fast path, and 4-bit monolithic bundles must not claim fp16 1:1.
 Markdown-wrapped speed numbers and `x faster` wording are covered by the public-copy fixture as well;
@@ -210,6 +208,7 @@ Create `benchmarks/revisions.tsv` before a publishable run:
 scripts/collect-model-revisions.sh \
   --out benchmarks/revisions.tsv \
   --details benchmarks/revisions-details.tsv
+scripts/check-model-revisions.sh
 ```
 
 The revisions file is a local run artifact and is ignored by default. It contains:
@@ -218,7 +217,9 @@ The revisions file is a local run artifact and is ignored by default. It contain
 redhillsmediafl/rhm-qwen3-4b-caix<TAB><model-repo-commit>
 ```
 
-Non-dry-run suite rows refuse to measure without a 40-character model repo revision. Re-run the
+Non-dry-run suite rows refuse to measure without a 40-character model repo revision.
+`scripts/check-model-revisions.sh` also keeps the revision table exact relative to
+`benchmarks/MANIFEST.tsv`, with no missing, stale, duplicate, or malformed rows. Re-run the
 collection step immediately before measuring if any model repo was updated.
 
 Runtime dependency evidence is tracked separately from model repo revisions:

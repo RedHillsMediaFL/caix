@@ -1,4 +1,5 @@
 import Foundation
+import MachineStats
 import PipelineRuntime
 #if canImport(Darwin)
 import Darwin
@@ -12,6 +13,71 @@ import Glibc
 /// additive field carrying the resident footprint of loaded models (ignored by the dashboard).
 /// `reasoningSupported` is derived from bundle tokenizer markers and does not require model load.
 /// `multimodalSupported` is true for bundles that can accept the currently supported image route.
+/// `multimodalCapabilities` may also describe detected-but-blocked multimodal bundle contracts.
+public struct MultimodalCapabilities: Codable, Sendable, Equatable {
+    public var family: String
+    public var backend: String
+    public var routeAvailable: Bool
+    public var supportedModalities: [String]
+    public var maxImages: Int
+    public var imageSourceTypes: [String]
+    public var maxSoftTokensPerImage: Int?
+    public var supportedDecoding: [String]
+    public var unsupportedFeatures: [String]
+
+    public init(
+        family: String,
+        backend: String = "staged",
+        routeAvailable: Bool = true,
+        supportedModalities: [String],
+        maxImages: Int,
+        imageSourceTypes: [String],
+        maxSoftTokensPerImage: Int?,
+        supportedDecoding: [String],
+        unsupportedFeatures: [String]
+    ) {
+        self.family = family
+        self.backend = backend
+        self.routeAvailable = routeAvailable
+        self.supportedModalities = supportedModalities
+        self.maxImages = maxImages
+        self.imageSourceTypes = imageSourceTypes
+        self.maxSoftTokensPerImage = maxSoftTokensPerImage
+        self.supportedDecoding = supportedDecoding
+        self.unsupportedFeatures = unsupportedFeatures
+    }
+
+    public static func gemma4ImageText(
+        maxSoftTokensPerImage: Int? = nil,
+        backend: String = "staged",
+        routeAvailable: Bool = true
+    ) -> MultimodalCapabilities {
+        var unsupportedFeatures = [
+            "audio",
+            "video",
+            "files",
+            "remote_image_urls",
+            "multiple_images",
+            "tools",
+            "response_format",
+            "non_greedy_decoding",
+        ]
+        if !routeAvailable {
+            unsupportedFeatures.append("monolithic_prefill_runtime")
+        }
+        return MultimodalCapabilities(
+            family: "gemma4",
+            backend: backend,
+            routeAvailable: routeAvailable,
+            supportedModalities: ["image", "text"],
+            maxImages: 1,
+            imageSourceTypes: ["base64", "data_url"],
+            maxSoftTokensPerImage: maxSoftTokensPerImage,
+            supportedDecoding: ["greedy"],
+            unsupportedFeatures: unsupportedFeatures)
+    }
+}
+
 public struct ModelEntry: Codable, Sendable {
     public var name: String
     public var params: String
@@ -21,6 +87,7 @@ public struct ModelEntry: Codable, Sendable {
     public var mode: String?
     public var reasoningSupported: Bool?
     public var multimodalSupported: Bool?
+    public var multimodalCapabilities: MultimodalCapabilities?
 }
 
 public enum ModelSuitability: Sendable {
@@ -169,9 +236,11 @@ public enum ModelNameRepair: Sendable {
 final class ModelHandle: @unchecked Sendable {
     enum Backend {
         case persistent(PersistentModel)
+        case multimodalMonolithicGemma(PersistentModel)
         case speculative(PersistentSpeculativeModel)
         #if COREAI_RUNTIME
         case eagle(EagleEngine)  // EAGLE speculative decoding
+        case textStaged(TextStagedModel)
         case multimodalStaged(MultimodalStagedModel, Gemma4VisionEmbedder)
         #endif
     }
@@ -192,6 +261,12 @@ final class ModelHandle: @unchecked Sendable {
         self.bytes = model.bundleByteSize
     }
 
+    init(monolithicMultimodalGemma model: PersistentModel, name: String) {
+        self.backend = .multimodalMonolithicGemma(model)
+        self.displayName = name
+        self.bytes = model.bundleByteSize
+    }
+
     init(speculative: PersistentSpeculativeModel, name: String) {
         self.backend = .speculative(speculative)
         self.displayName = name
@@ -205,6 +280,12 @@ final class ModelHandle: @unchecked Sendable {
         self.bytes = bytes
     }
 
+    init(textStaged: TextStagedModel, name: String, bytes: UInt64) {
+        self.backend = .textStaged(textStaged)
+        self.displayName = name
+        self.bytes = bytes
+    }
+
     init(multimodalStaged: MultimodalStagedModel, embedder: Gemma4VisionEmbedder, name: String, bytes: UInt64) {
         self.backend = .multimodalStaged(multimodalStaged, embedder)
         self.displayName = name
@@ -214,25 +295,46 @@ final class ModelHandle: @unchecked Sendable {
 
     var name: String { displayName }
     var memoryBytes: UInt64 { bytes }
-    var supportsMultimodalInput: Bool {
+    var multimodalCapabilities: MultimodalCapabilities? {
         #if COREAI_RUNTIME
-        if case .multimodalStaged = backend { return true }
+        if case .multimodalStaged = backend {
+            return .gemma4ImageText(maxSoftTokensPerImage: Gemma4MultimodalProcessor.maxSoftTokens)
+        }
         #endif
-        return false
+        if case .multimodalMonolithicGemma = backend {
+            return .gemma4ImageText(
+                maxSoftTokensPerImage: 280,
+                backend: "monolithic",
+                routeAvailable: false)
+        }
+        return nil
+    }
+    var supportsMultimodalInput: Bool {
+        multimodalCapabilities?.routeAvailable == true
     }
     var supportsConstrainedDecoding: Bool {
         switch backend {
         case .persistent(let model):
+            return model.supportsConstrainedDecoding
+        case .multimodalMonolithicGemma(let model):
             return model.supportsConstrainedDecoding
         case .speculative:
             return false
         #if COREAI_RUNTIME
         case .eagle:
             return false
+        case .textStaged:
+            return false
         case .multimodalStaged:
             return false
         #endif
         }
+    }
+    var defaultsToGreedyWhenTemperatureOmitted: Bool {
+        #if COREAI_RUNTIME
+        if case .textStaged = backend { return true }
+        #endif
+        return false
     }
     var eagleBackbone: Int? {
         #if COREAI_RUNTIME
@@ -245,9 +347,10 @@ final class ModelHandle: @unchecked Sendable {
     /// guarantees mutual exclusion per model. `tools` (when present) is threaded into the chat
     /// template so the model sees the callable functions (EAGLE path ignores tools).
     func generate(
-        messages: [[String: String]],
+        messages: [[String: any Sendable]],
         options: CoreAIPipeline.Options,
         tools: [[String: any Sendable]]? = nil,
+        additionalContext: [String: any Sendable]? = nil,
         onToken: ((String) -> Void)? = nil
     ) async throws -> CoreAIPipeline.Result {
         await gate.acquire()
@@ -256,10 +359,22 @@ final class ModelHandle: @unchecked Sendable {
             switch backend {
             case .persistent(let model):
                 result = try await model.generate(
-                    messages: messages, options: options, tools: tools, onToken: onToken)
+                    messages: try Self.stringMessages(messages),
+                    options: options,
+                    tools: tools,
+                    onToken: onToken)
+            case .multimodalMonolithicGemma(let model):
+                result = try await model.generate(
+                    messages: try Self.stringMessages(messages),
+                    options: options,
+                    tools: tools,
+                    onToken: onToken)
             case .speculative(let model):
                 let r = try await model.generate(
-                    messages: messages, options: options, tools: tools, onToken: onToken)
+                    messages: try Self.stringMessages(messages),
+                    options: options,
+                    tools: tools,
+                    onToken: onToken)
                 LiveStats.record(SpeculativeStats(
                     model: displayName, tokensPerSecond: r.decodeTokensPerSecond,
                     acceptanceRate: r.acceptanceRate, tokensPerPass: r.tokensPerTargetForward,
@@ -274,7 +389,11 @@ final class ModelHandle: @unchecked Sendable {
             #if COREAI_RUNTIME
             case .eagle(let engine):
                 let r = try await engine.generate(
-                    messages: messages, options: options, tools: tools, onToken: onToken)
+                    messages: messages,
+                    options: options,
+                    tools: tools,
+                    additionalContext: additionalContext,
+                    onToken: onToken)
                 // Publish live speculative metrics for the dashboard, tagged with the served name.
                 LiveStats.record(SpeculativeStats(
                     model: displayName, tokensPerSecond: r.decodeTokensPerSecond,
@@ -287,13 +406,22 @@ final class ModelHandle: @unchecked Sendable {
                     generatedTokenCount: r.generatedTokenCount, stopReason: r.stopReason,
                     modelLoadSeconds: r.modelLoadSeconds, prefillSeconds: r.prefillSeconds,
                     decodeSeconds: r.decodeSeconds)
+            case .textStaged(let model):
+                result = try await model.generate(
+                    messages: messages,
+                    options: options,
+                    tools: tools,
+                    additionalContext: additionalContext,
+                    onToken: onToken)
             case .multimodalStaged(let model, _):
                 if let tools, !tools.isEmpty {
                     throw CoreAIPipeline.RuntimeError.unsupportedFeature(
                         "multimodal staged Gemma does not support tool prompting yet")
                 }
                 result = try await model.generate(
-                    messages: messages, options: options, onToken: onToken)
+                    messages: try Self.stringMessages(messages),
+                    options: options,
+                    onToken: onToken)
             #endif
             }
             await gate.release()
@@ -304,6 +432,47 @@ final class ModelHandle: @unchecked Sendable {
         } catch {
             await gate.release()
             throw error
+        }
+    }
+
+    func stagedMTPStartupProof() async throws -> StagedMTPStartupProof {
+        #if !COREAI_RUNTIME
+        throw CoreAIPipeline.RuntimeError.runtimeUnavailable
+        #else
+        await gate.acquire()
+        do {
+            guard case .textStaged(let model) = backend else {
+                throw CoreAIPipeline.RuntimeError.unsupportedFeature(
+                    "configured staged MTP primary did not load as a text staged model")
+            }
+            let telemetry = try await model.prewarmMTPProof()
+            guard telemetry.strategy == "sequential_no_rollback" else {
+                throw StagedMTPStartupConfiguration.ConfigurationError.proofUnavailable(
+                    "runtime reported unexpected MTP strategy: \(telemetry.strategy)")
+            }
+            await gate.release()
+            return StagedMTPStartupProof(
+                draftedTokens: telemetry.draftedTokens,
+                executionMode: .sequentialNoRollback,
+                fast: telemetry.fastMTP)
+        } catch {
+            await gate.release()
+            throw error
+        }
+        #endif
+    }
+
+    private static func stringMessages(
+        _ messages: [[String: any Sendable]]
+    ) throws -> [[String: String]] {
+        try messages.map { message in
+            guard let role = message["role"] as? String,
+                  let content = message["content"] as? String
+            else {
+                throw CoreAIPipeline.RuntimeError.unsupportedFeature(
+                    "this backend requires string role/content messages")
+            }
+            return ["role": role, "content": content]
         }
     }
 
@@ -349,9 +518,9 @@ final class ModelHandle: @unchecked Sendable {
                             generated.embedding.rows).utf8))
                 }
                 result = generated.result
-            case .persistent, .speculative, .eagle:
+            case .persistent, .multimodalMonolithicGemma, .speculative, .eagle, .textStaged:
                 throw CoreAIPipeline.RuntimeError.unsupportedFeature(
-                    "resolved backend '\(displayName)' does not support multimodal input")
+                    "resolved backend '\(displayName)' does not support routed multimodal input")
             }
             await gate.release()
             Usage.record(model: displayName, inputTokens: result.promptTokenCount,
@@ -377,8 +546,21 @@ enum MultimodalRequestSupport {
         }
     }
 
-    static func validateMinimalSingleImageRequest(_ request: GenerationRequest) -> RequestError? {
+    static func validateMinimalSingleImageRequest(
+        _ request: GenerationRequest,
+        capabilities: MultimodalCapabilities = .gemma4ImageText()
+    ) -> RequestError? {
         guard request.hasMultimodalContent else { return nil }
+        guard capabilities.routeAvailable else {
+            if capabilities.backend == "monolithic" {
+                return .unsupported(
+                    "monolithic Gemma image-text bundles are discovered, but native prefill_multimodal serving is not wired yet")
+            }
+            return .unsupported("resolved multimodal backend is not available for generation")
+        }
+        guard capabilities.supportedModalities.contains("image"), capabilities.maxImages == 1 else {
+            return .unsupported("resolved multimodal backend does not support single-image generation")
+        }
         if let tools = request.tools, !tools.isEmpty {
             return .unsupported("tools are not supported on the multimodal route yet")
         }
@@ -540,16 +722,33 @@ public struct EagleConfig: Sendable {
 /// (actor reentrancy keeps the manager responsive to `listModels`/`isLoaded` meanwhile), and
 /// concurrent loads of the same name are de-duplicated to a single in-flight `Task`.
 public actor ModelManager {
+    struct NativeStagedMemorySnapshot: Sendable {
+        let totalPhysicalMemoryBytes: UInt64
+        let workerResidentBytes: UInt64
+        let availableBytes: UInt64
+        let allocationCapacityBytes: UInt64
+        let pressure: ResidentMemoryPressure?
+        let swapUsedBytes: UInt64?
+    }
+
     private struct DiscoveredBundle: Sendable {
         var name: String
         var directoryName: String
         var mode: String
+        var rootURL: URL
+        var aliases: [String] = []
+
+        var identifiers: [String] {
+            Array(Set(([name, directoryName] + aliases).filter { !$0.isEmpty }))
+        }
     }
 
     private let exportsDir: URL
     private let registryPath: URL
     private let verbose: Bool
     private let eagleConfig: EagleConfig?
+    private let primaryStagedBundle: PrimaryStagedBundleConfiguration?
+    private let stagedMTPConfiguration: StagedMTPStartupConfiguration?
     private let heavyTaskLockPath: URL
 
     private var handles: [String: ModelHandle] = [:]
@@ -560,12 +759,77 @@ public actor ModelManager {
     private var formats: [String: OutputFormat] = [:]
 
     public init(exportsDir: URL, registryPath: URL, verbose: Bool = false,
-                eagleConfig: EagleConfig? = nil, heavyTaskLockPath: URL? = nil) {
+                eagleConfig: EagleConfig? = nil,
+                primaryStagedBundle: PrimaryStagedBundleConfiguration? = nil,
+                stagedMTPConfiguration: StagedMTPStartupConfiguration? = nil,
+                heavyTaskLockPath: URL? = nil) throws {
         self.exportsDir = exportsDir
         self.registryPath = registryPath
         self.verbose = verbose
         self.eagleConfig = eagleConfig
+        self.primaryStagedBundle = primaryStagedBundle
+        self.stagedMTPConfiguration = stagedMTPConfiguration
         self.heavyTaskLockPath = heavyTaskLockPath ?? Self.defaultHeavyTaskLockPath(exportsDir: exportsDir)
+        if let stagedMTPConfiguration {
+            guard primaryStagedBundle?.bundleURL.standardizedFileURL
+                == stagedMTPConfiguration.primaryBundleURL.standardizedFileURL
+            else {
+                throw StagedMTPStartupConfiguration.ConfigurationError.missingPrimaryStagedBundle
+            }
+        }
+        if let primaryStagedBundle {
+            try Self.validatePrimaryStagedBundle(primaryStagedBundle, against: exportsDir)
+            if let eagleConfig {
+                let primary = Self.primaryStagedBundleEntry(primaryStagedBundle)
+                if let alias = primary.identifiers.first(where: {
+                    Self.normalize($0) == Self.normalize(eagleConfig.name)
+                }) {
+                    throw PrimaryStagedBundleConfiguration.ConfigurationError.aliasCollision(
+                        alias: alias,
+                        conflictingModel: eagleConfig.name)
+                }
+            }
+        }
+    }
+
+    static func makeStagedMemorySnapshotProvider(
+        readSnapshot: @escaping @Sendable () -> NativeStagedMemorySnapshot = {
+            let snapshot = MachineStats.memorySafetySnapshot()
+            let pressure: ResidentMemoryPressure?
+            switch snapshot.pressure {
+            case .green: pressure = .green
+            case .yellow: pressure = .yellow
+            case .red: pressure = .red
+            case .unknown: pressure = nil
+            }
+            return NativeStagedMemorySnapshot(
+                totalPhysicalMemoryBytes: snapshot.totalRAMBytes,
+                workerResidentBytes: snapshot.processPhysicalFootprintBytes,
+                availableBytes: snapshot.availableRAMBytes,
+                allocationCapacityBytes: snapshot.allocationCapacityBytes,
+                pressure: pressure,
+                swapUsedBytes: snapshot.swapUsedBytes)
+        }
+    ) -> @Sendable () throws -> DistributedStagedMemorySnapshot {
+        let baseline = readSnapshot()
+        return {
+            let current = readSnapshot()
+            guard let pressure = current.pressure,
+                  let baselineSwap = baseline.swapUsedBytes,
+                  let currentSwap = current.swapUsedBytes
+            else {
+                throw DistributedStagedMemoryAdmissionError.telemetryUnavailable
+            }
+            return DistributedStagedMemorySnapshot(
+                totalPhysicalMemoryBytes: current.totalPhysicalMemoryBytes,
+                workerResidentBytes: current.workerResidentBytes,
+                availableBytes: current.availableBytes,
+                allocationCapacityBytes: current.allocationCapacityBytes,
+                pressure: pressure,
+                swapGrowthBytes: currentSwap >= baselineSwap
+                    ? currentSwap - baselineSwap
+                    : 0)
+        }
     }
 
     // MARK: Discovery
@@ -578,7 +842,13 @@ public actor ModelManager {
            now.timeIntervalSince(cache.updatedAt) < bundleDiscoveryCacheSeconds {
             return cache.entries
         }
-        let entries = Self.discoverBundleEntries(in: exportsDir)
+        var entries = Self.discoverBundleEntries(in: exportsDir)
+        if let primaryStagedBundle {
+            let root = primaryStagedBundle.bundleURL.standardizedFileURL
+            entries.removeAll { $0.rootURL.standardizedFileURL == root }
+            entries.append(Self.primaryStagedBundleEntry(primaryStagedBundle))
+        }
+        entries.sort { $0.name < $1.name }
         bundleCache = (updatedAt: now, entries: entries)
         return entries
     }
@@ -593,9 +863,10 @@ public actor ModelManager {
             guard isDirectory(url), let mode = bundleMode(at: url) else {
                 continue
             }
+            let isMetadataBacked = mode == "standard" || mode == "staged" || mode == "multimodal_monolithic"
             let identity: (metadataName: String?, sourceModelID: String?, tokenizer: String?) =
-                mode == "standard" ? bundleIdentity(at: url) : (nil, nil, nil)
-            let servedName = mode == "standard"
+                isMetadataBacked ? bundleIdentity(at: url) : (nil, nil, nil)
+            let servedName = isMetadataBacked
                 ? ModelNameRepair.preferredServedName(
                     directoryName: name,
                     metadataName: identity.metadataName,
@@ -606,7 +877,8 @@ public actor ModelManager {
                 DiscoveredBundle(
                     name: servedName,
                     directoryName: name,
-                    mode: mode))
+                    mode: mode,
+                    rootURL: url))
         }
         return entries.sorted { $0.name < $1.name }
     }
@@ -645,7 +917,8 @@ public actor ModelManager {
                     status: loaded ? "loaded" : "available", bundle: true,
                     memoryBytes: handles[cfg.name]?.memoryBytes, mode: "eagle",
                     reasoningSupported: outputFormat(for: cfg.name).supportsReasoning,
-                    multimodalSupported: false))
+                    multimodalSupported: false,
+                    multimodalCapabilities: nil))
         }
 
         for bundle in bundleEntries() {
@@ -653,6 +926,7 @@ public actor ModelManager {
             if seen.contains(Self.normalize(name)) { continue }
             seen.insert(Self.normalize(name))
             let loaded = handles[name] != nil
+            let capabilities = Self.multimodalCapabilities(at: bundle.rootURL)
             entries.append(
                 ModelEntry(
                     name: name,
@@ -662,7 +936,8 @@ public actor ModelManager {
                     memoryBytes: handles[name]?.memoryBytes,
                     mode: bundle.mode,
                     reasoningSupported: outputFormat(for: name).supportsReasoning,
-                    multimodalSupported: bundle.mode == "multimodal_staged"))
+                    multimodalSupported: capabilities?.routeAvailable ?? false,
+                    multimodalCapabilities: capabilities))
         }
 
         for (key, params) in registryModels() {
@@ -674,7 +949,8 @@ public actor ModelManager {
                 ModelEntry(
                     name: key, params: params, status: "available", bundle: false,
                     memoryBytes: nil, mode: "registry", reasoningSupported: nil,
-                    multimodalSupported: nil))
+                    multimodalSupported: nil,
+                    multimodalCapabilities: nil))
         }
         return entries
     }
@@ -683,6 +959,9 @@ public actor ModelManager {
         listModels()
             .filter { $0.bundle }
             .sorted {
+                let lhsIsPrimary = $0.name == primaryStagedBundle?.modelID
+                let rhsIsPrimary = $1.name == primaryStagedBundle?.modelID
+                if lhsIsPrimary != rhsIsPrimary { return lhsIsPrimary }
                 let lhs = ModelSuitability.score($0.name, mode: $0.mode)
                 let rhs = ModelSuitability.score($1.name, mode: $1.mode)
                 if lhs == rhs { return $0.name < $1.name }
@@ -699,6 +978,27 @@ public actor ModelManager {
     /// Aggregate resident footprint across loaded models.
     public func loadedMemoryBytes() -> UInt64 {
         handles.values.reduce(0) { $0 + $1.memoryBytes }
+    }
+
+    func stagedMTPConfiguration(for bundleURL: URL) -> StagedMTPStartupConfiguration? {
+        guard let stagedMTPConfiguration,
+              stagedMTPConfiguration.primaryBundleURL.standardizedFileURL
+                == bundleURL.standardizedFileURL
+        else {
+            return nil
+        }
+        return stagedMTPConfiguration
+    }
+
+    func requireStagedMTPProof() async throws -> StagedMTPStartupProof {
+        guard let stagedMTPConfiguration, stagedMTPConfiguration.requireMTP,
+              let primaryStagedBundle
+        else {
+            throw StagedMTPStartupConfiguration.ConfigurationError.proofUnavailable(
+                "no required staged MTP primary is configured")
+        }
+        let handle = try await handle(for: primaryStagedBundle.modelID)
+        return try await handle.stagedMTPStartupProof()
     }
 
     func eagleSummary() -> ServerInfo.Eagle {
@@ -718,8 +1018,8 @@ public actor ModelManager {
 
     /// Resolve a bundle directory name to its path under `exportsDir`.
     private func bundlePath(for name: String) -> String {
-        let directoryName = resolvedBundle(for: name)?.directoryName ?? name
-        return exportsDir.appendingPathComponent(directoryName).path
+        resolvedBundle(for: name)?.rootURL.path
+            ?? exportsDir.appendingPathComponent(name).path
     }
 
     public func resolveServedModelName(_ requested: String) -> String? {
@@ -744,8 +1044,9 @@ public actor ModelManager {
         if let cfg = eagleConfig, cfg.name == name {
             tokenizerDir = URL(fileURLWithPath: cfg.tokenizerDir)
         } else {
-            let directoryName = resolvedBundle(for: name)?.directoryName ?? name
-            tokenizerDir = exportsDir.appendingPathComponent(directoryName).appendingPathComponent("tokenizer")
+            let root = resolvedBundle(for: name)?.rootURL
+                ?? exportsDir.appendingPathComponent(name, isDirectory: true)
+            tokenizerDir = root.appendingPathComponent("tokenizer")
         }
         let format = OutputFormat.detect(modelName: name, tokenizerDir: tokenizerDir)
         formats[name] = format
@@ -770,6 +1071,7 @@ public actor ModelManager {
 
         let path = bundlePath(for: name)
         let eagle = eagleConfig
+        let stagedMTP = stagedMTPConfiguration(for: URL(fileURLWithPath: path, isDirectory: true))
         log("load requested for \(name) at \(path)")
         if eagle?.name != name {
             var isDir = ObjCBool(false)
@@ -793,7 +1095,7 @@ public actor ModelManager {
                     targetURL: URL(fileURLWithPath: cfg.targetPath),
                     draftURL: URL(fileURLWithPath: cfg.draftPath),
                     tokenizerDir: URL(fileURLWithPath: cfg.tokenizerDir),
-                    draftTokens: 7, vocabSize: cfg.vocab, backbone: cfg.backbone,
+                    draftTokens: 4, vocabSize: cfg.vocab, backbone: cfg.backbone,
                     slidingWindow: cfg.slidingWindow, maxContext: cfg.maxContext, verbose: verbose,
                     unrolledURL: cfg.unrolledPath.map { URL(fileURLWithPath: $0) })
                 return ModelHandle(eagle: engine, name: cfg.name, bytes: cfg.bundleBytes)
@@ -811,7 +1113,7 @@ public actor ModelManager {
                     targetURL: root.appendingPathComponent("eagle_target.aimodel", isDirectory: true),
                     draftURL: root.appendingPathComponent("eagle_draft.aimodel", isDirectory: true),
                     tokenizerDir: root.appendingPathComponent("tokenizer", isDirectory: true),
-                    draftTokens: 7, vocabSize: 262144, backbone: 2816,
+                    draftTokens: 4, vocabSize: 262144, backbone: 2816,
                     slidingWindow: 1024, maxContext: 4096, verbose: verbose,
                     unrolledURL: Self.eagleUnrolledURL(in: root))
                 return ModelHandle(eagle: engine, name: name, bytes: Self.dirSize(root))
@@ -847,6 +1149,37 @@ public actor ModelManager {
                     embedder: embedder,
                     name: name,
                     bytes: Self.dirSize(root) + Self.dirSize(embedderURL))
+                #else
+                throw CoreAIPipeline.RuntimeError.runtimeUnavailable
+                #endif
+            } else if Self.isMultimodalMonolithicBundle(at: URL(fileURLWithPath: path, isDirectory: true)) {
+                if verbose {
+                    FileHandle.standardError.write(
+                        Data("[server] loading monolithic multimodal Gemma bundle \(name) for text generation\n".utf8))
+                }
+                let model = try await PersistentModel.load(bundlePath: path, verbose: verbose)
+                return ModelHandle(monolithicMultimodalGemma: model, name: name)
+            } else if Self.isTextStagedBundle(at: URL(fileURLWithPath: path, isDirectory: true)) {
+                #if COREAI_RUNTIME
+                let root = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
+                let stagedMemorySnapshotProvider =
+                    Self.makeStagedMemorySnapshotProvider()
+                if verbose {
+                    FileHandle.standardError.write(
+                        Data("[server] loading text staged bundle \(name)\n".utf8))
+                }
+                let model = try await TextStagedModel.load(
+                    manifestURL: root.appendingPathComponent("stage-manifest.json"),
+                    verbose: verbose,
+                    stagedMemorySnapshotProvider: stagedMemorySnapshotProvider,
+                    mtpAssistantURL: stagedMTP?.assistantURL,
+                    mtpDraftTokens: stagedMTP?.draftTokens
+                        ?? Gemma4MTPDecodeConfiguration.defaultDraftTokens)
+                return ModelHandle(
+                    textStaged: model,
+                    name: name,
+                    bytes: Self.dirSize(root)
+                        + (stagedMTP.map { Self.dirSize($0.assistantURL) } ?? 0))
                 #else
                 throw CoreAIPipeline.RuntimeError.runtimeUnavailable
                 #endif
@@ -888,13 +1221,17 @@ public actor ModelManager {
         if let cfg = eagleConfig, cfg.name == name {
             return "refusing to delete the built-in MTP model"
         }
+        if let primaryStagedBundle,
+           resolvedBundle(for: name)?.rootURL.standardizedFileURL
+                == primaryStagedBundle.bundleURL.standardizedFileURL {
+            return "refusing to delete the configured primary staged bundle"
+        }
         if FileManager.default.fileExists(atPath: heavyTaskLockPath.path) {
             return "refusing to delete bundle while heavy-task lock exists: \(heavyTaskLockPath.path)"
         }
         let bundle = resolvedBundle(for: name)
         let servedName = bundle?.name ?? name
-        let directoryName = bundle?.directoryName ?? name
-        let dir = exportsDir.appendingPathComponent(directoryName)
+        let dir = bundle?.rootURL ?? exportsDir.appendingPathComponent(name)
         guard Self.isDirectory(dir),
               Self.isLoadableBundle(at: dir) else {
             return "no bundle named '\(name)' under exports"
@@ -913,11 +1250,49 @@ public actor ModelManager {
     // MARK: Helpers
 
     private func resolvedBundle(for name: String) -> DiscoveredBundle? {
-        bundleEntries().first { $0.name == name || $0.directoryName == name }
+        bundleEntries().first { $0.identifiers.contains(name) }
     }
 
     private func canonicalName(for name: String) -> String {
         resolvedBundle(for: name)?.name ?? name
+    }
+
+    private static func primaryStagedBundleEntry(
+        _ configuration: PrimaryStagedBundleConfiguration
+    ) -> DiscoveredBundle {
+        let identity = bundleIdentity(at: configuration.bundleURL)
+        let aliases = [
+            configuration.bundleURL.lastPathComponent,
+            identity.metadataName,
+            identity.sourceModelID,
+        ].compactMap { $0 }.filter { $0 != configuration.modelID }
+        return DiscoveredBundle(
+            name: configuration.modelID,
+            directoryName: configuration.bundleURL.lastPathComponent,
+            mode: "staged",
+            rootURL: configuration.bundleURL,
+            aliases: aliases)
+    }
+
+    private static func validatePrimaryStagedBundle(
+        _ configuration: PrimaryStagedBundleConfiguration,
+        against exportsDir: URL
+    ) throws {
+        let primary = primaryStagedBundleEntry(configuration)
+        let root = configuration.bundleURL.standardizedFileURL
+        let automatic = discoverBundleEntries(in: exportsDir).filter {
+            $0.rootURL.standardizedFileURL != root
+        }
+        for alias in primary.identifiers {
+            let normalizedAlias = normalize(alias)
+            if let collision = automatic.first(where: {
+                $0.identifiers.contains { normalize($0) == normalizedAlias }
+            }) {
+                throw PrimaryStagedBundleConfiguration.ConfigurationError.aliasCollision(
+                    alias: alias,
+                    conflictingModel: collision.name)
+            }
+        }
     }
 
     private static func defaultHeavyTaskLockPath(exportsDir: URL) -> URL {
@@ -985,13 +1360,17 @@ public actor ModelManager {
     }
 
     static func isLoadableBundle(at root: URL) -> Bool {
-        isDirectLLMBundle(at: root) || isEagleBundle(at: root) || isMultimodalStagedBundle(at: root)
+        isDirectLLMBundle(at: root) || isEagleBundle(at: root)
+            || isMultimodalStagedBundle(at: root) || isMultimodalMonolithicBundle(at: root)
+            || isTextStagedBundle(at: root)
     }
 
     static func bundleMode(at root: URL) -> String? {
         if isEagleBundle(at: root) { return "eagle" }
         if isClassicSpeculativeBundle(at: root) { return "speculative" }
         if isMultimodalStagedBundle(at: root) { return "multimodal_staged" }
+        if isMultimodalMonolithicBundle(at: root) { return "multimodal_monolithic" }
+        if isTextStagedBundle(at: root) { return "staged" }
         if isDirectLLMBundle(at: root) { return "standard" }
         return nil
     }
@@ -1013,7 +1392,11 @@ public actor ModelManager {
                 ?? item["directory_name"] as? String
                 ?? name
             let mode = item["mode"] as? String ?? "standard"
-            return DiscoveredBundle(name: name, directoryName: directoryName, mode: mode)
+            return DiscoveredBundle(
+                name: name,
+                directoryName: directoryName,
+                mode: mode,
+                rootURL: exportsDir.appendingPathComponent(directoryName, isDirectory: true))
         }
         return entries.sorted { $0.name < $1.name }
     }
@@ -1133,6 +1516,25 @@ public actor ModelManager {
     }
 
     static func isMultimodalStagedBundle(at root: URL) -> Bool {
+        stagedMultimodalMetadata(at: root) != nil
+    }
+
+    static func multimodalCapabilities(at root: URL) -> MultimodalCapabilities? {
+        if let multimodal = stagedMultimodalMetadata(at: root) {
+            let softTokens = intValue(multimodal["soft_tokens_per_image"])
+            return .gemma4ImageText(maxSoftTokensPerImage: softTokens)
+        }
+        if let multimodal = monolithicMultimodalMetadata(at: root) {
+            let softTokens = intValue(multimodal["soft_tokens_per_image"]) ?? 280
+            return .gemma4ImageText(
+                maxSoftTokensPerImage: softTokens,
+                backend: "monolithic",
+                routeAvailable: false)
+        }
+        return nil
+    }
+
+    private static func stagedMultimodalMetadata(at root: URL) -> [String: Any]? {
         let manifest = root.appendingPathComponent("stage-manifest.json")
         guard fileExists(manifest),
               let data = readSmallFile(manifest, timeoutSeconds: 0.5),
@@ -1140,8 +1542,69 @@ public actor ModelManager {
               let multimodal = object["multimodal"] as? [String: Any],
               let kind = multimodal["kind"] as? String,
               kind == "gemma4_unified" || kind == "gemma4"
+        else { return nil }
+        return multimodal
+    }
+
+    static func isMultimodalMonolithicBundle(at root: URL) -> Bool {
+        monolithicMultimodalMetadata(at: root) != nil
+    }
+
+    private static func monolithicMultimodalMetadata(at root: URL) -> [String: Any]? {
+        let metadata = root.appendingPathComponent("metadata.json")
+        guard fileExists(metadata),
+              let data = readSmallFile(metadata, timeoutSeconds: 0.5),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              (object["kind"] as? String) == "llm",
+              let multimodal = object["multimodal"] as? [String: Any],
+              let rawKind = multimodal["kind"] as? String
+        else { return nil }
+        let kind = rawKind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard kind == "gemma4_monolithic"
+                || kind == "gemma4_monolithic_multimodal"
+                || kind == "gemma4_image_text_monolithic"
+        else { return nil }
+        guard declaresMonolithicMultimodalPrefill(object: object, multimodal: multimodal) else {
+            return nil
+        }
+        return multimodal
+    }
+
+    private static func declaresMonolithicMultimodalPrefill(
+        object: [String: Any],
+        multimodal: [String: Any]
+    ) -> Bool {
+        if let prefill = multimodal["prefill_function"] as? String,
+           prefill.trimmingCharacters(in: .whitespacesAndNewlines) == "prefill_multimodal" {
+            return true
+        }
+        guard let language = object["language"] as? [String: Any],
+              let functionMap = language["function_map"] as? [String: Any]
         else { return false }
+        for value in functionMap.values {
+            if let names = value as? [String],
+               names.contains("prefill_multimodal") {
+                return true
+            }
+            if let name = value as? String, name == "prefill_multimodal" {
+                return true
+            }
+        }
+        return false
+    }
+
+    static func isTextStagedBundle(at root: URL) -> Bool {
+        let manifest = root.appendingPathComponent("stage-manifest.json")
+        guard fileExists(manifest), !isMultimodalStagedBundle(at: root) else {
+            return false
+        }
         return true
+    }
+
+    private static func intValue(_ value: Any?) -> Int? {
+        if let value = value as? Int { return value }
+        if let value = value as? Double { return Int(value) }
+        return nil
     }
 
     static func multimodalEmbedderURL(for root: URL, exportsDir: URL) -> URL? {

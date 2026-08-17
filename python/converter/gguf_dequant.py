@@ -20,10 +20,20 @@ QUANT_PREF = ["F16", "BF16", "Q8_0", "Q6_K", "Q5_K_M", "Q5_K_S", "Q5_0", "Q4_K_M
               "Q4_0", "IQ4_NL", "IQ4_XS", "Q3_K_L", "Q3_K_M", "IQ3_M", "Q3_K_S", "Q2_K", "IQ2_M"]
 
 
+def is_mmproj_gguf(path: str) -> bool:
+    return os.path.basename(path).lower().startswith("mmproj") and path.lower().endswith(".gguf")
+
+
 def pick_gguf(files: list[str]) -> str | None:
-    ggufs = [f for f in files if f.lower().endswith(".gguf") and "of-0" not in f and "00002-of" not in f]
+    ggufs = [
+        f for f in files
+        if f.lower().endswith(".gguf")
+        and not is_mmproj_gguf(f)
+        and "of-0" not in f
+        and "00002-of" not in f
+    ]
     if not ggufs:
-        ggufs = [f for f in files if f.lower().endswith(".gguf")]
+        ggufs = [f for f in files if f.lower().endswith(".gguf") and not is_mmproj_gguf(f)]
     def rank(f: str) -> int:
         for i, q in enumerate(QUANT_PREF):
             if q.lower() in f.lower():
@@ -40,6 +50,21 @@ def main() -> int:
     ap.add_argument("--out", required=True, help="output HF directory")
     args = ap.parse_args()
 
+    if args.gguf_file and is_mmproj_gguf(args.gguf_file):
+        print(json.dumps({
+            "ok": False,
+            "reason": "mmproj GGUF files are sidecars, not language model weights. "
+                      "Choose a model .gguf file for text dequantization.",
+        }))
+        return 1
+    if args.repo.lower().endswith(".gguf") and os.path.exists(args.repo) and is_mmproj_gguf(args.repo):
+        print(json.dumps({
+            "ok": False,
+            "reason": "mmproj GGUF files are sidecars, not language model weights. "
+                      "Choose a model .gguf file for text dequantization.",
+        }))
+        return 1
+
     try:
         from transformers import AutoModelForCausalLM, AutoTokenizer
     except Exception as e:
@@ -55,7 +80,16 @@ def main() -> int:
             print(json.dumps({"ok": False, "reason": f"could not list repo: {e}"})); return 1
         gfile = args.gguf_file or pick_gguf(files)
         if not gfile:
-            print(json.dumps({"ok": False, "reason": "no .gguf file found in repo"})); return 1
+            ggufs = [f for f in files if f.lower().endswith(".gguf")]
+            mmprojs = [f for f in ggufs if is_mmproj_gguf(f)]
+            if ggufs and len(mmprojs) == len(ggufs):
+                print(json.dumps({
+                    "ok": False,
+                    "reason": "repo contains only mmproj GGUF sidecars, not language model weights. "
+                              "Choose a model .gguf file for text dequantization.",
+                }))
+                return 1
+            print(json.dumps({"ok": False, "reason": "no model .gguf file found in repo"})); return 1
         repo = args.repo
 
     try:

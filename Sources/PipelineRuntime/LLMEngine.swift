@@ -5,6 +5,20 @@ import CoreAI
 import Foundation
 import Tokenizers
 
+// CoreAI 27 publicly exposes CPU-only specialization and an all-device preferred-device
+// initializer, but not the framework's existing allowed-device-set initializer. Packed Q4
+// EAGLE graphs need accelerator isolation: ANE mode must exclude GPU to avoid MPS dequantize
+// lowering, while GPU mode must exclude the Neural Engine to avoid ANEC conversion fallback and
+// an eventual GPU::ANEHelper evaluation abort. Keep the ABI bridge isolated here until Apple
+// exposes the initializer.
+extension SpecializationOptions {
+    @_silgen_name("$s15CoreAIDelegates21SpecializationOptionsV23allowedComputeUnitKinds09preferredfG4KindACShyAA0fgJ0OG_AGSgtcfC")
+    init(
+        caixAllowedComputeUnitKinds: Set<ComputeUnitKind>,
+        caixPreferredComputeUnitKind: ComputeUnitKind?
+    )
+}
+
 /// Native Core AI prefill + decode engine for exported dynamic LLM `.aimodel` bundles.
 ///
 /// The runtime contract is the one verified by `python/runner/run_aimodel.py` against the
@@ -49,6 +63,8 @@ final class LLMEngine {
     private let positionIdsName: String
     private let keyCacheName: String
     private let valueCacheName: String
+    private let convStateName: String?
+    private let recurrentStateName: String?
     private let logitsName: String
     private enum CacheContract {
         case stateful
@@ -63,11 +79,15 @@ final class LLMEngine {
     private let valueCacheDescriptor: NDArrayDescriptor
     private let keyCacheOutputDescriptor: NDArrayDescriptor
     private let valueCacheOutputDescriptor: NDArrayDescriptor
+    private let convStateDescriptor: NDArrayDescriptor?
+    private let recurrentStateDescriptor: NDArrayDescriptor?
 
     /// Actual scalar types as declared by the compiled graph (never assumed).
     private let logitsScalarType: NDArray.ScalarType
     private let keyCacheScalarType: NDArray.ScalarType
     private let valueCacheScalarType: NDArray.ScalarType
+    private let convStateScalarType: NDArray.ScalarType?
+    private let recurrentStateScalarType: NDArray.ScalarType?
 
     let vocabSize: Int
     let maxContextLength: Int
@@ -82,6 +102,8 @@ final class LLMEngine {
 
     private var keyCache: NDArray
     private var valueCache: NDArray
+    private var convState: NDArray?
+    private var recurrentState: NDArray?
     private(set) var processedTokenCount: Int = 0
 
     private let stopIds: Set<Int>
@@ -131,7 +153,9 @@ final class LLMEngine {
             vocabSize: bundle.vocabSize,
             maxContextLength: bundle.maxContextLength,
             minKVCapacity: bundle.minKVCapacity,
-            mainFunctionName: bundle.manifest.language?.functionMap?.name(for: "main") ?? "main",
+            mainFunctionName: bundle.manifest.language?.functionMap?.name(for: "prefill")
+                ?? bundle.manifest.language?.functionMap?.name(for: "main")
+                ?? "main",
             decodeFunctionName: bundle.manifest.language?.functionMap?.name(for: "decode"),
             loadSeconds: loadSeconds,
             verbose: verbose,
@@ -141,11 +165,51 @@ final class LLMEngine {
     }
 
     /// Preferred compute unit, overridable via `COREAI_COMPUTE` (gpu|ane|cpu|all). Default `.gpu`.
-    static func preferredComputeUnit() -> ComputeUnitKind {
-        switch ProcessInfo.processInfo.environment["COREAI_COMPUTE"]?.lowercased() {
+    static func preferredComputeUnit(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> ComputeUnitKind {
+        computeUnit(named: environment["COREAI_COMPUTE"]) ?? .gpu
+    }
+
+    /// EAGLE specialization can be routed independently from other resident models. This lets
+    /// packed-Q4 Gemma graphs use ANE while Whisper and standard LLMs retain their general
+    /// `COREAI_COMPUTE` selection.
+    static func preferredEagleComputeUnit(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> ComputeUnitKind {
+        computeUnit(named: environment["COREAI_EAGLE_COMPUTE"])
+            ?? preferredComputeUnit(environment: environment)
+    }
+
+    /// Specialization policy for EAGLE target and MTP assistant graphs.
+    ///
+    /// A preferred compute unit alone still allows partitioning onto every accelerator. Use
+    /// explicit allowed sets so ANE and GPU modes cannot silently cross onto the other backend.
+    /// CPU remains available as a safe fallback for operators the selected accelerator cannot
+    /// lower.
+    static func eagleSpecializationOptions(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> SpecializationOptions {
+        let computeUnit = preferredEagleComputeUnit(environment: environment)
+        if computeUnit == .cpu {
+            return .cpuOnly
+        }
+        if computeUnit == .neuralEngine {
+            return SpecializationOptions(
+                caixAllowedComputeUnitKinds: [.cpu, .neuralEngine],
+                caixPreferredComputeUnitKind: .neuralEngine)
+        }
+        return SpecializationOptions(
+            caixAllowedComputeUnitKinds: [.cpu, .gpu],
+            caixPreferredComputeUnitKind: .gpu)
+    }
+
+    private static func computeUnit(named rawValue: String?) -> ComputeUnitKind? {
+        switch rawValue?.lowercased() {
         case "cpu": return .cpu
         case "ane", "ne", "neuralengine": return .neuralEngine
-        default: return .gpu  // "gpu", "all", nil
+        case "gpu": return .gpu
+        default: return nil
         }
     }
 
@@ -386,7 +450,14 @@ final class LLMEngine {
         guard descriptor.outputNames.count >= 1 else {
             throw CoreAIPipeline.RuntimeError.modelContract("expected >= 1 output")
         }
-        let hasStateKV = descriptor.inputNames.count == 2 && descriptor.stateNames.count == 2
+        let stateNameSet = Set(descriptor.stateNames)
+        let standardStateNames: Set<String> = ["keyCache", "valueCache"]
+        let qwen38StateNames: Set<String> = [
+            "keyCache", "valueCache", "convState", "recurrentState",
+        ]
+        let hasStateKV = descriptor.inputNames.count == 2
+            && (stateNameSet == standardStateNames || stateNameSet == qwen38StateNames)
+        let hasQwen38State = stateNameSet == qwen38StateNames
         let hasExplicitKV =
             descriptor.stateNames.isEmpty
             && descriptor.inputNames.contains("keyCache")
@@ -411,6 +482,8 @@ final class LLMEngine {
             hasStateKV
             ? Self.pick("valueCache", descriptor.stateNames, index: 1)
             : Self.pick("valueCache", descriptor.inputNames, index: 3)
+        self.convStateName = hasQwen38State ? "convState" : nil
+        self.recurrentStateName = hasQwen38State ? "recurrentState" : nil
         self.logitsName = Self.pick("logits", descriptor.outputNames, index: 0)
 
         guard case .ndArray(let inDesc) = descriptor.inputDescriptor(of: inputIdsName) else {
@@ -461,6 +534,28 @@ final class LLMEngine {
         self.valueCacheDescriptor = valueDesc
         self.keyCacheOutputDescriptor = keyOutDesc
         self.valueCacheOutputDescriptor = valueOutDesc
+
+        if hasQwen38State {
+            guard case .ndArray(let convDesc) = descriptor.stateDescriptor(of: "convState"),
+                case .ndArray(let recurrentDesc) = descriptor.stateDescriptor(of: "recurrentState")
+            else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "Qwen3.8 convState/recurrentState are not NDArrays")
+            }
+            guard convDesc.scalarType == .float16, recurrentDesc.scalarType == .float32 else {
+                throw CoreAIPipeline.RuntimeError.modelContract(
+                    "Qwen3.8 fixed states must be convState=float16 and recurrentState=float32")
+            }
+            self.convStateDescriptor = convDesc
+            self.recurrentStateDescriptor = recurrentDesc
+            self.convStateScalarType = convDesc.scalarType
+            self.recurrentStateScalarType = recurrentDesc.scalarType
+        } else {
+            self.convStateDescriptor = nil
+            self.recurrentStateDescriptor = nil
+            self.convStateScalarType = nil
+            self.recurrentStateScalarType = nil
+        }
 
         // Dtype-aware: record the graph's declared scalar types instead of assuming Float16.
         self.logitsScalarType = logitsDesc.scalarType
@@ -514,6 +609,19 @@ final class LLMEngine {
             keyDesc.shape.map { $0 < 0 ? 1 : $0 }))
         self.valueCache = NDArray(descriptor: valueDesc.resolvingDynamicDimensions(
             valueDesc.shape.map { $0 < 0 ? 1 : $0 }))
+        if let convDesc = self.convStateDescriptor,
+            let recurrentDesc = self.recurrentStateDescriptor
+        {
+            var conv = NDArray(descriptor: convDesc)
+            var recurrent = NDArray(descriptor: recurrentDesc)
+            Self.zeroState(&conv, scalarType: convDesc.scalarType)
+            Self.zeroState(&recurrent, scalarType: recurrentDesc.scalarType)
+            self.convState = conv
+            self.recurrentState = recurrent
+        } else {
+            self.convState = nil
+            self.recurrentState = nil
+        }
     }
 
     private static func pick(_ wanted: String, _ names: [String], index: Int) -> String {
@@ -562,6 +670,18 @@ final class LLMEngine {
         valueCache = NDArray(descriptor: valueCacheDescriptor.resolvingDynamicDimensions(valueShape))
         Self.zeroState(&keyCache, scalarType: keyCacheScalarType)
         Self.zeroState(&valueCache, scalarType: valueCacheScalarType)
+        if let convDesc = convStateDescriptor,
+            let recurrentDesc = recurrentStateDescriptor,
+            let convScalar = convStateScalarType,
+            let recurrentScalar = recurrentStateScalarType
+        {
+            var conv = NDArray(descriptor: convDesc)
+            var recurrent = NDArray(descriptor: recurrentDesc)
+            Self.zeroState(&conv, scalarType: convScalar)
+            Self.zeroState(&recurrent, scalarType: recurrentScalar)
+            convState = conv
+            recurrentState = recurrent
+        }
         processedTokenCount = 0
     }
 
@@ -657,10 +777,23 @@ final class LLMEngine {
             var states = InferenceFunction.MutableViews()
             states.insert(&keyCache, for: keyCacheName)
             states.insert(&valueCache, for: valueCacheName)
-            _ = try await activeFunction.run(
-                inputs: [inputIdsName: inputIds, positionIdsName: positionIds],
-                states: consume states,
-                outputViews: consume outputViews)
+            if let convStateName, let recurrentStateName,
+                var conv = convState, var recurrent = recurrentState
+            {
+                states.insert(&conv, for: convStateName)
+                states.insert(&recurrent, for: recurrentStateName)
+                _ = try await activeFunction.run(
+                    inputs: [inputIdsName: inputIds, positionIdsName: positionIds],
+                    states: consume states,
+                    outputViews: consume outputViews)
+                convState = conv
+                recurrentState = recurrent
+            } else {
+                _ = try await activeFunction.run(
+                    inputs: [inputIdsName: inputIds, positionIdsName: positionIds],
+                    states: consume states,
+                    outputViews: consume outputViews)
+            }
         case .explicitOutputs:
             let keyShape = keyCacheOutputDescriptor.shape.enumerated()
                 .map { i, dim in dim < 0 ? keyCache.shape[i] : dim }

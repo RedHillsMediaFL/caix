@@ -115,8 +115,9 @@ extension ServerRuntime {
     /// ``StreamingNormalizer`` and re-emitted as `delta.reasoning_content` (during reasoning),
     /// `delta.content` (final text), and `delta.tool_calls` (one chunk per parsed call).
     static func openAIStream(
-        handle: ModelHandle, messages: [[String: String]], options: CoreAIPipeline.Options,
+        handle: ModelHandle, messages: [[String: any Sendable]], options: CoreAIPipeline.Options,
         tools: [[String: any Sendable]]?, format: OutputFormat,
+        additionalContext: [String: any Sendable]? = nil,
         generationRequest: GenerationRequest? = nil,
         model: String, id: String, created: Int,
         includeUsage: Bool = false,
@@ -135,9 +136,12 @@ extension ServerRuntime {
                     continuation.yield(delta)
                     })
             } else {
-                return try await handle.generate(messages: messages, options: options, tools: tools) { delta in
-                    continuation.yield(delta)
-                }
+                return try await handle.generate(
+                    messages: messages,
+                    options: options,
+                    tools: tools,
+                    additionalContext: additionalContext,
+                    onToken: { delta in continuation.yield(delta) })
             }
         }
 
@@ -214,12 +218,117 @@ extension ServerRuntime {
         return Response(status: .ok, headers: sseHeaders(), body: body)
     }
 
+    /// OpenAI Responses API SSE stream: `event:` + `data:` frames following
+    /// response.created → response.in_progress → response.output_item.added →
+    /// response.content_part.added → response.output_text.delta* → response.output_text.done →
+    /// response.content_part.done → response.output_item.done → response.completed
+    /// (or .incomplete / .failed), each payload stamped with an increasing `sequence_number`.
+    /// Raw token deltas run through the same ``StreamingNormalizer`` as the chat streams; the
+    /// Responses surface carries only the normalized final text as output_text.
+    static func openAIResponsesStream(
+        handle: ModelHandle, messages: [[String: any Sendable]], options: CoreAIPipeline.Options,
+        format: OutputFormat,
+        request: OpenAIResponsesRequest,
+        model: String, responseID: String, messageID: String, createdAt: Int,
+        activity: ActivityLog? = nil, startedAt: Date? = nil
+    ) -> Response {
+        let requestStart = startedAt ?? Date()
+        let (stream, continuation) = AsyncStream<String>.makeStream()
+        let genTask = Task<CoreAIPipeline.Result, Error> {
+            defer { continuation.finish() }
+            return try await handle.generate(
+                messages: messages,
+                options: options,
+                onToken: { delta in continuation.yield(delta) })
+        }
+
+        let body = ResponseBody { writer in
+            var framer = ResponsesStreamFramer(responseID: responseID, itemID: messageID)
+            let parser = StreamingNormalizer(format: format)
+            var text = ""
+
+            func write(_ frame: String) async throws {
+                try await writer.write(ByteBuffer(string: frame))
+            }
+
+            let inProgress = OpenAIResponsesResponse(
+                id: responseID, createdAt: createdAt, status: "in_progress", model: model,
+                output: [], usage: nil, request: request)
+            try await write(framer.created(inProgress))
+            try await write(framer.inProgress(inProgress))
+            try await write(framer.outputItemAdded(OpenAIResponsesResponse.OutputMessage(
+                id: messageID, status: "in_progress", content: [])))
+            try await write(framer.contentPartAdded())
+
+            var firstDeltaAt: Date?
+            func emit(_ events: [StreamingNormalizer.Event]) async throws {
+                for event in events {
+                    switch event {
+                    case .text(let s):
+                        text += s
+                        try await write(framer.outputTextDelta(s))
+                    case .reasoning, .toolCall:
+                        // Only output_text is exposed on this surface; reasoning/tool markers are
+                        // normalized away exactly as the non-streaming responses path does.
+                        break
+                    }
+                }
+            }
+            for await delta in stream {
+                if firstDeltaAt == nil {
+                    firstDeltaAt = Date()
+                }
+                try await emit(parser.push(delta))
+            }
+            try await emit(parser.finish())
+
+            let result = try? await genTask.value
+            let completion = result.map { OpenAIResponsesResponse.completionStatus(for: $0.stopReason) }
+            let status = completion?.status ?? "failed"
+            let item = OpenAIResponsesResponse.OutputMessage(
+                id: messageID, status: status,
+                content: [OpenAIResponsesResponse.ContentPart(text: text)])
+            try await write(framer.outputTextDone(text))
+            try await write(framer.contentPartDone(text))
+            try await write(framer.outputItemDone(item))
+            let finalResponse = OpenAIResponsesResponse(
+                id: responseID, createdAt: createdAt, status: status, model: model,
+                output: [item],
+                usage: result.map {
+                    OpenAIResponsesResponse.Usage(
+                        input_tokens: $0.promptTokenCount,
+                        output_tokens: $0.generatedTokenCount,
+                        total_tokens: $0.promptTokenCount + $0.generatedTokenCount)
+                },
+                incompleteDetails: completion?.incompleteDetails,
+                request: request)
+            await activity?.record(
+                method: "POST",
+                path: "/v1/responses",
+                status: result == nil ? 500 : 200,
+                startedAt: requestStart,
+                model: model,
+                summary: result == nil ? "stream failed" : "stream completed (\(status))",
+                inputTokens: result?.promptTokenCount,
+                outputTokens: result?.generatedTokenCount,
+                firstTokenSeconds: firstDeltaAt?.timeIntervalSince(requestStart),
+                loadSeconds: result?.modelLoadSeconds,
+                prefillSeconds: result?.prefillSeconds,
+                decodeSeconds: result?.decodeSeconds,
+                prefixHitCount: result?.prefixHitCount)
+            try await write(framer.finished(finalResponse))
+            try await writer.finish(nil)
+        }
+        return Response(status: .ok, headers: sseHeaders(), body: body)
+    }
+
     /// Anthropic Messages SSE stream. Reasoning becomes a `thinking` content block, final text a
     /// `text` block, and each tool call a `tool_use` block — emitted in order with
     /// content_block_start / _delta (thinking_delta · text_delta · input_json_delta) / _stop.
     static func anthropicStream(
-        handle: ModelHandle, messages: [[String: String]], options: CoreAIPipeline.Options,
+        handle: ModelHandle, messages: [[String: any Sendable]], options: CoreAIPipeline.Options,
         tools: [[String: any Sendable]]?, format: OutputFormat,
+        additionalContext: [String: any Sendable]? = nil,
         generationRequest: GenerationRequest? = nil,
         model: String, id: String,
         activity: ActivityLog? = nil, startedAt: Date? = nil
@@ -237,9 +346,12 @@ extension ServerRuntime {
                     continuation.yield(delta)
                     })
             } else {
-                return try await handle.generate(messages: messages, options: options, tools: tools) { delta in
-                    continuation.yield(delta)
-                }
+                return try await handle.generate(
+                    messages: messages,
+                    options: options,
+                    tools: tools,
+                    additionalContext: additionalContext,
+                    onToken: { delta in continuation.yield(delta) })
             }
         }
 

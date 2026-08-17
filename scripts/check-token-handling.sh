@@ -27,6 +27,11 @@ fi
 
 existing=()
 for path in "${paths[@]}"; do
+  case "$path" in
+    scripts/check-token-handling.sh|./scripts/check-token-handling.sh|*/scripts/check-token-handling.sh)
+      continue
+      ;;
+  esac
   if [[ -e "$path" ]]; then
     existing+=("$path")
   fi
@@ -59,8 +64,8 @@ scan "token passed as argv" \
   '(^|[[:space:]])--token([[:space:]=]|$)'
 scan "stale HF cache default; use /Volumes/SSD/hf-cache" \
   '<checkout-parent>/hf-cache|converter default is[^[:cntrl:]]*hf-cache|PIPELINE_ROOT[.]parent[[:space:]]*/[[:space:]]*"hf-cache"'
-scan "stale converter tmp default; use /Volumes/SSD/coreai-tmp" \
-  '<checkout-parent>/coreai-tmp|PIPELINE_ROOT[.]parent[[:space:]]*/[[:space:]]*"coreai-tmp"'
+scan "stale converter tmp default; use /Volumes/SSD/caix/.tmp/coreai-tmp" \
+  '/Volumes/SSD/coreai-tmp|<checkout-parent>/coreai-tmp|PIPELINE_ROOT[.]parent[[:space:]]*/[[:space:]]*"coreai-tmp"'
 
 if [[ "$fail" -ne 0 ]]; then
   exit 1

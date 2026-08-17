@@ -12,23 +12,39 @@ Current release line:
 Before tagging:
 
 ```bash
+scripts/collect-model-revisions.sh \
+  --out benchmarks/revisions.tsv \
+  --details benchmarks/revisions-details.tsv
+scripts/check-model-revisions.sh
 scripts/check-version-sync.sh
 scripts/check-release-version.sh v0.2.0-beta
+scripts/check-publication-gates.sh
 ```
 
 The local publication gate also runs `scripts/check-release-version-contract.sh`, which fixture-tests
 the Core AI beta `<1.0.0` policy, malformed-version rejection, dev-version rejection, and the explicit
 stable-runtime override.
+`benchmarks/revisions.tsv` is an ignored local artifact, but publication gates require it so model
+tester requests and benchmark evidence stay pinned to exact Hub commits. Re-run
+`scripts/collect-model-revisions.sh` immediately before release review if any published model repo was
+updated.
+Use `scripts/check-publication-gates.sh --strict-benchmark-gaps` for a release that publishes new
+speed tables, and use the distributed command below for any distributed-inference release claim.
 
 For a packaged release:
 
 ```bash
+export TMPDIR=/Volumes/SSD/caix/.tmp/coreai-tmp
 scripts/package.sh 0.2.0-beta
 ```
 
 The package script checks that `caix --version` matches the requested version. It also refuses
 `1.0.0` or higher unless the Core AI beta gate is explicitly lifted. It also checks the
-distributed Brew surface against the staged Qwen3 example manifest.
+distributed Brew surface against the staged Qwen3 example manifest. If `TMPDIR` is unset or points
+at macOS system temp (`/tmp`, `/private/tmp`, or `/var/folders/...`), package staging defaults to
+`.tmp/coreai-tmp` in this checkout so release builds do not spill onto the internal system temp
+volume. It writes `dist/caix-<version>-macos-<arch>.tar.gz.sha256`; use that digest for the tap
+formula and release notes.
 
 Every version bump must update all of these in the same commit:
 
@@ -37,6 +53,8 @@ Every version bump must update all of these in the same commit:
 - `Formula/caix.rb`
 
 `scripts/check-version-sync.sh` enforces that match.
+`scripts/check-package-contract.sh` enforces the package staging/temp and SHA-256 sidecar invariants
+without building a tarball; publication gates run it.
 
 Distributed releases must pass the Brew-installed readiness gate before cross-Mac testing:
 

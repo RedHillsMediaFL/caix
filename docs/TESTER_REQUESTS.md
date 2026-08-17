@@ -14,7 +14,18 @@ other.
 
 | repo | revision | local dir | request | notes |
 |---|---|---|---|---|
-| `redhillsmediafl/rhm-glm-z1-9b-0414-caix` | `c9121d48d4b5161866e1598f40ec1e5822389b25` | `glm-z1-9b-0414-coreai` | load, generation, benchmark | local stdout instability; publish only if stability gate passes |
+| `redhillsmediafl/rhm-qwen2.5-0.5b-instruct-bf16-caix` | `ec5aab1ef697058c3465a07ca8c3fc6e45ff083c` | `qwen2.5-0.5b-instruct-bf16-coreai-ctx32768` | load, generation, benchmark | full-native-context regular bf16; long-context/determinism/HF first-token gates passed; speed pending |
+| `redhillsmediafl/rhm-qwen2.5-3b-instruct-bf16-caix` | `86e808e92a400a0debd01e3dfffd84aae6c11670` | `qwen2.5-3b-instruct-bf16-coreai-ctx32768` | load, generation, benchmark | full-native-context regular bf16; long-context/determinism/HF first-token gates passed; Qwen Research License; speed pending |
+| `redhillsmediafl/rhm-qwen3-0.6b-bf16-caix` | `a37d147867643cb827086e42518baa254f55a43d` | `qwen3-0.6b-bf16-coreai-ctx40960` | load, generation, benchmark | full-native-context regular bf16; long-context/determinism/HF first-token gates passed; speed pending |
+| `redhillsmediafl/rhm-qwen3-1.7b-bf16-caix` | `47e7570d368dc6f1f25c4c834bb990b7154f7d81` | `qwen3-1.7b-bf16-coreai-ctx40960` | load, generation, benchmark | full-native-context regular bf16 pattern-setter; long-context/determinism/HF first-token gates passed; speed pending |
+| `redhillsmediafl/rhm-qwen3-8b-bf16-caix` | `802db482ce392f027238e04d27032f0192aaed34` | `qwen3-8b-bf16-coreai-ctx40960` | load, generation, benchmark | full-native-context regular bf16; long-context/determinism/HF first-token gates passed; speed pending |
+| `redhillsmediafl/rhm-qwen3-14b-bf16-caix` | `96ec804b7d25c14826ae917ddb9bf6990d66163c` | `qwen3-14b-bf16-coreai-ctx40960` | load, generation, benchmark | full-native-context regular bf16; long-context/determinism/HF first-token gates passed; peak RSS ~48.6 GiB on Studio; speed pending |
+| `redhillsmediafl/rhm-glm-4-9b-0414-bf16-caix` | `ffe18144a446993cb957973b4436ed6e96ef2eea` | `glm-4-9b-0414-bf16-coreai-ctx32768` | load, generation, benchmark | full-native-context regular bf16; long-context/determinism/HF first-token gates passed; speed pending |
+| `redhillsmediafl/rhm-glm-4-32b-0414-int8-caix` | `ecd9e6f99d9cb61848fb86f0a58a681fce2d8292` | `glm-4-32b-0414-int8-coreai-ctx32768` | load, generation, benchmark | full-native-context regular int8; 17022-token serve, fresh-process determinism, and HF first-token gates passed; bf16/fp16 regular is outside the current 64GB conversion envelope; speed pending |
+| `redhillsmediafl/rhm-gpt-oss-20b-int8-caix` | `6777e93b7dcd1739891330c70868834379d426fb` | `gpt-oss-20b-int8-coreai-ctx131072` | load, generation, benchmark | full-native-context regular int8; 17032-token serve, fresh-process determinism, and HF first-token gates passed; bf16/fp16 regular is outside the current 64GB conversion envelope; speed pending |
+| `redhillsmediafl/rhm-mistral-7b-instruct-v0.3-bf16-caix` | `82d99d88875d6c89f9af5c906eb1b5cc66ed19fe` | `mistral-7b-instruct-v0.3-bf16-coreai-ctx32768` | load, generation, benchmark | full-native-context regular bf16; long-context/determinism/HF first-token gates passed; speed pending |
+| `redhillsmediafl/rhm-mistral-nemo-instruct-2407-bf16-caix` | `c92d81f632e4f23b5e454a49a0579b4198afef6f` | `mistral-nemo-instruct-2407-bf16-coreai-ctx131072` | load, generation, benchmark | full-native-context regular bf16; long-context/determinism/HF first-token gates passed; peak RSS ~50 GiB on Studio; speed pending |
+| `redhillsmediafl/rhm-mistral-small-instruct-2409-int8-caix` | `c779e46d7a84d34186d5c509545dc036981d6ddf` | `mistral-small-instruct-2409-int8-coreai-ctx32768` | load, generation, benchmark | full-native-context regular int8; 17038-token serve, fresh-process determinism, and HF first-token gates passed; bf16/fp16 regular is outside the current 64GB conversion envelope; Mistral Research License; speed pending |
 
 ## Existing Raw Evidence
 
@@ -24,11 +35,8 @@ other.
 | `redhillsmediafl/rhm-qwen2.5-3b-instruct-caix` | `e0c019d5a534ec8aea936dfafedb7e00b17c3961` | `qwen2.5-3b-instruct-coreai` | `decode` | 3 | `benchmarks/raw/20260628-220044-qwen2.5-3b-instruct-coreai` |
 | `redhillsmediafl/rhm-qwen3-0.6b-caix` | `3aa798b1a942fd15be6e5a96bd18b01e52dc6bc4` | `qwen3-0.6b-coreai` | `decode` | 3 | `benchmarks/raw/20260628-214406-qwen3-0.6b-coreai` |
 | `redhillsmediafl/rhm-qwen3-1.7b-caix` | `bf04650aef9a5e325f1ba05c52866b0363f56c29` | `qwen3-1.7b-coreai` | `decode` | 3 | `benchmarks/raw/20260629-072107-qwen3-1.7b-coreai` |
-| `redhillsmediafl/rhm-qwen3-4b-caix` | `bc5b7f1b866dee97270d4e1d7bdbdd30e48aa641` | `qwen3-4b-coreai` | `decode` | 3 | `benchmarks/raw/20260628-221149-qwen3-4b-coreai` |
 | `redhillsmediafl/rhm-qwen3-8b-caix` | `e46668067aff8efb89e87469269c120073511136` | `qwen3-8b-coreai` | `decode` | 3 | `benchmarks/raw/20260628-222458-qwen3-8b-coreai` |
 | `redhillsmediafl/rhm-qwen3-14b-caix` | `62a1e52fd5a5b9c1b241243cb0903d80fb5ad624` | `qwen3-14b-coreai` | `decode` | 3 | `benchmarks/raw/20260628-223516-qwen3-14b-coreai` |
-| `redhillsmediafl/rhm-ornith-1.0-9b-caix` | `06656dec7e8165ff714729307ed75eabc3b8c1b5` | `ornith-1.0-9b-coreai` | `decode` | 3 | `benchmarks/raw/20260629-033807-ornith-1.0-9b-coreai` |
-| `redhillsmediafl/rhm-qwythos-9b-caix` | `d4783ebca55aa4bf52d9bb4b254266ac5260d9c2` | `qwythos-9b-coreai` | `decode` | 3 | `benchmarks/raw/20260628-224859-qwythos-9b-coreai` |
 | `redhillsmediafl/rhm-glm-4-9b-0414-caix` | `c759b1583693b3f051e62fd7082e4bc538ebb72c` | `glm-4-9b-0414-coreai` | `decode` | 3 | `benchmarks/raw/20260628-230705-glm-4-9b-0414-coreai` |
 | `redhillsmediafl/rhm-glm-4-32b-0414-caix` | `59bddf6e8d498fd991144c4d47ab3b259e9a9d0b` | `glm-4-32b-0414-coreai` | `decode` | 3 | `benchmarks/raw/20260629-030527-glm-4-32b-0414-coreai` |
 | `redhillsmediafl/rhm-gpt-oss-20b-caix` | `ae08b1c0dc03b6ddc53901adaa29e97d23b1cfdb` | `gpt-oss-20b-coreai` | `decode` | 3 | `benchmarks/raw/20260629-002744-gpt-oss-20b-coreai` |
@@ -36,32 +44,20 @@ other.
 | `redhillsmediafl/rhm-mistral-nemo-instruct-2407-caix` | `9821a2de1f1029c0352b0d6311c6d399e9aac1fe` | `mistral-nemo-instruct-2407-coreai` | `decode` | 3 | `benchmarks/raw/20260628-234824-mistral-nemo-instruct-2407-coreai` |
 | `redhillsmediafl/rhm-mistral-small-instruct-2409-caix` | `0549d42b45a65454bc2f99843deaebeab1587bb1` | `mistral-small-instruct-2409-coreai` | `decode` | 3 | `benchmarks/raw/20260629-000628-mistral-small-instruct-2409-coreai` |
 | `redhillsmediafl/rhm-mixtral-8x7b-instruct-caix` | `ea180189c4266d8a0dde4e3238cf959789c0504f` | `mixtral-8x7b-instruct-coreai` | `decode` | 3 | `benchmarks/raw/20260629-042411-mixtral-8x7b-instruct-coreai` |
-| `redhillsmediafl/rhm-qwen3.6-27b-caix` | `436642eef9fb9fb49f53cafc2d32c0f25a0b175a` | `qwen3.6-27b-coreai` | `decode` | 3 | `benchmarks/raw/20260629-004612-qwen3.6-27b-coreai` |
-| `redhillsmediafl/rhm-gemma-4-26b-a4b-caix` | `fede95233c003d99e6db4da433add133ba9458d6` | `gemma-4-26b-a4b-coreai` | `decode` | 3 | `benchmarks/raw/20260629-014239-gemma-4-26b-a4b-coreai` |
-| `redhillsmediafl/rhm-gemma-4-31b-it-caix` | `de8554bf1b4c5b26d3bf9eb40cac2b22303eb0e4` | `gemma-4-31b-it-coreai` | `decode` | 3 | `benchmarks/raw/20260629-020515-gemma-4-31b-it-coreai` |
-| `redhillsmediafl/rhm-gemma-4-26b-a4b-mtp-caix` | `98793a039e2a548f04668acb4c254f57ff16f145` | `gemma-4-26b-a4b-mtp-coreai` | `eagle-mtp` | 3 | `benchmarks/raw/20260629-050957-gemma-4-26b-a4b-mtp-coreai-eagle-mtp` |
-| `redhillsmediafl/rhm-qwen3-4b-mtp-caix` | `4190150f7a47b113d36ea679c4541d95a21ce3f6` | `qwen3-4b-mtp-coreai` | `speculative` | 3 | `benchmarks/raw/20260629-045620-qwen3-4b-mtp-coreai` |
 
 ## Manual Or Component Requests
 
-The staged distributed rows below remain `needs-test` while the second Mac is unavailable. They
-require installed-caix hardware evidence, not Studio-only loopback, plan dry-runs, or HF diagnostic
-parity.
+The staged distributed rows below need package-specific installed-caix hardware evidence before any
+distributed readiness or speed claim. A generic two-machine POC, Studio-only loopback, plan dry-run,
+or HF diagnostic parity does not substitute for the listed package's own distributed smoke.
 
 | repo | revision | local dir | request | notes |
 |---|---|---|---|---|
-| `redhillsmediafl/rhm-gemma-4-12b-it-unified-caix` | `721d1b798510f6cfcb1608e94ab660ba7d268005` | `gemma4-12b-it-unified-staged-4bit-ctx128-6x8` | distributed hardware smoke | staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook |
-| `redhillsmediafl/rhm-gemma-4-12b-staged-caix` | `3ae61884e5bf8ef459c2f0eb4a1c4a1cc2562d3b` | `gemma4-12b-staged-4bit-ctx128-2x24` | distributed hardware smoke | staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook |
-| `redhillsmediafl/rhm-gemma-4-e2b-it-staged-caix` | `7b4cb1da35402f25dc1269ef9eebf3f184257dba` | `gemma4-e2b-it-staged-4bit-ctx128-2x` | distributed hardware smoke | staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook |
-| `redhillsmediafl/rhm-gemma-4-e2b-staged-caix` | `d5bf65fe72faeb343bf9247ffb8dc9a4bf279cb1` | `gemma4-e2b-staged-4bit-ctx128-2x` | distributed hardware smoke | staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook |
-| `redhillsmediafl/rhm-gemma-4-e4b-it-staged-caix` | `bba60d99bdf1e119367b9166938c8c3ea82d1c54` | `gemma4-e4b-it-staged-4bit-ctx128-2x21` | distributed hardware smoke | staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook |
-| `redhillsmediafl/rhm-gemma-4-e4b-it-mm-staged-caix` | `538ee06ee1039073d0c0ef290d60d48dd3941136` | `gemma4-e4b-it-mm-QAT-splitcache-plefix-staged-4bit-ctx128k-2x21` | distributed hardware smoke | staged multimodal split-cache package; 32 GB MacBook HTTP hardware smoke passed with caix 0.2.13-beta; no public speed row |
-| `redhillsmediafl/rhm-gemma-4-e4b-staged-caix` | `a0e35632c3600aeb3be62507948cb2d66c67d4e1` | `gemma4-e4b-staged-4bit-ctx128-2x21` | distributed hardware smoke | staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook |
-| `redhillsmediafl/rhm-gemma-4-26b-a4b-it-staged-caix` | `abf7ad43a38d9132e5b2b2f90d39c2bc261658c6` | `gemma4-26b-a4b-it-staged-4bit-ctx128-5x6` | distributed hardware smoke | staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook |
-| `redhillsmediafl/rhm-gemma-4-31b-it-staged-caix` | `c171bcc3df5d68afdc74a019046b784141a3f3b1` | `gemma4-31b-it-staged-4bit-ctx128-6x10` | distributed hardware smoke | staged manifest; run distributed hardware smoke on 64 GB Studio plus 32 GB MacBook |
-| `redhillsmediafl/rhm-gemma-4-31b-it-mtp-caix` | `7bfec529dd5a9749588840a8b865c8b9937f454e` | `gemma-4-31b-it-mtp-coreai` | blocked; do not test | draft graph is standard two-input assistant; rebuild package with dependent EAGLE draft |
-| `redhillsmediafl/rhm-gemma-4-26b-a4b-draft-caix` | `b1d92267c10b5542c7b3bfdebd18f3814a19c37b` | `gemma-4-26b-a4b-draft-coreai` | component; do not test alone | draft component; benchmark with matching target |
-| `redhillsmediafl/rhm-gemma-4-31b-it-draft-caix` | `30c425f86bc123e9b95ddd783fba3398ab4a5604` | `gemma-4-31b-it-draft-coreai` | component; do not test alone | draft component; benchmark with matching target |
+| `redhillsmediafl/rhm-gemma-4-12b-it-mm-staged-caix` | `f66fc8a975baf0c326af3595ca12004a0eb71181` | `gemma4-12b-it-mm-splitcache-masked-singleasset-staged-4bit-ctx256k-2x24` | distributed hardware smoke | staged multimodal split-cache package; Studio HTTP hardware smoke passed with caix 0.2.13-beta; no public speed row |
+| `redhillsmediafl/rhm-gemma-4-e2b-it-mm-staged-caix` | `1c0f1e3e3d03d6e41b484ea3d859160ef25a3cf4` | `gemma4-e2b-it-mm-QAT-splitcache-singleasset-staged-4bit-ctx128k-2x13-22` | distributed hardware smoke | staged multimodal split-cache package; Studio HTTP hardware smoke passed with caix 0.2.13-beta; no public speed row |
+| `redhillsmediafl/rhm-gemma-4-e4b-it-mm-staged-caix` | `538ee06ee1039073d0c0ef290d60d48dd3941136` | `gemma4-e4b-it-mm-QAT-splitcache-plefix-singleasset-staged-4bit-ctx128k-2x21` | distributed hardware smoke | staged multimodal split-cache package; 32 GB MacBook HTTP hardware smoke passed with caix 0.2.13-beta; no public speed row |
+| `redhillsmediafl/rhm-gemma-4-26b-a4b-it-mm-staged-caix` | `978768211c44a170856e738d2776be5d636353c1` | `gemma4-26b-a4b-it-mm-splitcache-masked-singleasset-staged-4bit-ctx256k-5x6` | distributed hardware smoke | staged multimodal split-cache package; Studio HTTP hardware smoke passed with caix 0.2.13-beta; no public speed row |
+| `redhillsmediafl/rhm-gemma-4-31b-it-mm-staged-caix` | `01ae74db2f9775bf0833dc83972ad4b892ec1c9b` | `gemma4-31b-it-mm-splitcache-masked-singleasset-staged-4bit-ctx256k-6x10` | distributed hardware smoke | staged multimodal split-cache package; Studio HTTP hardware smoke passed with caix 0.2.13-beta; full-native 262k requires 64 GB+ or multi-device; no public speed row |
 
 ## Run Template
 
@@ -144,10 +140,11 @@ scripts/benchmark-eagle.sh \
   --runs 3
 ```
 
-Report the fields in `docs/TESTING.md`. Send the raw benchmark directory. Remove only the payload
-you installed:
+Report the fields in `docs/TESTING.md`. Send the raw benchmark directory. Preview cleanup, then
+remove only the payload you installed:
 
 ```bash
+scripts/remove-export.sh --dry-run "$NAME"
 scripts/remove-export.sh "$NAME"
 scripts/check-disk-pressure.sh --path /Volumes/SSD --floor-gib 500
 ```

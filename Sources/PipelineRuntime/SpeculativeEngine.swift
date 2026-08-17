@@ -1,7 +1,46 @@
+import Foundation
+
+/// Pure accept-longest-greedy-prefix verification shared by the classic speculative engine and
+/// the EAGLE engine (ported from `Gemma4SpeculativeDecoder`, coreai-gemma4).
+///
+/// `targetGreedyTokens[i]` is the target's greedy token for verify slot `i` — the host argmax of
+/// the target's logits row, or (on split-cache EAGLE targets) the in-graph `verify_tokens` argmax
+/// read straight from the graph so the full-vocabulary logits rows are never materialized. The
+/// entry after the last draft slot is the *bonus* slot. Accept `drafts[i]` while it equals the
+/// target token at slot `i`; the commit token is the target token at the first divergence, or the
+/// bonus token when every draft matched.
+enum GreedySpeculativeVerify {
+    /// Outcome of verifying one draft batch: the longest matching prefix, plus the target's token
+    /// to commit next (the correction at the first mismatch, or the bonus token when every draft
+    /// matched).
+    struct Verdict: Sendable, Equatable {
+        let acceptedTokens: [Int]
+        let correctionToken: Int
+        var acceptedCount: Int { acceptedTokens.count }
+    }
+
+    static func verify(drafts: [Int], targetGreedyTokens: [Int]) -> Verdict {
+        precondition(
+            targetGreedyTokens.count >= drafts.count + 1,
+            "verify requires one target token per draft slot plus the bonus slot")
+        var accepted: [Int] = []
+        accepted.reserveCapacity(drafts.count)
+        for i in 0..<drafts.count {
+            guard drafts[i] == targetGreedyTokens[i] else {
+                return Verdict(acceptedTokens: accepted, correctionToken: targetGreedyTokens[i])
+            }
+            accepted.append(drafts[i])
+        }
+        // Every draft matched — commit the bonus token from the final (post-draft) slot.
+        return Verdict(
+            acceptedTokens: accepted,
+            correctionToken: targetGreedyTokens[drafts.count])
+    }
+}
+
 #if COREAI_RUNTIME
 
 import CoreAI
-import Foundation
 import Tokenizers
 
 /// Speculative decoding (a.k.a. MTP / draft-model assisted decoding) over two native
@@ -255,34 +294,21 @@ final class SpeculativeEngine {
             iterations: iterations)
     }
 
-    // MARK: - Verification (ported from Gemma4SpeculativeDecoder)
+    // MARK: - Verification (shared pure core in GreedySpeculativeVerify)
 
-    /// Outcome of verifying one draft batch against the target's greedy predictions: the longest
-    /// matching prefix, plus the target's token to commit next (the correction at the first
-    /// mismatch, or the bonus token when every draft matched).
-    struct Verdict {
-        let acceptedTokens: [Int]
-        let correctionToken: Int
-        var acceptedCount: Int { acceptedTokens.count }
+    typealias Verdict = GreedySpeculativeVerify.Verdict
+
+    /// Token-based accept: `targetGreedyTokens` are the target's per-slot greedy tokens (host
+    /// argmax, or the split EAGLE target's in-graph `verify_tokens`).
+    static func verify(drafts: [Int], targetGreedyTokens: [Int]) -> Verdict {
+        GreedySpeculativeVerify.verify(drafts: drafts, targetGreedyTokens: targetGreedyTokens)
     }
 
-    /// Accept-longest-prefix: `targetRows[i]` is the target's logits for draft slot `i`
-    /// (`drafts.count` of them) and `targetRows[last]` is the bonus slot. Accept `drafts[i]`
-    /// while it equals `argmax(targetRows[i])`; the commit token is the target's token at the
-    /// first divergence, or the bonus token if all drafts were accepted.
+    /// Accept-longest-prefix over materialized logits rows: `targetRows[i]` is the target's
+    /// logits for draft slot `i` (`drafts.count` of them) and `targetRows[last]` is the bonus
+    /// slot. Identical semantics to the token overload with host `Sampler.argmax` per row.
     static func verify(drafts: [Int], targetRows: [[Float]]) -> Verdict {
-        var accepted: [Int] = []
-        accepted.reserveCapacity(drafts.count)
-        for i in 0..<drafts.count {
-            let targetToken = Sampler.argmax(targetRows[i])
-            if drafts[i] == targetToken {
-                accepted.append(drafts[i])
-            } else {
-                return Verdict(acceptedTokens: accepted, correctionToken: targetToken)
-            }
-        }
-        // Every draft matched — commit the bonus token from the final (post-draft) slot.
-        return Verdict(acceptedTokens: accepted, correctionToken: Sampler.argmax(targetRows[drafts.count]))
+        verify(drafts: drafts, targetGreedyTokens: targetRows.map(Sampler.argmax))
     }
 }
 

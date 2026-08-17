@@ -7,6 +7,7 @@
     "GLM-Z1-9B-0414",
     "ornith-1.0-35b",
     "Qwen3.6-27B",
+    "Qwen3.6-40B-Deckard-Heretic-GGUF",
     "diffusiongemma-26B-A4B-it",
     "diffusiongemma-26B-A4B-it-HERETIC"
   ],
@@ -43,7 +44,7 @@
       "prompt_template": "chatml-qwen", "mtp": "internal-head(mtp_num_hidden_layers=1)", "compression": "optional-4bit",
       "min_kv_capacity": 512,
       "downloaded": true,
-      "notes": "Non-standard op family: linear-attention/SSM state + conv1d. Convert text-only first. Highest per-param novelty risk."
+      "notes": "Non-standard op family: linear-attention/SSM state + conv1d. Split-state text-only export/runtime is in bring-up: short HF oracle, native 1,048,576 KV-capacity allocation, and contiguous replay through 16,384 tokens pass; public sequential context stays capped at 16,384 tokens until full-context replay is practical."
     },
     "GLM-Z1-9B-0414": {
       "hf_repo": "zai-org/GLM-Z1-9B-0414", "model_type": "glm4",
@@ -79,7 +80,25 @@
       "prompt_template": "chatml-qwen", "mtp": "internal-head", "compression": "4bit",
       "min_kv_capacity": 768,
       "downloaded": false,
-      "notes": "Same qwen3_5 hybrid family as Qwythos, scaled up; larger SSM footprint -> min_kv_capacity 768 (not Qwythos's 512). Do after Qwythos proves the op set."
+      "notes": "Same qwen3_5 hybrid family as Qwythos, scaled up; larger SSM footprint -> min_kv_capacity 768 (not Qwythos's 512). Use the split-state path and the Qwythos 16,384-token public sequential cap unless a faster full-context replay gate lands."
+    },
+    "Qwen3.6-40B-Deckard-Heretic-GGUF": {
+      "hf_repo": "DavidAU/Qwen3.6-40B-Claude-4.6-Opus-Deckard-Heretic-Uncensored-Thinking-NEO-CODE-Di-IMatrix-MAX-GGUF",
+      "model_type": "qwen3_5_vl_gguf",
+      "architecture": "qwen35",
+      "op_family": "hybrid-linear-attn-vl",
+      "role": "target",
+      "params_b": 40.0,
+      "bf16_gb": 80.0,
+      "shards": 0,
+      "vocab": 248320,
+      "context": 262144,
+      "multimodal": "image-text; GGUF mmproj files present",
+      "prompt_template": "chatml-qwen-vl",
+      "mtp": "unknown",
+      "compression": "gguf-imatrix",
+      "downloaded": false,
+      "notes": "Requested conversion candidate. Source is GGUF-only with Q4/Q5/Q6/Q8 and IQ variants plus mmproj-BF16/F16/F32. caix can now identify it as GGUF-only and try text dequantization through transformers AutoModelForCausalLM, but the GGUF path does not consume mmproj vision files; first feasibility gate is a Q8_0 text-only dequant smoke, while a real image-text build should locate the matching safetensors/base checkpoint or add a dedicated qwen35/VL GGUF+mmproj importer."
     },
     "diffusiongemma-26B-A4B-it": {
       "hf_repo": "google/diffusiongemma-26B-A4B-it", "model_type": "diffusion_gemma",
