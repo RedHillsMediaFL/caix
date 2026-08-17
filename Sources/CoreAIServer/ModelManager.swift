@@ -239,6 +239,7 @@ final class ModelHandle: @unchecked Sendable {
         case multimodalMonolithicGemma(PersistentModel)
         case speculative(PersistentSpeculativeModel)
         #if COREAI_RUNTIME
+        case qwen38MTP(PersistentQwen38MTPModel)
         case eagle(EagleEngine)  // EAGLE speculative decoding
         case textStaged(TextStagedModel)
         case multimodalStaged(MultimodalStagedModel, Gemma4VisionEmbedder)
@@ -274,6 +275,12 @@ final class ModelHandle: @unchecked Sendable {
     }
 
     #if COREAI_RUNTIME
+    init(qwen38MTP model: PersistentQwen38MTPModel, name: String) {
+        self.backend = .qwen38MTP(model)
+        self.displayName = name
+        self.bytes = model.bundleByteSize
+    }
+
     init(eagle: EagleEngine, name: String, bytes: UInt64) {
         self.backend = .eagle(eagle)
         self.displayName = name
@@ -321,6 +328,8 @@ final class ModelHandle: @unchecked Sendable {
         case .speculative:
             return false
         #if COREAI_RUNTIME
+        case .qwen38MTP:
+            return false
         case .eagle:
             return false
         case .textStaged:
@@ -387,6 +396,12 @@ final class ModelHandle: @unchecked Sendable {
                     modelLoadSeconds: r.modelLoadSeconds, prefillSeconds: r.prefillSeconds,
                     decodeSeconds: r.decodeSeconds)
             #if COREAI_RUNTIME
+            case .qwen38MTP(let model):
+                result = try await model.generate(
+                    messages: try Self.stringMessages(messages),
+                    options: options,
+                    tools: tools,
+                    onToken: onToken)
             case .eagle(let engine):
                 let r = try await engine.generate(
                     messages: messages,
@@ -518,7 +533,8 @@ final class ModelHandle: @unchecked Sendable {
                             generated.embedding.rows).utf8))
                 }
                 result = generated.result
-            case .persistent, .multimodalMonolithicGemma, .speculative, .eagle, .textStaged:
+            case .persistent, .multimodalMonolithicGemma, .speculative, .qwen38MTP,
+                .eagle, .textStaged:
                 throw CoreAIPipeline.RuntimeError.unsupportedFeature(
                     "resolved backend '\(displayName)' does not support routed multimodal input")
             }
@@ -1128,6 +1144,21 @@ public actor ModelManager {
                 let model = try await PersistentSpeculativeModel.load(
                     bundlePath: path, draftTokens: 4, verbose: verbose)
                 return ModelHandle(speculative: model, name: name)
+            } else if let bundle = try? ResolvedBundle.load(at: path),
+                bundle.qwen38?.mtp != nil,
+                bundle.mtpAimodelURL != nil
+            {
+                #if COREAI_RUNTIME
+                if verbose {
+                    FileHandle.standardError.write(
+                        Data("[server] loading native Qwen3.8 MTP bundle \(name)\n".utf8))
+                }
+                let model = try await PersistentQwen38MTPModel.load(
+                    bundlePath: path, verbose: verbose)
+                return ModelHandle(qwen38MTP: model, name: name)
+                #else
+                throw CoreAIPipeline.RuntimeError.runtimeUnavailable
+                #endif
             } else if Self.isMultimodalStagedBundle(at: URL(fileURLWithPath: path, isDirectory: true)) {
                 #if COREAI_RUNTIME
                 let root = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL

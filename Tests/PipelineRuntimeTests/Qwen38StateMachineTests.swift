@@ -17,13 +17,13 @@ final class Qwen38StateMachineTests: XCTestCase {
         try state.recordForward(tokens: 12)
         let checkpoint = try state.beginVerification(draftTokens: 3)
 
-        let action = try state.resolveVerification(checkpoint: checkpoint, acceptedDraftTokens: 2)
+        let action = try state.resolveVerification(checkpoint: checkpoint, acceptedDraftTokens: 1)
 
         XCTAssertEqual(
             action,
             .restoreFixedStateAndReplay(
                 fromPosition: 12,
-                acceptedDraftTokens: 2))
+                acceptedDraftTokens: 1))
         XCTAssertEqual(state.position, 12)
         XCTAssertFalse(state.hasPartialKVRewind)
     }

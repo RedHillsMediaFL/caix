@@ -346,12 +346,8 @@ public enum CoreAIPipeline {
 
     // MARK: - Entry point
 
-    #if COREAI_RUNTIME && !COREAI_DIRECT_RUNTIME
-    /// Native Qwen3.8 MTP needs a four-state Core AI sidecar runner. Keep the availability bit
-    /// false until the exported sidecar is loaded and driven through its verify functions; the
-    /// policy still parses proof metadata now so callers cannot accidentally opt into AR while
-    /// believing they selected MTP.
-    private static let nativeQwen38MTPRunnerAvailable = false
+    #if COREAI_RUNTIME
+    private static let nativeQwen38MTPRunnerAvailable = true
 
     private static func resolveQwen38Acceleration(
         modelPath: String,
@@ -377,6 +373,8 @@ public enum CoreAIPipeline {
         }
     }
 
+    #if !COREAI_DIRECT_RUNTIME
+
     /// Apple's CoreAILanguageModels fast engine currently warms language bundles with a fixed
     /// cache shape that is too small for qwen3_5-style recurrent-state packing. Keep those bundles
     /// on the explicit sequential engine unless the caller opts into the experimental fast path.
@@ -397,6 +395,7 @@ public enum CoreAIPipeline {
         return true
     }
     #endif
+    #endif
 
     /// Load `modelPath` (an exported `.aimodel` bundle directory), tokenize `prompt`, run
     /// prefill + decode natively, and return the generated text. Decoded text deltas are
@@ -409,9 +408,12 @@ public enum CoreAIPipeline {
         onToken: ((String) -> Void)? = nil
     ) async throws -> Result {
         #if COREAI_RUNTIME
-        #if !COREAI_DIRECT_RUNTIME
-        _ = try resolveQwen38Acceleration(modelPath: modelPath, options: options)
-        #endif
+        let qwenAcceleration = try resolveQwen38Acceleration(
+            modelPath: modelPath, options: options)
+        if qwenAcceleration == .nativeMTP {
+            return try await Qwen38NativeMTPEngine.run(
+                modelPath: modelPath, prompt: prompt, options: options, onToken: onToken)
+        }
         #if !COREAI_DIRECT_RUNTIME
         // Fast path: drive LLM generation through Apple's pipelined engine. Returns nil for
         // diffusion / non-language bundles, which fall through to `LLMEngine` (diffusion denoise +
